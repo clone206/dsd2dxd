@@ -107,7 +107,7 @@ int main(int argc, char *argv[])
 			"DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
 			"(c) 2009 Sebastian Gesemann\n\n"
 			"(filter as in \"reads data from stdin and writes to stdout\")\n\n"
-			"Syntax: dsd2pcm <channels> <bitorder> <bitdepth>\n"
+			"Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>\n"
 			"channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
 			"bitorder = L (lsb first), M (msb first) (DSD stream option)\n"
 			"bitdepth = 16 or 24 (intel byte order, output option)\n"
