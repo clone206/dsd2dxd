@@ -22,7 +22,8 @@ Added shell scripts to build and test with 1kHz test tone files.
   bitorder = L (lsb first), M (msb first) (DSD stream option)
   bitdepth = 16 or 24 (intel byte order, output option)
   format = I (interleaved) or P (planar)
-  infile = Input file name, containing raw dsd with 4096 byte block size
+  infile = Input file name, containing raw dsd with either planar format and 4096 byte block size,
+  or interleaved with 1 byte per channel.
 
   Note: At 16 bits/sample a noise shaper kicks in that can preserve
   a dynamic range of 135 dB below 30 kHz.
