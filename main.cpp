@@ -114,7 +114,8 @@ int main(int argc, char *argv[])
 			"format = I (interleaved) or P (planar)\n"
 			"infile = Input file name, containing raw dsd with 4096 byte block size\n\n"
 			"Note: At 16 bits/sample a noise shaper kicks in that can preserve\n"
-			"a dynamic range of 135 dB below 30 kHz.\n\n";
+			"a dynamic range of 135 dB below 30 kHz.\n\n"
+			"Outputs raw pcm to file named 'out.pcm'\n\n";
 		return 1;
 	}
 

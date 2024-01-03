@@ -12,6 +12,24 @@ Added shell scripts to build and test with 1kHz test tone files.
 - g++
 - *nix environment
 
+## C++ program usage
+### Compling
+`g++ *.c *.cpp -O3 -o dsd2pcm`
+### Running
+```
+  Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>
+  channels = 1,2,3,...,9 (number of channels in DSD stream)
+  bitorder = L (lsb first), M (msb first) (DSD stream option)
+  bitdepth = 16 or 24 (intel byte order, output option)
+  format = I (interleaved) or P (planar)
+  infile = Input file name, containing raw dsd with 4096 byte block size
+
+  Note: At 16 bits/sample a noise shaper kicks in that can preserve
+  a dynamic range of 135 dB below 30 kHz.
+
+  Outputs raw pcm to file named "out.pcm".
+```
+
 ## Testing Examples
 ```bash
 # Compile code; convert and play mono, LSB, planar test file
@@ -24,18 +42,3 @@ Added shell scripts to build and test with 1kHz test tone files.
 .dsd files with `_p` in the names are the equivalent of the .dsf files with the header metadata stripped off.
 
 You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it along with the correct input params (M for MSB first, I for interleaved).
-
-## C++ program usage
-### Compling
-`g++ *.c *.cpp -O3 -o dsd2pcm`
-### Running
-```
-  Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>
-  channels = 1,2,3,...,9 (number of channels in DSD stream)
-  bitorder = L (lsb first), M (msb first) (DSD stream option)
-  bitdepth = 16 or 24 (intel byte order, output option)
-  format = I (interleaved) or P (planar)
-  infile = Input file name, containing raw dsd with 4096 byte block size
-  Note: At 16 bits/sample a noise shaper kicks in that can preserve
-  a dynamic range of 135 dB below 30 kHz.
-```
