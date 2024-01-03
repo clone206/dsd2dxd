@@ -57,13 +57,13 @@ public:
 	dxd& operator=(dxd x)
 	{ swap(*this,x); return *this; }
 
-	void translate(size_t samples,
-		const unsigned char *src, ptrdiff_t src_stride,
+	void translate(size_t blockSize,
+		const unsigned char *dsdData, ptrdiff_t channelsNum,
 		bool lsbitfirst,
-		float *dst, ptrdiff_t dst_stride)
+		float *floatData, ptrdiff_t floatStride)
 	{
-		dsd2pcm_translate(handle,samples,src,src_stride,
-			lsbitfirst,dst,dst_stride);
+		dsd2pcm_translate(handle,blockSize,dsdData,channelsNum,
+			lsbitfirst,floatData,floatStride);
 	}
 };
 

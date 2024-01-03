@@ -84,22 +84,22 @@ inline void write_intel24(unsigned char * ptr, unsigned long word)
 int main(int argc, char *argv[])
 {
 	const int ratio = 4;
-	//const int block = 16384;
-	const int block = 4096;
-	int channels   = -1;
+	//const int blockSize = 16384;
+	const int blockSize = 4096;
+	int channelsNum   = -1;
 	int lsbitfirst = -1;
 	int bits       = -1;
 	std::string infileName = "";
 
 	if (argc==5) {
-		if ('1'<=argv[1][0] && argv[1][0]<='9') channels = 1 + (argv[1][0]-'1');
+		if ('1'<=argv[1][0] && argv[1][0]<='9') channelsNum = 1 + (argv[1][0]-'1');
 		if (argv[2][0]=='m' || argv[2][0]=='M') lsbitfirst=0;
 		if (argv[2][0]=='l' || argv[2][0]=='L') lsbitfirst=1;
 		if (!strcmp(argv[3],"16")) bits = 16;
 		if (!strcmp(argv[3],"24")) bits = 24;
 		infileName = argv[4];
 	}
-	if (channels<1 || lsbitfirst<0 || bits<0) {
+	if (channelsNum<1 || lsbitfirst<0 || bits<0) {
 		std::cerr << "\n"
 			"DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
 			"(c) 2009 Sebastian Gesemann\n\n"
@@ -120,40 +120,40 @@ int main(int argc, char *argv[])
 	inFile.open(infileName, std::ios::binary | std::ios::in);
 
 	int bytespersample = bits/8;
-	std::vector<dxd> dxds (channels);
+	std::vector<dxd> dxds (channelsNum);
 	std::vector<noise_shaper> ns;
 	if (bits==16) {
-		ns.resize(channels, noise_shaper(my_ns_soscount, my_ns_coeffs) );
+		ns.resize(channelsNum, noise_shaper(my_ns_soscount, my_ns_coeffs) );
 	}
-	std::vector<unsigned char> dsd_data (block * channels);
-	std::vector<float> float_data (block);
-	std::vector<unsigned char> pcm_data (block * channels * bytespersample);
+	std::vector<unsigned char> dsd_data (blockSize * channelsNum);
+	std::vector<float> float_data (blockSize);
+	std::vector<unsigned char> pcm_data (blockSize * channelsNum * bytespersample);
 	char * const dsd_in  = reinterpret_cast<char*>(&dsd_data[0]);
 	char * const pcm_out = reinterpret_cast<char*>(&pcm_data[0]);
-	while (inFile.read(dsd_in,block * channels)) {
-		for (int c=0; c<channels; ++c) {
-			dxds[c].translate(block,&dsd_data[0]+c,channels,
+	while (inFile.read(dsd_in,blockSize * channelsNum)) {
+		for (int c=0; c<channelsNum; ++c) {
+			dxds[c].translate(blockSize,&dsd_data[0]+c,channelsNum,
 				lsbitfirst,
 				&float_data[0],1);
 			unsigned char * out = &pcm_data[0] + c*bytespersample;
 			if (bits==16) {
-				for (int s=0; s<block; ++s) {
+				for (int s=0; s<blockSize; ++s) {
 					float r = float_data[s]*32768 + ns[c].get();
 					long smp = clip(-32768,myround(r),32767);
 					ns[c].update( clip(-1,smp-r,1) );
 					write_intel16(out,smp);
-					out += channels*bytespersample;
+					out += channelsNum*bytespersample;
 				}
 			} else {
-				for (int s=0; s<block; ++s) {
+				for (int s=0; s<blockSize; ++s) {
 					float r = float_data[s]*8388608;
 					long smp = clip(-8388608,myround(r),8388607);
 					write_intel24(out,smp);
-					out += channels*bytespersample;
+					out += channelsNum*bytespersample;
 				}
 			}
 		}
-		outFile.write(pcm_out,block*channels*bytespersample);
+		outFile.write(pcm_out,blockSize*channelsNum*bytespersample);
 	}
 	outFile.close();
 	inFile.close();
