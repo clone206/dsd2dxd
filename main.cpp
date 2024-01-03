@@ -81,10 +81,6 @@ inline void write_intel24(unsigned char * ptr, unsigned long word)
 
 } // anonymous namespace
 
-using std::vector;
-using std::cin;
-using std::cout;
-
 int main(int argc, char *argv[])
 {
 	const int ratio = 4;
@@ -124,14 +120,14 @@ int main(int argc, char *argv[])
 	inFile.open(infileName, std::ios::binary | std::ios::in);
 
 	int bytespersample = bits/8;
-	vector<dxd> dxds (channels);
-	vector<noise_shaper> ns;
+	std::vector<dxd> dxds (channels);
+	std::vector<noise_shaper> ns;
 	if (bits==16) {
 		ns.resize(channels, noise_shaper(my_ns_soscount, my_ns_coeffs) );
 	}
-	vector<unsigned char> dsd_data (block * channels);
-	vector<float> float_data (block);
-	vector<unsigned char> pcm_data (block * channels * bytespersample);
+	std::vector<unsigned char> dsd_data (block * channels);
+	std::vector<float> float_data (block);
+	std::vector<unsigned char> pcm_data (block * channels * bytespersample);
 	char * const dsd_in  = reinterpret_cast<char*>(&dsd_data[0]);
 	char * const pcm_out = reinterpret_cast<char*>(&pcm_data[0]);
 	while (inFile.read(dsd_in,block * channels)) {
