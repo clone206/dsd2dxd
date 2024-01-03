@@ -1,2 +1,4 @@
 *.wav
 *.pcm
+*.reapeaks
+settings.json

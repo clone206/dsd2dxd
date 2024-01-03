@@ -31,6 +31,8 @@ or implied, of Sebastian Gesemann.
 #include <iostream>
 #include <vector>
 #include <cstring>
+#include <fstream>
+#include <string>
 
 #include "dsd2pcm.hpp"
 #include "noiseshape.hpp"
@@ -82,7 +84,6 @@ inline void write_intel24(unsigned char * ptr, unsigned long word)
 using std::vector;
 using std::cin;
 using std::cout;
-using std::cerr;
 
 int main(int argc, char *argv[])
 {
@@ -92,26 +93,36 @@ int main(int argc, char *argv[])
 	int channels   = -1;
 	int lsbitfirst = -1;
 	int bits       = -1;
-	if (argc==4) {
+	std::string infileName = "";
+
+	if (argc==5) {
 		if ('1'<=argv[1][0] && argv[1][0]<='9') channels = 1 + (argv[1][0]-'1');
 		if (argv[2][0]=='m' || argv[2][0]=='M') lsbitfirst=0;
 		if (argv[2][0]=='l' || argv[2][0]=='L') lsbitfirst=1;
 		if (!strcmp(argv[3],"16")) bits = 16;
 		if (!strcmp(argv[3],"24")) bits = 24;
+		infileName = argv[4];
 	}
 	if (channels<1 || lsbitfirst<0 || bits<0) {
-		cerr << "\n"
+		std::cerr << "\n"
 			"DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
 			"(c) 2009 Sebastian Gesemann\n\n"
 			"(filter as in \"reads data from stdin and writes to stdout\")\n\n"
 			"Syntax: dsd2pcm <channels> <bitorder> <bitdepth>\n"
 			"channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
 			"bitorder = L (lsb first), M (msb first) (DSD stream option)\n"
-			"bitdepth = 16 or 24 (intel byte order, output option)\n\n"
+			"bitdepth = 16 or 24 (intel byte order, output option)\n"
+			"infile = Input file name, containing raw dsd with 4096 byte block size\n\n"
 			"Note: At 16 bits/sample a noise shaper kicks in that can preserve\n"
 			"a dynamic range of 135 dB below 30 kHz.\n\n";
 		return 1;
 	}
+
+	std::ofstream outFile;
+	std::ifstream inFile;
+  	outFile.open("out.pcm", std::ios::out | std::ios::app | std::ios::binary);
+	inFile.open(infileName, std::ios::binary | std::ios::in);
+
 	int bytespersample = bits/8;
 	vector<dxd> dxds (channels);
 	vector<noise_shaper> ns;
@@ -123,7 +134,7 @@ int main(int argc, char *argv[])
 	vector<unsigned char> pcm_data (block * channels * bytespersample);
 	char * const dsd_in  = reinterpret_cast<char*>(&dsd_data[0]);
 	char * const pcm_out = reinterpret_cast<char*>(&pcm_data[0]);
-	while (cin.read(dsd_in,block * channels)) {
+	while (inFile.read(dsd_in,block * channels)) {
 		for (int c=0; c<channels; ++c) {
 			dxds[c].translate(block,&dsd_data[0]+c,channels,
 				lsbitfirst,
@@ -146,7 +157,9 @@ int main(int argc, char *argv[])
 				}
 			}
 		}
-		cout.write(pcm_out,block*channels*bytespersample);
+		outFile.write(pcm_out,block*channels*bytespersample);
 	}
+	outFile.close();
+	inFile.close();
 }
 
