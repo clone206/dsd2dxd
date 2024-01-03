@@ -2,3 +2,10 @@
 *.pcm
 *.reapeaks
 settings.json
+*.dsd
+*.dsf
+!1kHz.dsd
+!1kHz.dsf
+!1000hz.dsd
+!1000hz.dsf
+dsd2pcm

@@ -89,17 +89,20 @@ int main(int argc, char *argv[])
 	int channelsNum   = -1;
 	int lsbitfirst = -1;
 	int bits       = -1;
+	int intrLeaved = -1;
 	std::string infileName = "";
 
-	if (argc==5) {
+	if (argc==6) {
 		if ('1'<=argv[1][0] && argv[1][0]<='9') channelsNum = 1 + (argv[1][0]-'1');
 		if (argv[2][0]=='m' || argv[2][0]=='M') lsbitfirst=0;
 		if (argv[2][0]=='l' || argv[2][0]=='L') lsbitfirst=1;
 		if (!strcmp(argv[3],"16")) bits = 16;
 		if (!strcmp(argv[3],"24")) bits = 24;
-		infileName = argv[4];
+		if (argv[4][0]=='i' || argv[4][0]=='I') intrLeaved=1;
+		if (argv[4][0]=='p' || argv[4][0]=='P') intrLeaved=0;
+		infileName = argv[5];
 	}
-	if (channelsNum<1 || lsbitfirst<0 || bits<0) {
+	if (channelsNum<1 || lsbitfirst<0 || bits<0 || intrLeaved<0) {
 		std::cerr << "\n"
 			"DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
 			"(c) 2009 Sebastian Gesemann\n\n"
@@ -108,6 +111,7 @@ int main(int argc, char *argv[])
 			"channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
 			"bitorder = L (lsb first), M (msb first) (DSD stream option)\n"
 			"bitdepth = 16 or 24 (intel byte order, output option)\n"
+			"format = I (interleaved) or P (planar)\n"
 			"infile = Input file name, containing raw dsd with 4096 byte block size\n\n"
 			"Note: At 16 bits/sample a noise shaper kicks in that can preserve\n"
 			"a dynamic range of 135 dB below 30 kHz.\n\n";
@@ -130,9 +134,11 @@ int main(int argc, char *argv[])
 	std::vector<unsigned char> pcm_data (blockSize * channelsNum * bytespersample);
 	char * const dsd_in  = reinterpret_cast<char*>(&dsd_data[0]);
 	char * const pcm_out = reinterpret_cast<char*>(&pcm_data[0]);
+	int dsdStride = intrLeaved ? channelsNum : 1;
+
 	while (inFile.read(dsd_in,blockSize * channelsNum)) {
 		for (int c=0; c<channelsNum; ++c) {
-			dxds[c].translate(blockSize,&dsd_data[0]+c,channelsNum,
+			dxds[c].translate(blockSize,&dsd_data[0]+c,dsdStride,
 				lsbitfirst,
 				&float_data[0],1);
 			unsigned char * out = &pcm_data[0] + c*bytespersample;
@@ -158,4 +164,3 @@ int main(int argc, char *argv[])
 	outFile.close();
 	inFile.close();
 }
-

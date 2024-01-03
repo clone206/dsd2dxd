@@ -187,7 +187,7 @@ extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
 extern void dsd2pcm_translate(
 	dsd2pcm_ctx* handle,
 	size_t blockSize,
-	const unsigned char *dsdData, ptrdiff_t channelsNum,
+	const unsigned char *dsdData, ptrdiff_t dsdStride,
 	int lsbf,
 	float *floatData, ptrdiff_t floatStride)
 {
@@ -201,7 +201,7 @@ extern void dsd2pcm_translate(
 	while (blockSize-- > 0) {
 		bite1 = *dsdData & 0xFFu;
 		if (lsbf) bite1 = bitreverse[bite1];
-		handle->fifo[ffp] = bite1; dsdData += floatStride;
+		handle->fifo[ffp] = bite1; dsdData += dsdStride;
 		p = handle->fifo + ((ffp-CTABLES) & FIFOMASK);
 		*p = bitreverse[*p & 0xFF];
 		acc = 0;

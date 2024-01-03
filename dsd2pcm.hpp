@@ -58,11 +58,11 @@ public:
 	{ swap(*this,x); return *this; }
 
 	void translate(size_t blockSize,
-		const unsigned char *dsdData, ptrdiff_t channelsNum,
+		const unsigned char *dsdData, ptrdiff_t dsdStride,
 		bool lsbitfirst,
 		float *floatData, ptrdiff_t floatStride)
 	{
-		dsd2pcm_translate(handle,blockSize,dsdData,channelsNum,
+		dsd2pcm_translate(handle,blockSize,dsdData,dsdStride,
 			lsbitfirst,floatData,floatStride);
 	}
 };
