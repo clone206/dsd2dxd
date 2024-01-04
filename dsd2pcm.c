@@ -119,10 +119,12 @@ static int precalculated = 0;
 
 static void precalc()
 {
+    if (precalculated) return;
+
     int t, e, m, k;
     double acc;
-    if (precalculated) return;
-    for (t=0, e=0; t<256; ++t) {
+    
+    for (t = 0, e = 0; t < 256; ++t) {
         bitreverse[t] = e;
         for (m=128; m && !((e^=m)&m); m>>=1)
             ;
@@ -207,8 +209,8 @@ extern void dsd2pcm_translate(dsd2pcm_ctx* handle, size_t blockSize,
 
         acc = 0.0;
         for (i = 0; i < CTABLES; ++i) {
-            bite1 = buf[(fifoPos                    -i) & FIFOMASK];
-            bite2 = buf[(fifoPos - (CTABLES*2 - 1) + i) & FIFOMASK];
+            bite1 = buf[(fifoPos - i) & FIFOMASK];
+            bite2 = buf[(fifoPos - (CTABLES * 2 - 1) + i) & FIFOMASK];
             acc += ctables[i][bite1] + ctables[i][bite2];
         }
 
@@ -221,4 +223,3 @@ extern void dsd2pcm_translate(dsd2pcm_ctx* handle, size_t blockSize,
     handle->fifopos = fifoPos;
     memcpy(handle->fifo, buf, sizeof(buf));
 }
-

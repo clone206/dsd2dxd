@@ -38,72 +38,78 @@ or implied, of Sebastian Gesemann.
 #include "noiseshape.hpp"
 
 namespace {
+    const float my_ns_coeffs[] = {
+    //     b1           b2           a1           a2
+      -1.62666423,  0.79410094,  0.61367127,  0.23311013,  // section 1
+      -1.44870017,  0.54196219,  0.03373857,  0.70316556   // section 2
+    };
 
-const float my_ns_coeffs[] = {
-//     b1           b2           a1           a2
-  -1.62666423,  0.79410094,  0.61367127,  0.23311013,  // section 1
-  -1.44870017,  0.54196219,  0.03373857,  0.70316556   // section 2
-};
+    const int my_ns_soscount = sizeof(my_ns_coeffs) / (sizeof(my_ns_coeffs[0]) * 4);
 
-const int my_ns_soscount = sizeof(my_ns_coeffs)/(sizeof(my_ns_coeffs[0])*4);
+    inline long myround(float x)
+    {
+        return static_cast<long>(x + (x >= 0 ? 0.5f : -0.5f));
+    }
 
-inline long myround(float x)
-{
-    return static_cast<long>(x + (x>=0 ? 0.5f : -0.5f));
-}
+    template<typename T>
+    struct id { typedef T type; };
 
-template<typename T>
-struct id { typedef T type; };
+    template<typename T>
+    inline T clip(
+        typename id<T>::type min,
+        T v,
+        typename id<T>::type max)
+    {
+        if (v < min) return min;
+        if (v > max) return max;
+        return v;
+    }
 
-template<typename T>
-inline T clip(
-    typename id<T>::type min,
-    T v,
-    typename id<T>::type max)
-{
-    if (v<min) return min;
-    if (v>max) return max;
-    return v;
-}
+    inline void write_intel16(unsigned char * ptr, unsigned word)
+    {
+        ptr[0] =  word       & 0xFF;
+        ptr[1] = (word >> 8) & 0xFF;
+    }
 
-inline void write_intel16(unsigned char * ptr, unsigned word)
-{
-    ptr[0] =  word       & 0xFF;
-    ptr[1] = (word >> 8) & 0xFF;
-}
+    inline void write_intel24(unsigned char * ptr, unsigned long word)
+    {
+        ptr[0] =  word        & 0xFF;
+        ptr[1] = (word >>  8) & 0xFF;
+        ptr[2] = (word >> 16) & 0xFF;
+    }
 
-inline void write_intel24(unsigned char * ptr, unsigned long word)
-{
-    ptr[0] =  word        & 0xFF;
-    ptr[1] = (word >>  8) & 0xFF;
-    ptr[2] = (word >> 16) & 0xFF;
-}
-
+    inline void dither(float &floatSamp)
+    {
+        // TPDF
+        double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
+    	double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
+        floatSamp += (rand1 - rand2);
+    }
 } // anonymous namespace
+
+using namespace std;
 
 int main(int argc, char *argv[])
 {
-    const int ratio = 4;
-    //const int blockSize = 16384;
     const int blockSize = 4096;
     int channelsNum   = -1;
     int lsbitfirst = -1;
     int bits       = -1;
-    int intrLeaved = -1;
-    std::string infileName = "";
+    int interleaved = -1;
+    string infileName = "";
 
     if (argc==6) {
-        if ('1'<=argv[1][0] && argv[1][0]<='9') channelsNum = 1 + (argv[1][0]-'1');
-        if (argv[2][0]=='m' || argv[2][0]=='M') lsbitfirst=0;
-        if (argv[2][0]=='l' || argv[2][0]=='L') lsbitfirst=1;
-        if (!strcmp(argv[3],"16")) bits = 16;
-        if (!strcmp(argv[3],"24")) bits = 24;
-        if (argv[4][0]=='i' || argv[4][0]=='I') intrLeaved=1;
-        if (argv[4][0]=='p' || argv[4][0]=='P') intrLeaved=0;
+        if ('1' <= argv[1][0] && argv[1][0] <= '9') channelsNum = 1 + (argv[1][0] - '1');
+        if (argv[2][0] == 'm' || argv[2][0] == 'M') lsbitfirst = 0;
+        if (argv[2][0] == 'l' || argv[2][0] == 'L') lsbitfirst = 1;
+        if (!strcmp(argv[3], "16")) bits = 16;
+        if (!strcmp(argv[3], "24")) bits = 24;
+        if (argv[4][0] == 'i' || argv[4][0] == 'I') interleaved = 1;
+        if (argv[4][0] == 'p' || argv[4][0] == 'P') interleaved = 0;
         infileName = argv[5];
     }
-    if (channelsNum<1 || lsbitfirst<0 || bits<0 || intrLeaved<0) {
-        std::cerr << "\n"
+    if (channelsNum < 1 || lsbitfirst < 0 || bits < 0 || interleaved < 0) {
+        cerr << "\n"
             "DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
             "(c) 2009 Sebastian Gesemann\n\n"
             "Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>\n"
@@ -119,56 +125,59 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    std::ofstream outFile;
-    std::ifstream inFile;
-      outFile.open("out.pcm", std::ios::out | std::ios::app | std::ios::binary);
-    inFile.open(infileName, std::ios::binary | std::ios::in);
+    ofstream outFile;
+    ifstream inFile;
+    outFile.open("out.pcm", ios::out | ios::app | ios::binary);
+    inFile.open(infileName, ios::binary | ios::in);
 
     int bytespersample = bits / 8;
-    std::vector<dxd> dxds (channelsNum);
-    std::vector<noise_shaper> ns;
+    vector<dxd> dxds (channelsNum);
+    vector<noise_shaper> ns;
 
     if (bits==16) {
-        ns.resize(channelsNum, noise_shaper(my_ns_soscount, my_ns_coeffs) );
+        ns.resize(channelsNum, noise_shaper(my_ns_soscount, my_ns_coeffs));
     }
 
-    std::vector<unsigned char> dsdData (blockSize * channelsNum);
-    std::vector<float> floatData (blockSize);
-    std::vector<unsigned char> pcmData (blockSize * channelsNum * bytespersample);
+    vector<unsigned char> dsdData (blockSize * channelsNum);
+    vector<float> floatData (blockSize);
+    vector<unsigned char> pcmData (blockSize * channelsNum * bytespersample);
     char * const dsdIn  = reinterpret_cast<char*>(&dsdData[0]);
     char * const pcmOut = reinterpret_cast<char*>(&pcmData[0]);
-    int dsdStride = intrLeaved ? channelsNum : 1;
-    int dsdOffset = 1;
+    int dsdStride = interleaved ? channelsNum : 1;
+    int dsdChanOffset = 1; // Default to one byte for interleaved
 
     while (inFile.read(dsdIn, blockSize * channelsNum)) {
         for (int c = 0; c < channelsNum; ++c) {
-            if (!intrLeaved) {
-                dsdOffset = blockSize;
+            if (!interleaved) {
+                dsdChanOffset = blockSize;
             }
-            dxds[c].translate(blockSize, &dsdData[0] + c * dsdOffset, dsdStride,
-                lsbitfirst, &floatData[0],1);
+            dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
+                lsbitfirst, &floatData[0], 1);
 
             unsigned char * out = &pcmData[0] + c * bytespersample;
 
-            if (bits==16) {
-                for (int s=0; s<blockSize; ++s) {
-                    float r = floatData[s]*32768 + ns[c].get();
-                    long smp = clip(-32768,myround(r),32767);
-                    ns[c].update( clip(-1,smp-r,1) );
-                    write_intel16(out,smp);
-                    out += channelsNum*bytespersample;
+            if (bits == 16) {
+                for (int s = 0; s < blockSize; ++s) {
+                    float r = floatData[s] * 32768 + ns[c].get();
+                    dither(r);
+                    long smp = clip(-32768, myround(r), 32767);
+                    ns[c].update( clip(-1, smp-r, 1) );
+                    write_intel16(out, smp);
+                    out += channelsNum * bytespersample;
                 }
             } else {
-                for (int s=0; s<blockSize; ++s) {
-                    float r = floatData[s]*8388608;
-                    long smp = clip(-8388608,myround(r),8388607);
-                    write_intel24(out,smp);
-                    out += channelsNum*bytespersample;
+                for (int s = 0; s < blockSize; ++s) {
+                    float r = floatData[s] * 8388608;
+                    dither(r);
+                    long smp = clip(-8388608, myround(r), 8388607);
+                    write_intel24(out, smp);
+                    out += channelsNum * bytespersample;
                 }
             }
         }
-        outFile.write(pcmOut,blockSize*channelsNum*bytespersample);
+        outFile.write(pcmOut, blockSize * channelsNum * bytespersample);
     }
+
     outFile.close();
     inFile.close();
 }
