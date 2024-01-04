@@ -184,35 +184,41 @@ extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
 	 */
 }
 
-extern void dsd2pcm_translate(
-	dsd2pcm_ctx* handle,
-	size_t blockSize,
-	const unsigned char *dsdData, ptrdiff_t dsdStride,
-	int lsbf,
-	float *floatData, ptrdiff_t floatStride)
+extern void dsd2pcm_translate(dsd2pcm_ctx* handle, size_t blockSize,
+	const unsigned char *dsdData, ptrdiff_t dsdStride, int lsbf, float *floatData,
+	ptrdiff_t floatStride)
 {
-	unsigned ffp;
-	unsigned i;
-	unsigned bite1, bite2;
-	unsigned char* p;
+    uint8_t buf[FIFOSIZE], bite1, bite2;
+	unsigned fifoPos, i;
+	uint8_t* p;
 	double acc;
-	ffp = handle->fifopos;
-	lsbf = lsbf ? 1 : 0;
+
+	fifoPos = handle->fifopos;
+	//lsbf = lsbf ? 1 : 0;
+
+    memcpy(buf, handle->fifo, sizeof(buf));
+
 	while (blockSize-- > 0) {
-		bite1 = *dsdData & 0xFFu;
-		if (lsbf) bite1 = bitreverse[bite1];
-		handle->fifo[ffp] = bite1; dsdData += dsdStride;
-		p = handle->fifo + ((ffp-CTABLES) & FIFOMASK);
-		*p = bitreverse[*p & 0xFF];
-		acc = 0;
-		for (i=0; i<CTABLES; ++i) {
-			bite1 = handle->fifo[(ffp              -i) & FIFOMASK] & 0xFF;
-			bite2 = handle->fifo[(ffp-(CTABLES*2-1)+i) & FIFOMASK] & 0xFF;
+        buf[fifoPos] = lsbf ? bitreverse[*dsdData] : *dsdData;
+		dsdData += dsdStride;
+
+		p = buf + ((fifoPos - CTABLES) & FIFOMASK);
+		*p = bitreverse[*p];
+
+		acc = 0.0;
+		for (i = 0; i < CTABLES; ++i) {
+			bite1 = buf[(fifoPos                    -i) & FIFOMASK];
+			bite2 = buf[(fifoPos - (CTABLES*2 - 1) + i) & FIFOMASK];
 			acc += ctables[i][bite1] + ctables[i][bite2];
 		}
-		*floatData = (float)acc; floatData += floatStride;
-		ffp = (ffp + 1) & FIFOMASK;
+
+		*floatData = (float)acc;
+		floatData += floatStride;
+
+		fifoPos = (fifoPos + 1) & FIFOMASK;
 	}
-	handle->fifopos = ffp;
+
+	handle->fifopos = fifoPos;
+    memcpy(handle->fifo, buf, sizeof(buf));
 }
 

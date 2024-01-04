@@ -1,10 +1,10 @@
 # dsd2dxd
 
-Based on dsd2pcm by Sebastian Gesemann.
+Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/)
 
 Added shell scripts to build and test with 1kHz test tone files.
 
-20240102: Only mono working fully. Some artifacts in stereo. Possibly due to block/stride size issue in code.
+Handles planar format as well. Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
 ## Dependencies
 - ffmpeg

@@ -124,28 +124,35 @@ int main(int argc, char *argv[])
   	outFile.open("out.pcm", std::ios::out | std::ios::app | std::ios::binary);
 	inFile.open(infileName, std::ios::binary | std::ios::in);
 
-	int bytespersample = bits/8;
+	int bytespersample = bits / 8;
 	std::vector<dxd> dxds (channelsNum);
 	std::vector<noise_shaper> ns;
+
 	if (bits==16) {
 		ns.resize(channelsNum, noise_shaper(my_ns_soscount, my_ns_coeffs) );
 	}
-	std::vector<unsigned char> dsd_data (blockSize * channelsNum);
-	std::vector<float> float_data (blockSize);
-	std::vector<unsigned char> pcm_data (blockSize * channelsNum * bytespersample);
-	char * const dsd_in  = reinterpret_cast<char*>(&dsd_data[0]);
-	char * const pcm_out = reinterpret_cast<char*>(&pcm_data[0]);
-	int dsdStride = intrLeaved ? channelsNum : 1;
 
-	while (inFile.read(dsd_in,blockSize * channelsNum)) {
-		for (int c=0; c<channelsNum; ++c) {
-			dxds[c].translate(blockSize,&dsd_data[0]+c,dsdStride,
-				lsbitfirst,
-				&float_data[0],1);
-			unsigned char * out = &pcm_data[0] + c*bytespersample;
+	std::vector<unsigned char> dsdData (blockSize * channelsNum);
+	std::vector<float> floatData (blockSize);
+	std::vector<unsigned char> pcmData (blockSize * channelsNum * bytespersample);
+	char * const dsdIn  = reinterpret_cast<char*>(&dsdData[0]);
+	char * const pcmOut = reinterpret_cast<char*>(&pcmData[0]);
+	int dsdStride = intrLeaved ? channelsNum : 1;
+	int dsdOffset = 1;
+
+	while (inFile.read(dsdIn, blockSize * channelsNum)) {
+		for (int c = 0; c < channelsNum; ++c) {
+			if (!intrLeaved) {
+				dsdOffset = blockSize;
+			}
+			dxds[c].translate(blockSize, &dsdData[0] + c * dsdOffset, dsdStride,
+				lsbitfirst, &floatData[0],1);
+
+			unsigned char * out = &pcmData[0] + c * bytespersample;
+
 			if (bits==16) {
 				for (int s=0; s<blockSize; ++s) {
-					float r = float_data[s]*32768 + ns[c].get();
+					float r = floatData[s]*32768 + ns[c].get();
 					long smp = clip(-32768,myround(r),32767);
 					ns[c].update( clip(-1,smp-r,1) );
 					write_intel16(out,smp);
@@ -153,14 +160,14 @@ int main(int argc, char *argv[])
 				}
 			} else {
 				for (int s=0; s<blockSize; ++s) {
-					float r = float_data[s]*8388608;
+					float r = floatData[s]*8388608;
 					long smp = clip(-8388608,myround(r),8388607);
 					write_intel24(out,smp);
 					out += channelsNum*bytespersample;
 				}
 			}
 		}
-		outFile.write(pcm_out,blockSize*channelsNum*bytespersample);
+		outFile.write(pcmOut,blockSize*channelsNum*bytespersample);
 	}
 	outFile.close();
 	inFile.close();
