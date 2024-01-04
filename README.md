@@ -6,8 +6,6 @@ Added shell scripts to build and test with 1kHz test tone files.
 
 Handles planar format as well. Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
-20240104: 16 bit mode not currently working.
-
 ## Dependencies
 - ffmpeg
 - ffplay
@@ -35,11 +33,11 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 ## Testing Examples
 ```bash
-# Compile code; convert and play mono, LSB, planar test file
-./build_test_mono.sh L P 1kHz_mono_p.dsd
+# Compile code; convert to and play mono, LSB-first, 24bit, planar test file
+./build_test_mono.sh L 24 P 1kHz_mono_p.dsd
 
-# Compile code; convert and play stereo, LSB, planar test file
-./build_test_stereo.sh L P 1kHz_stereo_p.dsd
+# Compile code; convert to and play stereo, LSB-first, 16bit, planar test file
+./build_test_stereo.sh L 16 P 1kHz_stereo_p.dsd
 ```
 
 .dsd files with `_p` in the names are the equivalent of the .dsf files with the header metadata stripped off.
