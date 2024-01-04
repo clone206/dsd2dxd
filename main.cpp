@@ -78,12 +78,12 @@ namespace {
         ptr[2] = (word >> 16) & 0xFF;
     }
 
-    inline void dither(float &floatSamp)
+    inline void dither(float &sample)
     {
         // TPDF
-        double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
-    	double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
-        floatSamp += (rand1 - rand2);
+        float rand1 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
+    	float rand2 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
+        sample += (rand1 - rand2);
     }
 } // anonymous namespace
 
@@ -97,6 +97,9 @@ int main(int argc, char *argv[])
     int bits       = -1;
     int interleaved = -1;
     string infileName = "";
+
+    // Seed rng
+    srand (static_cast <unsigned> (time(0)));
 
     if (argc==6) {
         if ('1' <= argv[1][0] && argv[1][0] <= '9') channelsNum = 1 + (argv[1][0] - '1');
