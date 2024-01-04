@@ -41,30 +41,30 @@ or implied, of Sebastian Gesemann.
 
 class dxd
 {
-	dsd2pcm_ctx *handle;
+    dsd2pcm_ctx *handle;
 public:
-	dxd() : handle(dsd2pcm_init())
-	{ if (!handle) throw std::runtime_error("wtf?!"); }
+    dxd() : handle(dsd2pcm_init())
+    { if (!handle) throw std::runtime_error("wtf?!"); }
 
-	dxd(dxd const& x) : handle(dsd2pcm_clone(x.handle))
-	{ if (!handle) throw std::runtime_error("wtf?!"); }
+    dxd(dxd const& x) : handle(dsd2pcm_clone(x.handle))
+    { if (!handle) throw std::runtime_error("wtf?!"); }
 
-	~dxd() { dsd2pcm_destroy(handle); }
+    ~dxd() { dsd2pcm_destroy(handle); }
 
-	friend void swap(dxd & a, dxd & b)
-	{ std::swap(a.handle,b.handle); }
+    friend void swap(dxd & a, dxd & b)
+    { std::swap(a.handle,b.handle); }
 
-	dxd& operator=(dxd x)
-	{ swap(*this,x); return *this; }
+    dxd& operator=(dxd x)
+    { swap(*this,x); return *this; }
 
-	void translate(size_t blockSize,
-		const unsigned char *dsdData, ptrdiff_t dsdStride,
-		bool lsbitfirst,
-		float *floatData, ptrdiff_t floatStride)
-	{
-		dsd2pcm_translate(handle,blockSize,dsdData,dsdStride,
-			lsbitfirst,floatData,floatStride);
-	}
+    void translate(size_t blockSize,
+        const unsigned char *dsdData, ptrdiff_t dsdStride,
+        bool lsbitfirst,
+        float *floatData, ptrdiff_t floatStride)
+    {
+        dsd2pcm_translate(handle,blockSize,dsdData,dsdStride,
+            lsbitfirst,floatData,floatStride);
+    }
 };
 
 #endif // DSD2PCM_HXX_INCLUDED

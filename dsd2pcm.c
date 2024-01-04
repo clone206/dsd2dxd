@@ -119,106 +119,106 @@ static int precalculated = 0;
 
 static void precalc()
 {
-	int t, e, m, k;
-	double acc;
-	if (precalculated) return;
-	for (t=0, e=0; t<256; ++t) {
-		bitreverse[t] = e;
-		for (m=128; m && !((e^=m)&m); m>>=1)
-			;
-	}
-	for (t=0; t<CTABLES; ++t) {
-		k = HTAPS - t*8;
-		if (k>8) k=8;
-		for (e=0; e<256; ++e) {
-			acc = 0.0;
-			for (m=0; m<k; ++m) {
-				acc += (((e >> (7-m)) & 1)*2-1) * htaps[t*8+m];
-			}
-			ctables[CTABLES-1-t][e] = (float)acc;
-		}
-	}
-	precalculated = 1;
+    int t, e, m, k;
+    double acc;
+    if (precalculated) return;
+    for (t=0, e=0; t<256; ++t) {
+        bitreverse[t] = e;
+        for (m=128; m && !((e^=m)&m); m>>=1)
+            ;
+    }
+    for (t=0; t<CTABLES; ++t) {
+        k = HTAPS - t*8;
+        if (k>8) k=8;
+        for (e=0; e<256; ++e) {
+            acc = 0.0;
+            for (m=0; m<k; ++m) {
+                acc += (((e >> (7-m)) & 1)*2-1) * htaps[t*8+m];
+            }
+            ctables[CTABLES-1-t][e] = (float)acc;
+        }
+    }
+    precalculated = 1;
 }
 
 struct dsd2pcm_ctx_s
 {
-	unsigned char fifo[FIFOSIZE];
-	unsigned fifopos;
+    unsigned char fifo[FIFOSIZE];
+    unsigned fifopos;
 };
 
 extern dsd2pcm_ctx* dsd2pcm_init()
 {
-	dsd2pcm_ctx* ptr;
-	if (!precalculated) precalc();
-	ptr = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
-	if (ptr) dsd2pcm_reset(ptr);
-	return ptr;
+    dsd2pcm_ctx* ptr;
+    if (!precalculated) precalc();
+    ptr = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
+    if (ptr) dsd2pcm_reset(ptr);
+    return ptr;
 }
 
 extern void dsd2pcm_destroy(dsd2pcm_ctx* ptr)
 {
-	free(ptr);
+    free(ptr);
 }
 
 extern dsd2pcm_ctx* dsd2pcm_clone(dsd2pcm_ctx* ptr)
 {
-	dsd2pcm_ctx* p2;
-	p2 = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
-	if (p2) {
-		memcpy(p2,ptr,sizeof(dsd2pcm_ctx));
-	}
-	return p2;
+    dsd2pcm_ctx* p2;
+    p2 = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
+    if (p2) {
+        memcpy(p2,ptr,sizeof(dsd2pcm_ctx));
+    }
+    return p2;
 }
 
 extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
 {
-	int i;
-	for (i=0; i<FIFOSIZE; ++i)
-		ptr->fifo[i] = 0x69; /* my favorite silence pattern */
-	ptr->fifopos = 0;
-	/* 0x69 = 01101001
-	 * This pattern "on repeat" makes a low energy 352.8 kHz tone
-	 * and a high energy 1.0584 MHz tone which should be filtered
-	 * out completely by any playback system --> silence
-	 */
+    int i;
+    for (i=0; i<FIFOSIZE; ++i)
+        ptr->fifo[i] = 0x69; /* my favorite silence pattern */
+    ptr->fifopos = 0;
+    /* 0x69 = 01101001
+     * This pattern "on repeat" makes a low energy 352.8 kHz tone
+     * and a high energy 1.0584 MHz tone which should be filtered
+     * out completely by any playback system --> silence
+     */
 }
 
 extern void dsd2pcm_translate(dsd2pcm_ctx* handle, size_t blockSize,
-	const unsigned char *dsdData, ptrdiff_t dsdStride, int lsbf, float *floatData,
-	ptrdiff_t floatStride)
+    const unsigned char *dsdData, ptrdiff_t dsdStride, int lsbf, float *floatData,
+    ptrdiff_t floatStride)
 {
     uint8_t buf[FIFOSIZE], bite1, bite2;
-	unsigned fifoPos, i;
-	uint8_t* p;
-	double acc;
+    unsigned fifoPos, i;
+    uint8_t* p;
+    double acc;
 
-	fifoPos = handle->fifopos;
-	//lsbf = lsbf ? 1 : 0;
+    fifoPos = handle->fifopos;
+    //lsbf = lsbf ? 1 : 0;
 
     memcpy(buf, handle->fifo, sizeof(buf));
 
-	while (blockSize-- > 0) {
+    while (blockSize-- > 0) {
         buf[fifoPos] = lsbf ? bitreverse[*dsdData] : *dsdData;
-		dsdData += dsdStride;
+        dsdData += dsdStride;
 
-		p = buf + ((fifoPos - CTABLES) & FIFOMASK);
-		*p = bitreverse[*p];
+        p = buf + ((fifoPos - CTABLES) & FIFOMASK);
+        *p = bitreverse[*p];
 
-		acc = 0.0;
-		for (i = 0; i < CTABLES; ++i) {
-			bite1 = buf[(fifoPos                    -i) & FIFOMASK];
-			bite2 = buf[(fifoPos - (CTABLES*2 - 1) + i) & FIFOMASK];
-			acc += ctables[i][bite1] + ctables[i][bite2];
-		}
+        acc = 0.0;
+        for (i = 0; i < CTABLES; ++i) {
+            bite1 = buf[(fifoPos                    -i) & FIFOMASK];
+            bite2 = buf[(fifoPos - (CTABLES*2 - 1) + i) & FIFOMASK];
+            acc += ctables[i][bite1] + ctables[i][bite2];
+        }
 
-		*floatData = (float)acc;
-		floatData += floatStride;
+        *floatData = (float)acc;
+        floatData += floatStride;
 
-		fifoPos = (fifoPos + 1) & FIFOMASK;
-	}
+        fifoPos = (fifoPos + 1) & FIFOMASK;
+    }
 
-	handle->fifopos = fifoPos;
+    handle->fifopos = fifoPos;
     memcpy(handle->fifo, buf, sizeof(buf));
 }
 

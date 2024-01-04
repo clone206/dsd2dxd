@@ -81,10 +81,10 @@ extern void dsd2pcm_reset(dsd2pcm_ctx *ctx);
  * @param dst_stride -- dst pointer increment
  */
 extern void dsd2pcm_translate(dsd2pcm_ctx *ctx,
-	size_t samples,
-	const unsigned char *src, ptrdiff_t src_stride,
-	int lsbitfirst,
-	float *dst, ptrdiff_t dst_stride);
+   size_t samples,
+   const unsigned char *src, ptrdiff_t src_stride,
+   int lsbitfirst,
+   float *dst, ptrdiff_t dst_stride);
 
 #ifdef __cplusplus
 } /* extern "C" */
