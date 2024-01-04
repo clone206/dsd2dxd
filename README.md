@@ -6,6 +6,8 @@ Added shell scripts to build and test with 1kHz test tone files.
 
 Handles planar format as well. Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
+20240104: 16 bit mode not currently working.
+
 ## Dependencies
 - ffmpeg
 - ffplay
