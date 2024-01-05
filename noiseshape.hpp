@@ -42,9 +42,9 @@ class noise_shaper
 {
     noise_shape_ctx ctx;
 public:
-    noise_shaper(int sos_count, const float *bbaa)
+    noise_shaper(int sos_count, const float *coeffs)
     {
-        if (noise_shape_init(&ctx,sos_count,bbaa))
+        if (noise_shape_init(&ctx,sos_count,coeffs))
             throw std::runtime_error("noise shaper initialization failed");
     }
 

@@ -1,7 +1,7 @@
 You downloaded the source code for "dsd2pcm" which is a simple little
 "filter" program, that takes a DSD data stream on stdin and converts
 it to a PCM stream (352.8 kHz, either 16 or 24 bits) and writes it to
-stdout. The code is split into three modules:
+out.pcm. The code is split into three modules:
 
   (1) dsd2pcm
 

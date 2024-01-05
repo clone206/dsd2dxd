@@ -37,7 +37,7 @@ extern "C" {
 
 typedef struct noise_shape_ctx_s {
     int sos_count;      /* number of second order sections */
-    const float *bbaa;  /* filter coefficients, owned by user */
+    const float *coeffs;  /* filter coefficients, owned by user */
     float *t1, *t2;     /* filter state, owned by ns library */
 } noise_shape_ctx;
 

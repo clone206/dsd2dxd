@@ -98,9 +98,6 @@ int main(int argc, char *argv[])
     int interleaved = -1;
     string infileName = "";
 
-    // Seed rng
-    srand (static_cast <unsigned> (time(0)));
-
     if (argc==6) {
         if ('1' <= argv[1][0] && argv[1][0] <= '9') channelsNum = 1 + (argv[1][0] - '1');
         if (argv[2][0] == 'm' || argv[2][0] == 'M') lsbitfirst = 0;
@@ -128,6 +125,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    // Seed rng
+    srand (static_cast <unsigned> (time(0)));
+
     ofstream outFile;
     ifstream inFile;
     outFile.open("out.pcm", ios::out | ios::app | ios::binary);
@@ -137,7 +137,7 @@ int main(int argc, char *argv[])
     vector<dxd> dxds (channelsNum);
     vector<noise_shaper> ns;
 
-    if (bits==16) {
+    if (bits == 16) {
         ns.resize(channelsNum, noise_shaper(my_ns_soscount, my_ns_coeffs));
     }
 
@@ -162,7 +162,7 @@ int main(int argc, char *argv[])
             if (bits == 16) {
                 for (int s = 0; s < blockSize; ++s) {
                     float r = floatData[s] * 32768 + ns[c].get();
-                    dither(r);
+                    //dither(r); // Should I be doing this when we already have noise shaping?
                     long smp = clip(-32768, myround(r), 32767);
                     ns[c].update( clip(-1, smp-r, 1) );
                     write_intel16(out, smp);
