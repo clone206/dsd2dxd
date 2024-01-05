@@ -32,7 +32,6 @@ or implied, of Sebastian Gesemann.
  *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
  * ======================================== */
 
-
 #include <iostream>
 #include <vector>
 #include <cstring>
@@ -43,6 +42,8 @@ or implied, of Sebastian Gesemann.
 #include "dsd2pcm.hpp"
 #include "noiseshape.hpp"
 
+using namespace std;
+
 namespace {
     const float my_ns_coeffs[] = {
     //     b1           b2           a1           a2
@@ -50,210 +51,190 @@ namespace {
       -1.44870017,  0.54196219,  0.03373857,  0.70316556   // section 2
     };
 
-    const int my_ns_soscount = sizeof(my_ns_coeffs) / (sizeof(my_ns_coeffs[0]) * 4);
+    const int my_ns_soscount = sizeof(my_ns_coeffs)
+        / (sizeof(my_ns_coeffs[0]) * 4);
 
-    // njad vars
-	uint32_t fpdL = 1.0;
-	uint32_t fpdR = 1.0;
-    bool highres = true;
-	float scale_factor;
-	double noiseShapingL;
-	double noiseShapingR;
-	double bynL[13];
-	double bynR[13];
+    // Output/dither vars
+    uint32_t fpd_l = 1.0; // FP Dither L
+    uint32_t fpd_r = 1.0; // FP Dither R
+    double noise_shaping_l;// Noise shape state L
+    double noise_shaping_r;// Noise shape state R
+    double byn_l[13]; // Delay line L
+    double byn_r[13]; // Delay line R;
 
-    // Initialize "Not just another Dither"
-    inline void init_outputs(bool hires) {
-        while (fpdL < 16386) fpdL = rand() * UINT32_MAX;
-        while (fpdR < 16386) fpdR = rand() * UINT32_MAX;
+    // Initialize outputs/dither state
+    inline void init_outputs() {
+        while (fpd_l < 16386) fpd_l = rand() * UINT32_MAX;
+        while (fpd_r < 16386) fpd_r = rand() * UINT32_MAX;
 
-        highres = hires;
-
-	    if (hires)
-            scale_factor = 8388608.0;
-	    else
-            scale_factor = 32768.0;
-	    noiseShapingL = 0.0;
-	    noiseShapingR = 0.0;
-	    bynL[0] = 1000;
-	    bynL[1] = 301;
-	    bynL[2] = 176;
-	    bynL[3] = 125;
-	    bynL[4] = 97;
-	    bynL[5] = 79;
-	    bynL[6] = 67;
-	    bynL[7] = 58;
-	    bynL[8] = 51;
-	    bynL[9] = 46;
-	    bynL[10] = 1000;
-	
-	    bynR[0] = 1000;
-	    bynR[1] = 301;
-	    bynR[2] = 176;
-	    bynR[3] = 125;
-	    bynR[4] = 97;
-	    bynR[5] = 79;
-	    bynR[6] = 67;
-	    bynR[7] = 58;
-	    bynR[8] = 51;
-	    bynR[9] = 46;
-	    bynR[10] = 1000;
+        noise_shaping_l = 0.0;
+        noise_shaping_r = 0.0;
+       
+        byn_l[0] = 1000;
+        byn_l[1] = 301;
+        byn_l[2] = 176;
+        byn_l[3] = 125;
+        byn_l[4] = 97;
+        byn_l[5] = 79;
+        byn_l[6] = 67;
+        byn_l[7] = 58;
+        byn_l[8] = 51;
+        byn_l[9] = 46;
+        byn_l[10] = 1000;
+    
+        byn_r[0] = 1000;
+        byn_r[1] = 301;
+        byn_r[2] = 176;
+        byn_r[3] = 125;
+        byn_r[4] = 97;
+        byn_r[5] = 79;
+        byn_r[6] = 67;
+        byn_r[7] = 58;
+        byn_r[8] = 51;
+        byn_r[9] = 46;
+        byn_r[10] = 1000;
     }
 
-    // Not just another Dither R
-    inline void njad_r(float &sample) {
-        double inputSampleR = (double)sample;
-		if (fabs(inputSampleR)<1.18e-23) inputSampleR = fpdR * 1.18e-17;
-		fpdR ^= fpdR << 13; fpdR ^= fpdR >> 17; fpdR ^= fpdR << 5;
-		
-		inputSampleR *= scale_factor;
-		//0-1 is now one bit, now we dither
+    // Not Just Another Dither 
+    // Not truly random. Uses Benford Real Numbers for the dither values
+    // Part of Airwindows plugin suite
+    inline int njad(float &sample, int chanNum, float scaleFactor)
+    {
+        double inputSample = (double)sample;
+        uint32_t *fpd;
+        double *noiseShaping;
+        double (*byn)[13];
 
-		bool cutbinsR; cutbinsR = false;
-		double drySampleR; drySampleR = inputSampleR;
-		inputSampleR -= noiseShapingR;
-
-		double benfordize; benfordize = floor(inputSampleR);
-		while (benfordize >= 1.0) benfordize /= 10;
-		while (benfordize < 1.0 && benfordize > 0.0000001) benfordize *= 10;
-		int hotbinA; hotbinA = floor(benfordize);
-		//hotbin becomes the Benford bin value for this number floored
-		double totalA; totalA = 0;
-
-		if ((hotbinA > 0) && (hotbinA < 10))
-		{
-			bynR[hotbinA] += 1; if (bynR[hotbinA] > 982) cutbinsR = true;
-			totalA += (301-bynR[1]); totalA += (176-bynR[2]); totalA += (125-bynR[3]);
-			totalA += (97-bynR[4]); totalA += (79-bynR[5]); totalA += (67-bynR[6]);
-			totalA += (58-bynR[7]); totalA += (51-bynR[8]); totalA += (46-bynR[9]);
-			bynR[hotbinA] -= 1;
-		} else hotbinA = 10;
-		//produce total number- smaller is closer to Benford real
-		
-		benfordize = ceil(inputSampleR);
-		while (benfordize >= 1.0) benfordize /= 10;
-		while (benfordize < 1.0 && benfordize > 0.0000001) benfordize *= 10;		
-		int hotbinB = floor(benfordize);
-		//hotbin becomes the Benford bin value for this number ceiled
-		double totalB = 0;
-		if ((hotbinB > 0) && (hotbinB < 10))
-		{
-			bynR[hotbinB] += 1; if (bynR[hotbinB] > 982) cutbinsR = true;
-			totalB += (301-bynR[1]); totalB += (176-bynR[2]); totalB += (125-bynR[3]);
-			totalB += (97-bynR[4]); totalB += (79-bynR[5]); totalB += (67-bynR[6]);
-			totalB += (58-bynR[7]); totalB += (51-bynR[8]); totalB += (46-bynR[9]);
-			bynR[hotbinB] -= 1;
-		} else hotbinB = 10;
-		//produce total number- smaller is closer to Benford real
-		
-		double outputSample;
-		if (totalA < totalB) {bynR[hotbinA] += 1; outputSample = floor(inputSampleR);}
-		else {bynR[hotbinB] += 1; outputSample = floor(inputSampleR+1);}
-		//assign the relevant one to the delay line
-		//and floor/ceil signal accordingly
-		
-		if (cutbinsR) {
-			bynR[1] *= 0.99; bynR[2] *= 0.99; bynR[3] *= 0.99; bynR[4] *= 0.99; bynR[5] *= 0.99; 
-			bynR[6] *= 0.99; bynR[7] *= 0.99; bynR[8] *= 0.99; bynR[9] *= 0.99; bynR[10] *= 0.99; 
-		}
-		noiseShapingR += outputSample - drySampleR;			
-		if (noiseShapingR > fabs(inputSampleR)) noiseShapingR = fabs(inputSampleR);
-		if (noiseShapingR < -fabs(inputSampleR)) noiseShapingR = -fabs(inputSampleR);
-
-		outputSample /= scale_factor;
-		if (outputSample > 1.0) outputSample = 1.0;
-		if (outputSample < -1.0) outputSample = -1.0;
-
-        sample = (float)(inputSampleR + outputSample);
-    }
-
-    // Not Just Another Dither L
-    inline void njad_l(float &sample) {
-        double inputSampleL = (double)sample;
-
-		if (fabs(inputSampleL) < 1.18e-23)
-            inputSampleL = fpdL * 1.18e-17;
-
-		fpdL ^= fpdL << 13;
-        fpdL ^= fpdL >> 17;
-        fpdL ^= fpdL << 5;
-
-		inputSampleL *= scale_factor;
-
-		bool cutbinsL = false;
-		double drySampleL = inputSampleL;
-		inputSampleL -= noiseShapingL;
-
-		double benfordize = floor(inputSampleL);
-		while (benfordize >= 1.0) benfordize /= 10;
-		while (benfordize < 1.0 && benfordize > 0.0000001) benfordize *= 10;
-
-		int hotbinA = floor(benfordize);
-		//hotbin becomes the Benford bin value for this number floored
-		double totalA = 0;
-
-		if ((hotbinA > 0) && (hotbinA < 10))
-		{
-			bynL[hotbinA] += 1;
-            if (bynL[hotbinA] > 982) cutbinsL = true;
-			totalA += (301-bynL[1]);
-            totalA += (176-bynL[2]);
-            totalA += (125-bynL[3]);
-			totalA += (97-bynL[4]);
-            totalA += (79-bynL[5]);
-            totalA += (67-bynL[6]);
-			totalA += (58-bynL[7]);
-            totalA += (51-bynL[8]);
-            totalA += (46-bynL[9]);
-			bynL[hotbinA] -= 1;
-		} else hotbinA = 10;
-		//produce total number- smaller is closer to Benford real
-		
-		benfordize = ceil(inputSampleL);
-
-		while (benfordize >= 1.0) benfordize /= 10;
-		while (benfordize < 1.0 && benfordize > 0.0000001) benfordize *= 10;
-
-		int hotbinB; hotbinB = floor(benfordize);
-		//hotbin becomes the Benford bin value for this number ceiled
-		double totalB; totalB = 0;
-		if ((hotbinB > 0) && (hotbinB < 10))
-		{
-			bynL[hotbinB] += 1; if (bynL[hotbinB] > 982) cutbinsL = true;
-			totalB += (301-bynL[1]); totalB += (176-bynL[2]); totalB += (125-bynL[3]);
-			totalB += (97-bynL[4]); totalB += (79-bynL[5]); totalB += (67-bynL[6]);
-			totalB += (58-bynL[7]); totalB += (51-bynL[8]); totalB += (46-bynL[9]);
-			bynL[hotbinB] -= 1;
-		} else hotbinB = 10;
-		//produce total number- smaller is closer to Benford real
-		
-		double outputSample;
-		if (totalA < totalB) {bynL[hotbinA] += 1; outputSample = floor(inputSampleL);}
-		else {bynL[hotbinB] += 1; outputSample = floor(inputSampleL+1);}
-		//assign the relevant one to the delay line
-		//and floor/ceil signal accordingly
-		if (cutbinsL) {
-			bynL[1] *= 0.99; bynL[2] *= 0.99; bynL[3] *= 0.99; bynL[4] *= 0.99; bynL[5] *= 0.99; 
-			bynL[6] *= 0.99; bynL[7] *= 0.99; bynL[8] *= 0.99; bynL[9] *= 0.99; bynL[10] *= 0.99; 
-		}
-		noiseShapingL += outputSample - drySampleL;			
-		if (noiseShapingL > fabs(inputSampleL)) noiseShapingL = fabs(inputSampleL);
-		if (noiseShapingL < -fabs(inputSampleL)) noiseShapingL = -fabs(inputSampleL);		
-		
-		outputSample /= scale_factor;
-		if (outputSample > 1.0) outputSample = 1.0;
-		if (outputSample < -1.0) outputSample = -1.0;
-
-        sample = (float)(inputSampleL + outputSample);
-    }
-
-    // Delegates to njad left or right, which each have their own state
-    inline void njad(float &sample, int chan_num) {
-        if (chan_num == 0) {
-            njad_l(sample);
-        } else if (chan_num == 1) {
-            njad_r(sample);
+        if (chanNum == 0) {
+            fpd = &fpd_l;
+            noiseShaping = &noise_shaping_l;
+            byn = &byn_l;
+        } else if (chanNum ==1) {
+            fpd = &fpd_r;
+            noiseShaping = &noise_shaping_r;
+            byn = &byn_r;
+        } else {
+            cerr << "njad only supports a maximum of 2 channels!";
+            return 1;
         }
+
+        if (fabs(inputSample) < 1.18e-23)
+            inputSample = *fpd * 1.18e-17;
+
+        *fpd ^= (*fpd) << 13;
+        *fpd ^= (*fpd) >> 17;
+        *fpd ^= (*fpd) << 5;
+
+        inputSample *= scaleFactor;
+
+        bool cutbins = false;
+        double drySample = inputSample;
+        inputSample -= *noiseShaping;
+
+        double benfordize = floor(inputSample);
+        while (benfordize >= 1.0)
+            benfordize /= 10;
+        while (benfordize < 1.0 && benfordize > 0.0000001)
+            benfordize *= 10;
+
+        //hotbin becomes the Benford bin value for this number floored
+        int hotbinA = floor(benfordize);
+
+        double totalA = 0;
+        //produce total number- smaller is closer to Benford real
+        if ((hotbinA > 0) && (hotbinA < 10))
+        {
+            *byn[hotbinA] += 1;
+
+            if (*byn[hotbinA] > 982)
+                cutbins = true;
+            totalA += (301 - (*byn[1]));
+            totalA += (176 - (*byn[2]));
+            totalA += (125 - (*byn[3]));
+            totalA += (97 - (*byn[4]));
+            totalA += (79 - (*byn[5]));
+            totalA += (67 - (*byn[6]));
+            totalA += (58 - (*byn[7]));
+            totalA += (51 - (*byn[8]));
+            totalA += (46 - (*byn[9]));
+            *byn[hotbinA] -= 1;
+        } else
+            hotbinA = 10;
+        
+        //hotbin becomes the Benford bin value for this number ceiled
+        benfordize = ceil(inputSample);
+
+        while (benfordize >= 1.0)
+            benfordize /= 10;
+        while (benfordize < 1.0 && benfordize > 0.0000001)
+            benfordize *= 10;
+
+        int hotbinB = floor(benfordize);
+
+        double totalB = 0;
+        //produce total number- smaller is closer to Benford real
+        if ((hotbinB > 0) && (hotbinB < 10))
+        {
+            (*byn[hotbinB]) += 1;
+            if (*byn[hotbinB] > 982)
+                cutbins = true;
+            totalB += (301 - (*byn[1]));
+            totalB += (176 - (*byn[2]));
+            totalB += (125 - (*byn[3]));
+            totalB += (97 - (*byn[4]));
+            totalB += (79 - (*byn[5]));
+            totalB += (67 - (*byn[6]));
+            totalB += (58 - (*byn[7]));
+            totalB += (51 - (*byn[8]));
+            totalB += (46 - (*byn[9]));
+            *byn[hotbinB] -= 1;
+        } else
+            hotbinB = 10;
+        
+        double outputSample;
+
+        //assign the relevant one to the delay line
+        //and floor/ceil signal accordingly
+        if (totalA < totalB) {
+            (*byn[hotbinA]) += 1; 
+            outputSample = floor(inputSample);
+        } else {
+            (*byn[hotbinB]) += 1;
+            outputSample = floor(inputSample + 1);
+        }
+
+        if (cutbins) {
+            (*byn[1]) *= 0.99;
+            (*byn[2]) *= 0.99;
+            (*byn[3]) *= 0.99;
+            (*byn[4]) *= 0.99;
+            (*byn[5]) *= 0.99; 
+            (*byn[6]) *= 0.99;
+            (*byn[7]) *= 0.99;
+            (*byn[8]) *= 0.99;
+            (*byn[9]) *= 0.99;
+            (*byn[10]) *= 0.99; 
+        }
+
+        // Store the error
+        *noiseShaping += outputSample - drySample;
+
+        // Error shouldn't be greater than input sample value
+        if (*noiseShaping > fabs(inputSample))
+            *noiseShaping = fabs(inputSample);
+        if (*noiseShaping < -fabs(inputSample))
+            *noiseShaping = -fabs(inputSample);		
+        
+        outputSample /= scaleFactor;
+
+        if (outputSample > 1.0)
+            outputSample = 1.0;
+        if (outputSample < -1.0)
+            outputSample = -1.0;
+
+        sample = (float)(inputSample + outputSample);
+
+        return 0;
     }
 
     inline long myround(float x)
@@ -275,26 +256,26 @@ namespace {
         return v;
     }
 
-    inline void write_intel(unsigned char * ptr, unsigned long word)
+    inline void write_intel(unsigned char * ptr, unsigned long word,
+        unsigned char bitsNum)
     {
         ptr[0] =  word        & 0xFF;
         ptr[1] = (word >>  8) & 0xFF;
-        if (highres) {
+        if (bitsNum == 24) {
             ptr[2] = (word >> 16) & 0xFF;
         }
     }
 
-    inline void tpdf(float &sample)
+    inline void tpdf(float &sample, float scaleFactor)
     {
-		sample *= scale_factor;
+        sample *= scaleFactor;
         float rand1 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
-    	float rand2 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
+        float rand2 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
         sample += (rand1 - rand2);
     }
 
 } // anonymous namespace
 
-using namespace std;
 
 int main(int argc, char *argv[])
 {
@@ -344,13 +325,16 @@ int main(int argc, char *argv[])
 
     int bytespersample = bits / 8;
     vector<dxd> dxds (channelsNum);
-    vector<noise_shaper> ns;
+    //vector<noise_shaper> ns;
+    float scaleFactor;
 
     if (bits == 16) {
-        init_outputs(false);
+        scaleFactor = 32768.0;
     } else {
-        init_outputs(true);
+        scaleFactor = 8388608.0;
     }
+
+    init_outputs();
 
     vector<unsigned char> dsdData (blockSize * channelsNum);
     vector<float> floatData (blockSize);
@@ -372,10 +356,11 @@ int main(int argc, char *argv[])
 
             for (int s = 0; s < blockSize; ++s) {
                 float r = floatData[s];
-                njad(r, c);
-                //tpdf(r);
-                long smp = clip(-scale_factor, myround(r), scale_factor);
-                write_intel(out, smp);
+                if(njad(r, c, scaleFactor))
+                    return 1;
+                //tpdf(r, scaleFactor);
+                long smp = clip(-scaleFactor, myround(r), scaleFactor);
+                write_intel(out, smp, bits);
                 out += channelsNum * bytespersample;
             }
         }
