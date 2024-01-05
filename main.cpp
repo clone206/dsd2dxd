@@ -50,7 +50,6 @@ namespace {
     // njad vars
 	uint32_t fpdL = 1.0;
 	uint32_t fpdR = 1.0;
-    bool njad_inited = false;
     bool highres = true;
 	float scale_factor;
 	double noiseShapingL;
@@ -94,8 +93,6 @@ namespace {
 	    bynR[8] = 51;
 	    bynR[9] = 46;
 	    bynR[10] = 1000;
-
-        njad_inited = true;
     }
 
     // Not just another Dither R
