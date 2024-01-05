@@ -52,20 +52,19 @@ public:
     ~dxd() { dsd2pcm_destroy(handle); }
 
     friend void swap(dxd & a, dxd & b)
-    { std::swap(a.handle,b.handle); }
+    { std::swap(a.handle, b.handle); }
 
     dxd& operator=(dxd x)
-    { swap(*this,x); return *this; }
+    { swap(*this, x); return *this; }
 
     void translate(size_t blockSize,
         const unsigned char *dsdData, ptrdiff_t dsdStride,
         bool lsbitfirst,
         float *floatData, ptrdiff_t floatStride)
     {
-        dsd2pcm_translate(handle,blockSize,dsdData,dsdStride,
-            lsbitfirst,floatData,floatStride);
+        dsd2pcm_translate(handle, blockSize, dsdData, dsdStride,
+            lsbitfirst, floatData, floatStride);
     }
 };
 
 #endif // DSD2PCM_HXX_INCLUDED
-

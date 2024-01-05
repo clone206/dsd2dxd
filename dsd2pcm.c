@@ -126,18 +126,19 @@ static void precalc()
     
     for (t = 0, e = 0; t < 256; ++t) {
         bitreverse[t] = e;
-        for (m=128; m && !((e^=m)&m); m>>=1)
+        for (m = 128; m && !((e ^= m) & m); m >>= 1)
             ;
     }
-    for (t=0; t<CTABLES; ++t) {
-        k = HTAPS - t*8;
-        if (k>8) k=8;
-        for (e=0; e<256; ++e) {
+    for (t = 0; t < CTABLES; ++t) {
+        k = HTAPS - t * 8;
+        if (k > 8) k = 8;
+
+        for (e = 0; e < 256; ++e) {
             acc = 0.0;
-            for (m=0; m<k; ++m) {
-                acc += (((e >> (7-m)) & 1)*2-1) * htaps[t*8+m];
+            for (m = 0; m < k; ++m) {
+                acc += (((e >> (7 - m)) & 1) * 2 - 1) * htaps[t * 8 + m];
             }
-            ctables[CTABLES-1-t][e] = (float)acc;
+            ctables[CTABLES - 1 - t][e] = (float)acc;
         }
     }
     precalculated = 1;
@@ -167,8 +168,9 @@ extern dsd2pcm_ctx* dsd2pcm_clone(dsd2pcm_ctx* ptr)
 {
     dsd2pcm_ctx* p2;
     p2 = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
+
     if (p2) {
-        memcpy(p2,ptr,sizeof(dsd2pcm_ctx));
+        memcpy(p2, ptr, sizeof(dsd2pcm_ctx));
     }
     return p2;
 }
@@ -176,7 +178,7 @@ extern dsd2pcm_ctx* dsd2pcm_clone(dsd2pcm_ctx* ptr)
 extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
 {
     int i;
-    for (i=0; i<FIFOSIZE; ++i)
+    for (i = 0; i < FIFOSIZE; ++i)
         ptr->fifo[i] = 0x69; /* my favorite silence pattern */
     ptr->fifopos = 0;
     /* 0x69 = 01101001
@@ -186,9 +188,10 @@ extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
      */
 }
 
-extern void dsd2pcm_translate(dsd2pcm_ctx* handle, size_t blockSize,
-    const unsigned char *dsdData, ptrdiff_t dsdStride, int lsbf, float *floatData,
-    ptrdiff_t floatStride)
+extern void dsd2pcm_translate(
+    dsd2pcm_ctx* handle, size_t blockSize,
+    const unsigned char *dsdData, ptrdiff_t dsdStride,
+    int lsbf, float *floatData, ptrdiff_t floatStride)
 {
     uint8_t buf[FIFOSIZE], bite1, bite2;
     unsigned fifoPos, i;
@@ -196,7 +199,6 @@ extern void dsd2pcm_translate(dsd2pcm_ctx* handle, size_t blockSize,
     double acc;
 
     fifoPos = handle->fifopos;
-    //lsbf = lsbf ? 1 : 0;
 
     memcpy(buf, handle->fifo, sizeof(buf));
 

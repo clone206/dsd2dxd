@@ -43,3 +43,48 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 .dsd files with `_p` in the names are the equivalent of the .dsf files with the header metadata stripped off.
 
 You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it along with the correct input params (M for MSB first, I for interleaved).
+
+## Modified original info.txt
+```
+You downloaded the source code for "dsd2pcm" which is a simple little
+"filter" program, that takes a DSD data stream on stdin and converts
+it to a PCM stream (352.8 kHz, either 16 or 24 bits) and writes it to
+out.pcm. The code is split into three modules:
+
+  (1) dsd2pcm
+
+      This is where the 8:1 decimation magic happens. It's an
+      implementation of a symmetric 96-taps FIR lowpass filter
+      optimized for DSD inputs. If you feed this converter with
+      DSD64 you get a PCM stream at 352.8 kHz and floating point
+      samples. This module is independent and can be reused. 
+
+  (2) noiseshape
+
+      A module for applying generic noise shaping filters. It's
+      used for the 16-bit output mode in "main" to preserve the
+      dynamic range. This module is independent and can be reused.
+
+  (3) main.cpp (file contains the main function and handles I/O)
+
+The first two modules are pure C for maximum portability. In addition,
+there are C++ wrapper headers for convenient use of these modules in
+C++. The main application is a C++ application and makes use of the
+C++ headers to access the functionality of the first two modules.
+
+
+The original code was released unter the simplified BSD license.
+See LICENSE.txt for details. After modifications, released under GPL 3 license.
+See LICENSE for details.
+
+
+Under Linux this program is easily compiled by typing
+
+  g++ *.c *.cpp -O3 -o dsd2pcm
+
+provided you have GCC installed. That's why I didn't bother writing
+any makefiles. :-p
+
+Cheers!
+Sebastian Gesemann
+```
