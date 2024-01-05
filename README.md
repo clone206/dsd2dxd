@@ -33,7 +33,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 ```
 
 ## Testing Examples
-```shell
+```bash
 # Compile code; convert to and play mono, LSB-first, 24bit, planar test file
 ./build_test_mono.sh L 24 P 1kHz_mono_p.dsd
 
