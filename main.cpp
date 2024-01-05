@@ -27,6 +27,11 @@ authors and should not be interpreted as representing official policies, either 
 or implied, of Sebastian Gesemann.
 
  */
+/* ========================================
+ *  NotJustAnotherDither - NotJustAnotherDither.h
+ *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
+ * ======================================== */
+
 
 #include <iostream>
 #include <vector>
