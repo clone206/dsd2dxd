@@ -282,9 +282,9 @@ namespace {
     inline void tpdf(float &sample, float scaleFactor)
     {
         sample *= scaleFactor;
-        double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
-        double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
-        sample += (float)(rand1 - rand2);
+        float rand1 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
+        float rand2 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
+        sample += (rand1 - rand2);
     }
 
 } // anonymous namespace
