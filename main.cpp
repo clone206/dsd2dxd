@@ -54,6 +54,8 @@ namespace {
     const int my_ns_soscount = sizeof(my_ns_coeffs)
         / (sizeof(my_ns_coeffs[0]) * 4);
 
+    int clips = 0;
+
     // Output/dither vars
     uint32_t fpd_l = 1.0; // FP Dither L
     uint32_t fpd_r = 1.0; // FP Dither R
@@ -239,7 +241,7 @@ namespace {
 
     inline long myround(float x)
     {
-        return static_cast<long>(x + (x >= 0 ? 0.5f : -0.5f));
+        return static_cast<long>(round(x));
     }
 
     template<typename T>
@@ -251,27 +253,38 @@ namespace {
         T v,
         typename id<T>::type max)
     {
-        if (v < min) return min;
-        if (v > max) return max;
+        if (v < min) {
+            ++clips;
+            return min;
+        }
+        if (v > max) {
+            ++clips;
+            return max;
+        }
         return v;
     }
 
     inline void write_intel(unsigned char * ptr, unsigned long word,
         unsigned char bitsNum)
     {
+        if (bitsNum == 20) {
+            word <<= 4;
+        }
+
         ptr[0] =  word        & 0xFF;
         ptr[1] = (word >>  8) & 0xFF;
-        if (bitsNum == 24) {
+
+        if (bitsNum == 24 || bitsNum == 20) {
             ptr[2] = (word >> 16) & 0xFF;
-        }
+        } 
     }
 
     inline void tpdf(float &sample, float scaleFactor)
     {
         sample *= scaleFactor;
-        float rand1 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
-        float rand2 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
-        sample += (rand1 - rand2);
+        double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
+        double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
+        sample += (float)(rand1 - rand2);
     }
 
 } // anonymous namespace
@@ -292,6 +305,7 @@ int main(int argc, char *argv[])
         if (argv[2][0] == 'm' || argv[2][0] == 'M') lsbitfirst = 0;
         if (argv[2][0] == 'l' || argv[2][0] == 'L') lsbitfirst = 1;
         if (!strcmp(argv[3], "16")) bits = 16;
+        if (!strcmp(argv[3], "20")) bits = 20;
         if (!strcmp(argv[3], "24")) bits = 24;
         if (argv[4][0] == 'i' || argv[4][0] == 'I') interleaved = 1;
         if (argv[4][0] == 'p' || argv[4][0] == 'P') interleaved = 0;
@@ -304,13 +318,11 @@ int main(int argc, char *argv[])
             "Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>\n"
             "channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
             "bitorder = L (lsb first), M (msb first) (DSD stream option)\n"
-            "bitdepth = 16 or 24 (intel byte order, output option)\n"
-            "format = I (interleaved) or P (planar)\n"
+            "bitdepth = 16, 20, or 24 (intel byte order, output option)\n"
+            "format = I (interleaved) or P (planar) (DSD stream option)\n"
             "infile = Input file name, containing raw dsd with either \n"
             "planar format and 4096 byte block size,\n"
             "or interleaved with 1 byte per channel.\n\n"
-            "Note: At 16 bits/sample a noise shaper kicks in that can preserve\n"
-            "a dynamic range of 135 dB below 30 kHz.\n\n"
             "Outputs raw pcm to file named 'out.pcm'\n\n";
         return 1;
     }
@@ -320,18 +332,23 @@ int main(int argc, char *argv[])
 
     ofstream outFile;
     ifstream inFile;
-    outFile.open("out.pcm", ios::out | ios::app | ios::binary);
+    outFile.open("out.pcm", ofstream::binary | ofstream::trunc);
     inFile.open(infileName, ios::binary | ios::in);
 
-    int bytespersample = bits / 8;
+    int bytespersample = bits == 20 ? 3 : (bits / 8);
     vector<dxd> dxds (channelsNum);
     //vector<noise_shaper> ns;
     float scaleFactor;
 
     if (bits == 16) {
         scaleFactor = 32768.0;
-    } else {
+    } else if (bits == 24) {
         scaleFactor = 8388608.0;
+    } else if (bits == 20) {
+        scaleFactor = 524288.0;
+    } else {
+        cerr << "Unsupported bit depth";
+        return 1;
     }
 
     init_outputs();
@@ -365,6 +382,10 @@ int main(int argc, char *argv[])
             }
         }
         outFile.write(pcmOut, blockSize * channelsNum * bytespersample);
+    }
+
+    if (clips) {
+        cerr << "Clipped " << clips << " times.\n";
     }
 
     outFile.close();

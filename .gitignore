@@ -5,3 +5,5 @@ settings.json
 *.ds[df]
 !1kHz*.ds[df]
 dsd2pcm
+*.flac
+.DS_Store

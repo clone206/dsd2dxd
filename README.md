@@ -26,9 +26,6 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
   planar format and 4096 byte block size,
   or interleaved with 1 byte per channel.
 
-  Note: At 16 bits/sample a noise shaper kicks in that can preserve
-  a dynamic range of 135 dB below 30 kHz.
-
   Outputs raw pcm to file named "out.pcm".
 ```
 
