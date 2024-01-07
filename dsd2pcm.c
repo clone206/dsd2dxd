@@ -33,14 +33,6 @@ or implied, of Sebastian Gesemann.
 
 #include "dsd2pcm.h"
 
-#define HTAPS    48             /* number of FIR constants */
-#define FIFOSIZE 16             /* must be a power of two */
-#define FIFOMASK (FIFOSIZE-1)   /* bit mask for FIFO offsets */
-#define CTABLES ((HTAPS+7)/8)   /* number of "8 MACs" lookup tables */
-
-#if FIFOSIZE*8 < HTAPS*2
-#error "FIFOSIZE too small"
-#endif
 
 /*
  * Properties of this 96-tap lowpass filter when applied on a signal
@@ -62,7 +54,7 @@ or implied, of Sebastian Gesemann.
 /*
  * The 2nd half (48 coeffs) of a 96-tap symmetric lowpass filter
  */
-static const double htaps[HTAPS] = {
+static const double htaps_8to1_[48] = {
   0.09950731974056658,
   0.09562845727714668,
   0.08819647126516944,
@@ -113,49 +105,84 @@ static const double htaps[HTAPS] = {
   3.130441005359396e-08
 };
 
-static float ctables[CTABLES][256];
-static unsigned char bitreverse[256];
-static int precalculated = 0;
-
-static void precalc()
+static const unsigned char bitreverse[] = 
 {
-    if (precalculated) return;
+    0x00, 0x80, 0x40, 0xC0, 0x20, 0xA0, 0x60, 0xE0, 0x10, 0x90, 0x50, 0xD0, 0x30, 0xB0, 0x70, 0xF0, 
+    0x08, 0x88, 0x48, 0xC8, 0x28, 0xA8, 0x68, 0xE8, 0x18, 0x98, 0x58, 0xD8, 0x38, 0xB8, 0x78, 0xF8, 
+    0x04, 0x84, 0x44, 0xC4, 0x24, 0xA4, 0x64, 0xE4, 0x14, 0x94, 0x54, 0xD4, 0x34, 0xB4, 0x74, 0xF4, 
+    0x0C, 0x8C, 0x4C, 0xCC, 0x2C, 0xAC, 0x6C, 0xEC, 0x1C, 0x9C, 0x5C, 0xDC, 0x3C, 0xBC, 0x7C, 0xFC, 
+    0x02, 0x82, 0x42, 0xC2, 0x22, 0xA2, 0x62, 0xE2, 0x12, 0x92, 0x52, 0xD2, 0x32, 0xB2, 0x72, 0xF2, 
+    0x0A, 0x8A, 0x4A, 0xCA, 0x2A, 0xAA, 0x6A, 0xEA, 0x1A, 0x9A, 0x5A, 0xDA, 0x3A, 0xBA, 0x7A, 0xFA,
+    0x06, 0x86, 0x46, 0xC6, 0x26, 0xA6, 0x66, 0xE6, 0x16, 0x96, 0x56, 0xD6, 0x36, 0xB6, 0x76, 0xF6, 
+    0x0E, 0x8E, 0x4E, 0xCE, 0x2E, 0xAE, 0x6E, 0xEE, 0x1E, 0x9E, 0x5E, 0xDE, 0x3E, 0xBE, 0x7E, 0xFE,
+    0x01, 0x81, 0x41, 0xC1, 0x21, 0xA1, 0x61, 0xE1, 0x11, 0x91, 0x51, 0xD1, 0x31, 0xB1, 0x71, 0xF1,
+    0x09, 0x89, 0x49, 0xC9, 0x29, 0xA9, 0x69, 0xE9, 0x19, 0x99, 0x59, 0xD9, 0x39, 0xB9, 0x79, 0xF9, 
+    0x05, 0x85, 0x45, 0xC5, 0x25, 0xA5, 0x65, 0xE5, 0x15, 0x95, 0x55, 0xD5, 0x35, 0xB5, 0x75, 0xF5,
+    0x0D, 0x8D, 0x4D, 0xCD, 0x2D, 0xAD, 0x6D, 0xED, 0x1D, 0x9D, 0x5D, 0xDD, 0x3D, 0xBD, 0x7D, 0xFD,
+    0x03, 0x83, 0x43, 0xC3, 0x23, 0xA3, 0x63, 0xE3, 0x13, 0x93, 0x53, 0xD3, 0x33, 0xB3, 0x73, 0xF3, 
+    0x0B, 0x8B, 0x4B, 0xCB, 0x2B, 0xAB, 0x6B, 0xEB, 0x1B, 0x9B, 0x5B, 0xDB, 0x3B, 0xBB, 0x7B, 0xFB,
+    0x07, 0x87, 0x47, 0xC7, 0x27, 0xA7, 0x67, 0xE7, 0x17, 0x97, 0x57, 0xD7, 0x37, 0xB7, 0x77, 0xF7, 
+    0x0F, 0x8F, 0x4F, 0xCF, 0x2F, 0xAF, 0x6F, 0xEF, 0x1F, 0x9F, 0x5F, 0xDF, 0x3F, 0xBF, 0x7F, 0xFF
+};
 
+static const double htaps_8to1[56] = {
+    +1.003599032761268994e-01,+9.662981560884242871e-02,+8.945349213182296477e-02,+7.937003090599190069e-02,+6.711999843322885573e-02,+5.357287880424892179e-02,+3.964424879125778151e-02,+2.621214413106798952e-02,
+    +1.404181427224378970e-02,+3.726638223919860951e-03,-4.349367691769268421e-03,-1.002491923722929022e-02,-1.335121721731015974e-02,-1.456134879100988953e-02,-1.402473061802538001e-02,-1.219324909388730047e-02,-9.546051479083451571e-03,-6.539324989916536768e-03,-3.566042373069515121e-03,-9.288141542618654628e-04,+1.173027324018304039e-03,+2.642883925836397949e-03,+3.475194700261226202e-03,+3.735904314188005001e-03,
+    +3.538838154561203993e-03,+3.021587525576849027e-03,+2.323915921681954030e-03,+1.570806204643151061e-03,+8.612537902079315079e-04,+2.629381379992477125e-04,-1.878960137078334030e-04,-4.825621199727765783e-04,-6.335370394217578393e-04,-6.670230543688062102e-04,-6.157309569032056416e-04,-5.128053356239906969e-04,-3.874181080355335862e-04,-2.621813014123864261e-04,-1.522269998707380064e-04,-6.560081853307215519e-05,
+    -4.520812542841012188e-06,+3.294602930918357880e-05,+5.116792066565596268e-05,+5.546209091390614230e-05,+5.098758042924450833e-05,+4.205866389020815099e-05,+3.183958589294015248e-05,+2.233259319611928908e-05,+1.455336859409994022e-05,+8.794181965752857413e-06,+4.896565360135651024e-06,+2.483029535958191067e-06,+1.124189775289309014e-06,+4.387878673693896045e-07,+1.376777283954879050e-07,+2.904117154225673850e-08,
+};
+
+static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int lsbf)
+{
     int t, e, m, k;
     double acc;
     
-    for (t = 0, e = 0; t < 256; ++t) {
-        bitreverse[t] = e;
-        for (m = 128; m && !((e ^= m) & m); m >>= 1)
-            ;
-    }
-    for (t = 0; t < CTABLES; ++t) {
-        k = HTAPS - t * 8;
-        if (k > 8) k = 8;
+    for (t = 0; t < ctx->numTables; ++t) {
+        k = numCoeffs - t * 8;
+
+        if (k > 8)
+            k = 8;
 
         for (e = 0; e < 256; ++e) {
             acc = 0.0;
             for (m = 0; m < k; ++m) {
-                acc += (((e >> (7 - m)) & 1) * 2 - 1) * htaps[t * 8 + m];
+                if (lsbf)
+                    acc += (((e >> (m)) & 1)*2-1) * htaps_8to1_[t * 8 + m];
+                else 
+                    acc += (((e >> (7 - m)) & 1) * 2 - 1) * htaps_8to1_[t * 8 + m];
             }
-            ctables[CTABLES - 1 - t][e] = (float)acc;
+            ctx->ctables[ctx->numTables - 1 - t][e] = (float)acc;
         }
     }
-    precalculated = 1;
 }
 
-struct dsd2pcm_ctx_s
-{
-    unsigned char fifo[FIFOSIZE];
-    unsigned fifopos;
-};
-
-extern dsd2pcm_ctx* dsd2pcm_init()
+extern dsd2pcm_ctx* dsd2pcm_init(int decimation, int lsbf)
 {
     dsd2pcm_ctx* ptr;
-    if (!precalculated) precalc();
     ptr = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
-    if (ptr) dsd2pcm_reset(ptr);
+
+    if (ptr) {
+        int numCoeffs;
+        const double *htaps;
+
+        if (decimation == 8) {
+            numCoeffs = 41;
+            htaps = htaps_8to1_;
+            ptr->decimation = 8;
+        }
+
+        ptr->numTables = (numCoeffs + 7) / 8;
+        ptr->lsbfirst = lsbf;
+		ptr->ctables = (float **)malloc(sizeof(float *) * ptr->numTables);
+
+		for (int i = 0; i < ptr->numTables; ++i) {
+			ptr->ctables[i] = (float *)malloc(sizeof(float) * 256);
+		}
+
+        precalc(ptr, htaps, numCoeffs, lsbf);
+        dsd2pcm_reset(ptr);
+    }
+
     return ptr;
 }
 
@@ -188,7 +215,7 @@ extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
      */
 }
 
-extern void dsd2pcm_translate(
+extern void dsd2pcm_translate_8to1(
     dsd2pcm_ctx* handle, size_t blockSize,
     const unsigned char *dsdData, ptrdiff_t dsdStride,
     int lsbf, float *floatData, ptrdiff_t floatStride)
@@ -199,21 +226,22 @@ extern void dsd2pcm_translate(
     double acc;
 
     fifoPos = handle->fifopos;
+	int numTables = handle->numTables;
 
     memcpy(buf, handle->fifo, sizeof(buf));
 
     while (blockSize-- > 0) {
-        buf[fifoPos] = lsbf ? bitreverse[*dsdData] : *dsdData;
+        buf[fifoPos] = *dsdData;
         dsdData += dsdStride;
 
-        p = buf + ((fifoPos - CTABLES) & FIFOMASK);
+        p = buf + ((fifoPos - numTables) & FIFOMASK);
         *p = bitreverse[*p];
 
         acc = 0.0;
-        for (i = 0; i < CTABLES; ++i) {
+        for (i = 0; i < numTables; ++i) {
             bite1 = buf[(fifoPos - i) & FIFOMASK];
-            bite2 = buf[(fifoPos - (CTABLES * 2 - 1) + i) & FIFOMASK];
-            acc += ctables[i][bite1] + ctables[i][bite2];
+            bite2 = buf[(fifoPos - (numTables * 2 - 1) + i) & FIFOMASK];
+            acc += handle->ctables[i][bite1] + handle->ctables[i][bite2];
         }
 
         *floatData = (float)acc;

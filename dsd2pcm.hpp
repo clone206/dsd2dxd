@@ -43,7 +43,7 @@ class dxd
 {
     dsd2pcm_ctx *handle;
 public:
-    dxd() : handle(dsd2pcm_init())
+    dxd(int decimation, int lsbf) : handle(dsd2pcm_init(decimation, lsbf))
     { if (!handle) throw std::runtime_error("wtf?!"); }
 
     dxd(dxd const& x) : handle(dsd2pcm_clone(x.handle))
@@ -62,7 +62,7 @@ public:
         bool lsbitfirst,
         float *floatData, ptrdiff_t floatStride)
     {
-        dsd2pcm_translate(handle, blockSize, dsdData, dsdStride,
+        dsd2pcm_translate_8to1(handle, blockSize, dsdData, dsdStride,
             lsbitfirst, floatData, floatStride);
     }
 };

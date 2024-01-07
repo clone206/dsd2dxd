@@ -293,6 +293,7 @@ namespace {
 int main(int argc, char *argv[])
 {
     const int blockSize = 4096;
+    int decimation = 8;
     int channelsNum   = -1;
     int lsbitfirst = -1;
     int bits       = -1;
@@ -336,7 +337,7 @@ int main(int argc, char *argv[])
     inFile.open(infileName, ios::binary | ios::in);
 
     int bytespersample = bits == 20 ? 3 : (bits / 8);
-    vector<dxd> dxds (channelsNum);
+    vector<dxd> dxds (channelsNum, dxd(decimation, lsbitfirst));
     //vector<noise_shaper> ns;
     float scaleFactor;
 

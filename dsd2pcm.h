@@ -38,7 +38,18 @@ or implied, of Sebastian Gesemann.
 extern "C" {
 #endif
 
-struct dsd2pcm_ctx_s;
+#define FIFOSIZE 16             /* must be a power of two */
+#define FIFOMASK (FIFOSIZE-1)   /* bit mask for FIFO offsets */
+
+struct dsd2pcm_ctx_s
+{
+	unsigned char fifo[FIFOSIZE];
+	unsigned fifopos;
+	unsigned int numTables;
+	float **ctables;
+	int decimation;
+	int lsbfirst;
+};
 
 typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;
 
@@ -50,7 +61,7 @@ typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;
  * POSIX thread-safety definition because it modifies global state
  * (lookup tables are computed during the first call)
  */
-extern dsd2pcm_ctx* dsd2pcm_init();
+extern dsd2pcm_ctx* dsd2pcm_init(int decimation, int lsbf);
 
 /**
  * deinitializes a "dsd2pcm engine"
@@ -80,7 +91,7 @@ extern void dsd2pcm_reset(dsd2pcm_ctx *ctx);
  * @param dst -- pointer to first float (output)
  * @param dst_stride -- dst pointer increment
  */
-extern void dsd2pcm_translate(dsd2pcm_ctx *ctx,
+extern void dsd2pcm_translate_8to1(dsd2pcm_ctx *ctx,
    size_t samples,
    const unsigned char *src, ptrdiff_t src_stride,
    int lsbitfirst,
