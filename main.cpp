@@ -357,7 +357,7 @@ int main(int argc, char *argv[])
     } else if (bits == 20) {
         scaleFactor = 524288.0;
     } else {
-        cerr << "Unsupported bit depth";
+        cerr << "Unsupported bit depth\n";
         return 1;
     }
 
@@ -383,9 +383,9 @@ int main(int argc, char *argv[])
 
             for (int s = 0; s < blockSize; ++s) {
                 float r = floatData[s];
-                if(njad(r, c, scaleFactor))
-                    return 1;
-                //tpdf(r, scaleFactor);
+                //if(njad(r, c, scaleFactor))
+                //    return 1;
+                tpdf(r, scaleFactor);
                 long smp = clip(-scaleFactor, myround(r), scaleFactor);
                 write_intel(out, smp, bits);
                 out += channelsNum * bytespersample;
