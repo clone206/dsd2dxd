@@ -17,14 +17,14 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 `g++ *.c *.cpp -O3 -o dsd2pcm`
 ### Running
 ```
-  Syntax: dsd2pcm <channels> <format> <bitdepth> <filter> <infile>
+  Syntax: dsd2pcm <channels> <format> <bitdepth> <filter>
   channels = 1,2,3,...,9 (number of channels in DSD stream)
   format = I (interleaved) or P (planar)
   bitdepth = 16, 20, or 24 (intel byte order, output option)
   filter = X (XLD filter) or D (Original dsd2pcm filter)
-  infile = Input file name, containing raw dsd with either 
-  planar format and 4096 byte block size,
-  or interleaved with 1 byte per channel.
+
+  Send raw dsd with either planar format and 4096 byte block size,
+  or interleaved with 1 byte per channel, to stdin.
 
   Outputs raw pcm to stdout (only supports *nix environment).
 ```

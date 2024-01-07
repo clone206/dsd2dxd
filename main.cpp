@@ -298,9 +298,8 @@ int main(int argc, char *argv[])
     int lsbitfirst = -1;
     int bits       = -1;
     int interleaved = -1;
-    string infileName = "";
 
-    if (argc == 6) {
+    if (argc == 5) {
         if ('1' <= argv[1][0] && argv[1][0] <= '9')
             channelsNum = 1 + (argv[1][0] - '1');
         if (argv[2][0] == 'i' || argv[2][0] == 'I') {
@@ -320,7 +319,6 @@ int main(int argc, char *argv[])
         if (argv[4][0] == 'd' || argv[4][0] == 'D') {
             filtType = 'd';
         }
-        infileName = argv[5];
     }
     if (channelsNum < 1 || lsbitfirst < 0 || bits < 0 || interleaved < 0
             || filtType == ' ') {
@@ -328,23 +326,19 @@ int main(int argc, char *argv[])
         cerr << "\n"
             "DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
             "(c) 2009 Sebastian Gesemann\n\n"
-            "Syntax: dsd2pcm <channels> <format> <bitdepth> <filter> <infile>\n"
+            "Syntax: dsd2pcm <channels> <format> <bitdepth> <filter>\n"
             "channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
             "format = I (interleaved) or P (planar) (DSD stream option)\n"
             "bitdepth = 16, 20, or 24 (intel byte order, output option)\n"
-            "filter = X (XLD filter) or D (Original dsd2pcm filter)\n"
-            "infile = Input file name, containing raw dsd with either \n"
-            "planar format and 4096 byte block size,\n"
-            "or interleaved with 1 byte per channel.\n\n"
+            "filter = X (XLD filter) or D (Original dsd2pcm filter)\n\n"
+            "Send raw dsd with either planar format and 4096 byte block size,\n"
+            "or interleaved with 1 byte per channel, to stdin.\n\n"
             "Outputs raw pcm to stdout (only supports *nix environment).'\n\n";
         return 1;
     }
 
     // Seed rng
     srand (static_cast <unsigned> (time(0)));
-
-    ifstream inFile;
-    inFile.open(infileName, ios::binary | ios::in);
 
     int bytespersample = bits == 20 ? 3 : (bits / 8);
     vector<dxd> dxds (channelsNum, dxd(filtType, lsbitfirst));
@@ -371,7 +365,7 @@ int main(int argc, char *argv[])
     int dsdStride = interleaved ? channelsNum : 1;
     int dsdChanOffset = 1; // Default to one byte for interleaved
 
-    while (inFile.read(dsdIn, blockSize * channelsNum)) {
+    while (cin.read(dsdIn, blockSize * channelsNum)) {
         for (int c = 0; c < channelsNum; ++c) {
             if (!interleaved) {
                 dsdChanOffset = blockSize;
@@ -397,6 +391,4 @@ int main(int argc, char *argv[])
     if (clips) {
         cerr << "Clipped " << clips << " times.\n";
     }
-
-    inFile.close();
 }
