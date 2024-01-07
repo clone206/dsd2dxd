@@ -35,12 +35,10 @@ or implied, of Sebastian Gesemann.
 #include <iostream>
 #include <vector>
 #include <cstring>
-#include <fstream>
 #include <string>
 #include <math.h>
 
 #include "dsd2pcm.hpp"
-#include "noiseshape.hpp"
 
 using namespace std;
 
