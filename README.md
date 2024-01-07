@@ -20,7 +20,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
   Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>
   channels = 1,2,3,...,9 (number of channels in DSD stream)
   bitorder = L (lsb first), M (msb first) (DSD stream option)
-  bitdepth = 16 or 24 (intel byte order, output option)
+  bitdepth = 16, 20, or 24 (intel byte order, output option)
   format = I (interleaved) or P (planar)
   infile = Input file name, containing raw dsd with either 
   planar format and 4096 byte block size,
