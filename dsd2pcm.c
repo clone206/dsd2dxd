@@ -166,7 +166,7 @@ extern dsd2pcm_ctx* dsd2pcm_init(int decimation, int lsbf)
         const double *htaps;
 
         if (decimation == 8) {
-            numCoeffs = 41;
+            numCoeffs = 48;
             htaps = htaps_8to1_;
             ptr->decimation = 8;
         }
