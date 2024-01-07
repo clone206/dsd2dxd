@@ -43,7 +43,7 @@ class dxd
 {
     dsd2pcm_ctx *handle;
 public:
-    dxd(int decimation, int lsbf) : handle(dsd2pcm_init(decimation, lsbf))
+    dxd(char filtType, int lsbf) : handle(dsd2pcm_init(filtType, lsbf))
     { if (!handle) throw std::runtime_error("wtf?!"); }
 
     dxd(dxd const& x) : handle(dsd2pcm_clone(x.handle))

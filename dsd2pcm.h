@@ -47,7 +47,6 @@ struct dsd2pcm_ctx_s
 	unsigned fifopos;
 	unsigned int numTables;
 	float **ctables;
-	int decimation;
 	int lsbfirst;
 };
 
@@ -61,7 +60,7 @@ typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;
  * POSIX thread-safety definition because it modifies global state
  * (lookup tables are computed during the first call)
  */
-extern dsd2pcm_ctx* dsd2pcm_init(int decimation, int lsbf);
+extern dsd2pcm_ctx* dsd2pcm_init(char filtType, int lsbf);
 
 /**
  * deinitializes a "dsd2pcm engine"

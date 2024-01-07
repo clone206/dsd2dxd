@@ -156,19 +156,21 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int ls
     }
 }
 
-extern dsd2pcm_ctx* dsd2pcm_init(int decimation, int lsbf)
+extern dsd2pcm_ctx* dsd2pcm_init(char filtType, int lsbf)
 {
-    dsd2pcm_ctx* ptr;
+    dsd2pcm_ctx *ptr;
     ptr = (dsd2pcm_ctx*) malloc(sizeof(dsd2pcm_ctx));
 
     if (ptr) {
         int numCoeffs;
         const double *htaps;
 
-        if (decimation == 8) {
+        if (filtType == 'x') {
             numCoeffs = 56;
             htaps = htaps_xld;
-            ptr->decimation = 8;
+        } else if (filtType == 'd') {
+            numCoeffs = 48;
+            htaps = htaps_d2p;
         }
 
         ptr->numTables = (numCoeffs + 7) / 8;
