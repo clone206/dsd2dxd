@@ -300,7 +300,7 @@ int main(int argc, char *argv[])
     int interleaved = -1;
     string infileName = "";
 
-    if (argc==6) {
+    if (argc == 6) {
         if ('1' <= argv[1][0] && argv[1][0] <= '9')
             channelsNum = 1 + (argv[1][0] - '1');
         if (argv[2][0] == 'i' || argv[2][0] == 'I') {
@@ -328,12 +328,12 @@ int main(int argc, char *argv[])
         cerr << "\n"
             "DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
             "(c) 2009 Sebastian Gesemann\n\n"
-            "Syntax: dsd2pcm <channels> <format> <bitdepth> <infile>\n"
+            "Syntax: dsd2pcm <channels> <format> <bitdepth> <filter> <infile>\n"
             "channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
             "format = I (interleaved) or P (planar) (DSD stream option)\n"
             "bitdepth = 16, 20, or 24 (intel byte order, output option)\n"
-            "infile = Input file name, containing raw dsd with either \n"
             "filter = X (XLD filter) or D (Original dsd2pcm filter)\n"
+            "infile = Input file name, containing raw dsd with either \n"
             "planar format and 4096 byte block size,\n"
             "or interleaved with 1 byte per channel.\n\n"
             "Outputs raw pcm to stdout (only supports *nix environment).'\n\n";

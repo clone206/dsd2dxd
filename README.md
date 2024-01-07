@@ -17,7 +17,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 `g++ *.c *.cpp -O3 -o dsd2pcm`
 ### Running
 ```
-  Syntax: dsd2pcm <channels> <format> <bitdepth> <infile>
+  Syntax: dsd2pcm <channels> <format> <bitdepth> <filter> <infile>
   channels = 1,2,3,...,9 (number of channels in DSD stream)
   format = I (interleaved) or P (planar)
   bitdepth = 16, 20, or 24 (intel byte order, output option)
