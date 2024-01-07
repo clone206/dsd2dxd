@@ -300,45 +300,46 @@ int main(int argc, char *argv[])
     int interleaved = -1;
     string infileName = "";
 
-    if (argc==6) {
+    if (argc==5) {
         if ('1' <= argv[1][0] && argv[1][0] <= '9')
             channelsNum = 1 + (argv[1][0] - '1');
-        if (argv[2][0] == 'm' || argv[2][0] == 'M') lsbitfirst = 0;
-        if (argv[2][0] == 'l' || argv[2][0] == 'L') lsbitfirst = 1;
+        if (argv[2][0] == 'i' || argv[2][0] == 'I') {
+            interleaved = 1;
+            lsbitfirst = 0;
+        }
+        if (argv[2][0] == 'p' || argv[2][0] == 'P') {
+            interleaved = 0;
+            lsbitfirst = 1;
+        }
         if (!strcmp(argv[3], "16")) bits = 16;
         if (!strcmp(argv[3], "20")) bits = 20;
         if (!strcmp(argv[3], "24")) bits = 24;
-        if (argv[4][0] == 'i' || argv[4][0] == 'I') interleaved = 1;
-        if (argv[4][0] == 'p' || argv[4][0] == 'P') interleaved = 0;
-        infileName = argv[5];
+        infileName = argv[4];
     }
     if (channelsNum < 1 || lsbitfirst < 0 || bits < 0 || interleaved < 0) {
+        cerr << "\nError: Got " << argc << " args.\n";
         cerr << "\n"
             "DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
             "(c) 2009 Sebastian Gesemann\n\n"
-            "Syntax: dsd2pcm <channels> <bitorder> <bitdepth> <format> <infile>\n"
+            "Syntax: dsd2pcm <channels> <format> <bitdepth> <infile>\n"
             "channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
-            "bitorder = L (lsb first), M (msb first) (DSD stream option)\n"
-            "bitdepth = 16, 20, or 24 (intel byte order, output option)\n"
             "format = I (interleaved) or P (planar) (DSD stream option)\n"
+            "bitdepth = 16, 20, or 24 (intel byte order, output option)\n"
             "infile = Input file name, containing raw dsd with either \n"
             "planar format and 4096 byte block size,\n"
             "or interleaved with 1 byte per channel.\n\n"
-            "Outputs raw pcm to file named 'out.pcm'\n\n";
+            "Outputs raw pcm to stdout (only supports *nix environment).'\n\n";
         return 1;
     }
 
     // Seed rng
     srand (static_cast <unsigned> (time(0)));
 
-    ofstream outFile;
     ifstream inFile;
-    outFile.open("out.pcm", ofstream::binary | ofstream::trunc);
     inFile.open(infileName, ios::binary | ios::in);
 
     int bytespersample = bits == 20 ? 3 : (bits / 8);
     vector<dxd> dxds (channelsNum, dxd(filtType, lsbitfirst));
-    //vector<noise_shaper> ns;
     float scaleFactor;
 
     if (bits == 16) {
@@ -382,13 +383,12 @@ int main(int argc, char *argv[])
                 out += channelsNum * bytespersample;
             }
         }
-        outFile.write(pcmOut, blockSize * channelsNum * bytespersample);
+        cout.write(pcmOut, blockSize * channelsNum * bytespersample);
     }
 
     if (clips) {
         cerr << "Clipped " << clips << " times.\n";
     }
 
-    outFile.close();
     inFile.close();
 }
