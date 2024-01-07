@@ -21,6 +21,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
   channels = 1,2,3,...,9 (number of channels in DSD stream)
   format = I (interleaved) or P (planar)
   bitdepth = 16, 20, or 24 (intel byte order, output option)
+  filter = X (XLD filter) or D (Original dsd2pcm filter)
   infile = Input file name, containing raw dsd with either 
   planar format and 4096 byte block size,
   or interleaved with 1 byte per channel.
@@ -30,11 +31,13 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 ## Testing Examples
 ```bash
-# Compile code; convert and play mono, planar/LSB-first, 24bit, test file
-./build_test_mono.sh P 24 1kHz_mono_p.dsd
+# Compile code; convert and play mono, planar/LSB-first, 24bit, test file,
+# using XLD FIR Filter
+./build_test_mono.sh P 24 X 1kHz_mono_p.dsd
 
-# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file
-./build_test_stereo.sh P 16 1kHz_stereo_p.dsd
+# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file,
+# using dsd2pcm FIR filter
+./build_test_stereo.sh P 16 D 1kHz_stereo_p.dsd
 ```
 
 .dsd files with `_p` in the names are the equivalent of the .dsf files with the header metadata stripped off.
