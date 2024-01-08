@@ -7,3 +7,5 @@ settings.json
 dsd2pcm
 *.flac
 .DS_Store
+*.aiff
+*.dff

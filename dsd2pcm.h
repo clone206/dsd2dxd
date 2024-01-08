@@ -38,7 +38,7 @@ or implied, of Sebastian Gesemann.
 extern "C" {
 #endif
 
-#define FIFOSIZE 16             /* must be a power of two */
+#define FIFOSIZE 128             /* must be a power of two */
 #define FIFOMASK (FIFOSIZE-1)   /* bit mask for FIFO offsets */
 
 struct dsd2pcm_ctx_s
@@ -48,6 +48,10 @@ struct dsd2pcm_ctx_s
 	unsigned int numTables;
 	float **ctables;
 	int lsbfirst;
+	int delay;
+	int delay2;
+	int (*translate)(struct dsd2pcm_ctx_s*, size_t, const unsigned char *, ptrdiff_t, float *, ptrdiff_t);
+	int (*finalize)(struct dsd2pcm_ctx_s*, float *, ptrdiff_t);
 };
 
 typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;
@@ -90,11 +94,11 @@ extern void dsd2pcm_reset(dsd2pcm_ctx *ctx);
  * @param dst -- pointer to first float (output)
  * @param dst_stride -- dst pointer increment
  */
-extern void dsd2pcm_translate_8to1(dsd2pcm_ctx *ctx,
-   size_t samples,
-   const unsigned char *src, ptrdiff_t src_stride,
+extern void dsd2pcm_translate_8to1(dsd2pcm_ctx *handle,
+   size_t blockSize,
+   const unsigned char *dsdData, ptrdiff_t dsdStride,
    int lsbitfirst,
-   float *dst, ptrdiff_t dst_stride);
+   double *floatData, ptrdiff_t floatStride);
 
 #ifdef __cplusplus
 } /* extern "C" */

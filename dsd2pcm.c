@@ -134,7 +134,7 @@ static const double htaps_xld[56] = {
 
 static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int lsbf)
 {
-    int t, e, m, k;
+    int t, dsdSeq, bit, k;
     double acc;
     
     for (t = 0; t < ctx->numTables; ++t) {
@@ -143,15 +143,15 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int ls
         if (k > 8)
             k = 8;
 
-        for (e = 0; e < 256; ++e) {
+        for (dsdSeq = 0; dsdSeq < 256; ++dsdSeq) {
             acc = 0.0;
-            for (m = 0; m < k; ++m) {
+            for (bit = 0; bit < k; ++bit) {
                 if (lsbf)
-                    acc += (((e >> (m)) & 1)*2-1) * htaps[t * 8 + m];
+                    acc += (((dsdSeq >> (bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
                 else 
-                    acc += (((e >> (7 - m)) & 1) * 2 - 1) * htaps[t * 8 + m];
+                    acc += (((dsdSeq >> (7 - bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
             }
-            ctx->ctables[ctx->numTables - 1 - t][e] = (float)acc;
+            ctx->ctables[ctx->numTables - 1 - t][dsdSeq] = (float)acc;
         }
     }
 }
@@ -168,6 +168,7 @@ extern dsd2pcm_ctx* dsd2pcm_init(char filtType, int lsbf)
         if (filtType == 'x') {
             numCoeffs = 56;
             htaps = htaps_xld;
+			ptr->delay = 6;
         } else if (filtType == 'd') {
             numCoeffs = 48;
             htaps = htaps_d2p;
@@ -175,11 +176,11 @@ extern dsd2pcm_ctx* dsd2pcm_init(char filtType, int lsbf)
 
         ptr->numTables = (numCoeffs + 7) / 8;
         ptr->lsbfirst = lsbf;
-		ptr->ctables = (float **)malloc(sizeof(float *) * ptr->numTables);
+        ptr->ctables = (float **)malloc(sizeof(float *) * ptr->numTables);
 
-		for (int i = 0; i < ptr->numTables; ++i) {
-			ptr->ctables[i] = (float *)malloc(sizeof(float) * 256);
-		}
+        for (int i = 0; i < ptr->numTables; ++i) {
+            ptr->ctables[i] = (float *)malloc(sizeof(float) * 256);
+        }
 
         precalc(ptr, htaps, numCoeffs, lsbf);
         dsd2pcm_reset(ptr);
@@ -215,43 +216,44 @@ extern void dsd2pcm_reset(dsd2pcm_ctx* ptr)
      * and a high energy 1.0584 MHz tone which should be filtered
      * out completely by any playback system --> silence
      */
+	ptr->delay2 = ptr->delay;
 }
 
 extern void dsd2pcm_translate_8to1(
     dsd2pcm_ctx* handle, size_t blockSize,
     const unsigned char *dsdData, ptrdiff_t dsdStride,
-    int lsbf, float *floatData, ptrdiff_t floatStride)
+    int lsbf, double *floatData, ptrdiff_t floatStride)
 {
-    uint8_t buf[FIFOSIZE], bite1, bite2;
-    unsigned fifoPos, i;
-    uint8_t* p;
+    unsigned fifoPos, i, bite1, bite2;
+    unsigned char* p;
     double acc;
-
     fifoPos = handle->fifopos;
-	int numTables = handle->numTables;
-
-    memcpy(buf, handle->fifo, sizeof(buf));
+    int numTables = handle->numTables;
 
     while (blockSize-- > 0) {
-        buf[fifoPos] = *dsdData;
+        bite1 = *dsdData & 0xFFu;
+        handle->fifo[fifoPos] = bite1;
         dsdData += dsdStride;
 
-        p = buf + ((fifoPos - numTables) & FIFOMASK);
-        *p = bitreverse[*p];
+        p = handle->fifo + ((fifoPos - numTables) & FIFOMASK);
+        *p = bitreverse[*p & 0xFF];
 
         acc = 0.0;
         for (i = 0; i < numTables; ++i) {
-            bite1 = buf[(fifoPos - i) & FIFOMASK];
-            bite2 = buf[(fifoPos - (numTables * 2 - 1) + i) & FIFOMASK];
+            bite1 = handle->fifo[(fifoPos - i) & FIFOMASK] & 0xFF;
+            bite2 = handle->fifo[(fifoPos - (numTables * 2 - 1) + i) & FIFOMASK] & 0xFF;
             acc += handle->ctables[i][bite1] + handle->ctables[i][bite2];
         }
 
-        *floatData = (float)acc;
-        floatData += floatStride;
+        if(handle->delay2)
+            handle->delay2--;
+        else {
+            *floatData = acc;
+            floatData += floatStride;
+        }
 
         fifoPos = (fifoPos + 1) & FIFOMASK;
     }
 
     handle->fifopos = fifoPos;
-    memcpy(handle->fifo, buf, sizeof(buf));
 }

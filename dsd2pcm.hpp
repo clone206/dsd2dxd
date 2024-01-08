@@ -60,7 +60,7 @@ public:
     void translate(size_t blockSize,
         const unsigned char *dsdData, ptrdiff_t dsdStride,
         bool lsbitfirst,
-        float *floatData, ptrdiff_t floatStride)
+        double *floatData, ptrdiff_t floatStride)
     {
         dsd2pcm_translate_8to1(handle, blockSize, dsdData, dsdStride,
             lsbitfirst, floatData, floatStride);

@@ -43,16 +43,9 @@ or implied, of Sebastian Gesemann.
 using namespace std;
 
 namespace {
-    const float my_ns_coeffs[] = {
-    //     b1           b2           a1           a2
-      -1.62666423,  0.79410094,  0.61367127,  0.23311013,  // section 1
-      -1.44870017,  0.54196219,  0.03373857,  0.70316556   // section 2
-    };
-
-    const int my_ns_soscount = sizeof(my_ns_coeffs)
-        / (sizeof(my_ns_coeffs[0]) * 4);
-
     int clips = 0;
+    int lastSampsClippedLow = 0;
+    int lastSampsClippedHigh = 0;
 
     // Output/dither vars
     uint32_t fpd_l = 1.0; // FP Dither L
@@ -237,9 +230,10 @@ namespace {
         return 0;
     }
 
-    inline long myround(float x)
+    inline int myround(float x)
     {
-        return static_cast<long>(round(x));
+        //x += x >= 0 ? 0.5 : -0.5;
+        return static_cast<int>(round(x));
     }
 
     template<typename T>
@@ -252,13 +246,21 @@ namespace {
         typename id<T>::type max)
     {
         if (v < min) {
-            ++clips;
+            if (lastSampsClippedLow == 1)
+                ++clips;
+            ++lastSampsClippedLow;
             return min;
-        }
+        } 
+        lastSampsClippedLow = 0;
+
         if (v > max) {
-            ++clips;
+            if (lastSampsClippedHigh == 1)
+                ++clips;
+            ++lastSampsClippedHigh;
             return max;
         }
+        lastSampsClippedHigh = 0;
+
         return v;
     }
 
@@ -277,16 +279,16 @@ namespace {
         } 
     }
 
-    inline void tpdf(float &sample, float scaleFactor)
+    // TPDF dither
+    inline void tpdf(double &sample)
     {
-        sample *= scaleFactor;
-        float rand1 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
-        float rand2 = ((float) rand()) / ((float) RAND_MAX); // rand value between 0 and 1
+        //sample *= scaleFactor;
+        double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
+        double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
         sample += (rand1 - rand2);
     }
 
 } // anonymous namespace
-
 
 int main(int argc, char *argv[])
 {
@@ -340,23 +342,25 @@ int main(int argc, char *argv[])
 
     int bytespersample = bits == 20 ? 3 : (bits / 8);
     vector<dxd> dxds (channelsNum, dxd(filtType, lsbitfirst));
-    float scaleFactor;
+    int peakLevel;
 
     if (bits == 16) {
-        scaleFactor = 32768.0;
+        peakLevel = 32768;
     } else if (bits == 24) {
-        scaleFactor = 8388608.0;
+        peakLevel = 8388608;
     } else if (bits == 20) {
-        scaleFactor = 524288.0;
+        peakLevel = 524288;
     } else {
         cerr << "Unsupported bit depth\n";
         return 1;
     }
 
+    double scaleFactor = pow(2.0,(bits - 1));
+
     init_outputs();
 
     vector<unsigned char> dsdData (blockSize * channelsNum);
-    vector<float> floatData (blockSize);
+    vector<double> floatData (blockSize);
     vector<unsigned char> pcmData (blockSize * channelsNum * bytespersample);
     char * const dsdIn  = reinterpret_cast<char*>(&dsdData[0]);
     char * const pcmOut = reinterpret_cast<char*>(&pcmData[0]);
@@ -374,11 +378,11 @@ int main(int argc, char *argv[])
             unsigned char * out = &pcmData[0] + c * bytespersample;
 
             for (int s = 0; s < blockSize; ++s) {
-                float r = floatData[s];
+                double r = floatData[s] * scaleFactor;
                 //if(njad(r, c, scaleFactor))
                 //    return 1;
-                tpdf(r, scaleFactor);
-                long smp = clip(-scaleFactor, myround(r), scaleFactor);
+                tpdf(r);
+                int smp = clip(-peakLevel, myround(r), peakLevel - 1);
                 write_intel(out, smp, bits);
                 out += channelsNum * bytespersample;
             }
