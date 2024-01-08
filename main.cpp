@@ -91,9 +91,9 @@ namespace {
     // Not Just Another Dither 
     // Not truly random. Uses Benford Real Numbers for the dither values
     // Part of Airwindows plugin suite
-    inline int njad(float &sample, int chanNum, float scaleFactor)
+    inline int njad(double &sample, int chanNum, float scaleFactor)
     {
-        double inputSample = (double)sample;
+        double inputSample = sample;
         uint32_t *fpd;
         double *noiseShaping;
         double (*byn)[13];
@@ -280,9 +280,9 @@ namespace {
     }
 
     // TPDF dither
-    inline void tpdf(double &sample)
+    inline void tpdf(double &sample, double scaleFactor)
     {
-        //sample *= scaleFactor;
+        sample *= scaleFactor;
         double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
         double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
         sample += (rand1 - rand2);
@@ -378,10 +378,10 @@ int main(int argc, char *argv[])
             unsigned char * out = &pcmData[0] + c * bytespersample;
 
             for (int s = 0; s < blockSize; ++s) {
-                double r = floatData[s] * scaleFactor;
+                double r = floatData[s];
                 //if(njad(r, c, scaleFactor))
                 //    return 1;
-                tpdf(r);
+                tpdf(r, scaleFactor);
                 int smp = clip(-peakLevel, myround(r), peakLevel - 1);
                 write_intel(out, smp, bits);
                 out += channelsNum * bytespersample;
