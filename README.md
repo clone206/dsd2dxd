@@ -14,7 +14,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 ## C++ program usage
 ### Compling
-`g++ *.c *.cpp -std=c++11 -O3 -o dsd2pcm`
+`g++ *.c *.cpp -std=c++11 -O3 -o dsd2dxd`
 ### Running
 ```bash
 # See all options
@@ -68,7 +68,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -std=c++11 -O3 -o dsd2pcm
+  g++ *.c *.cpp -std=c++11 -O3 -o dsd2dxd
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p
