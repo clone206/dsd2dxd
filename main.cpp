@@ -43,27 +43,31 @@ or implied, of Sebastian Gesemann.
 
 using namespace std;
 
-namespace {
+namespace
+{
     int clips = 0;
     int lastSampsClippedLow = 0;
     int lastSampsClippedHigh = 0;
 
     // Output/dither vars
-    uint32_t fpd_l = 1.0; // FP Dither L
-    uint32_t fpd_r = 1.0; // FP Dither R
-    double noise_shaping_l;// Noise shape state L
-    double noise_shaping_r;// Noise shape state R
-    double byn_l[13]; // Delay line L
-    double byn_r[13]; // Delay line R;
+    uint32_t fpd_l = 1.0;   // FP Dither L
+    uint32_t fpd_r = 1.0;   // FP Dither R
+    double noise_shaping_l; // Noise shape state L
+    double noise_shaping_r; // Noise shape state R
+    double byn_l[13];       // Delay line L
+    double byn_r[13];       // Delay line R;
 
     // Initialize outputs/dither state
-    inline void init_outputs() {
-        while (fpd_l < 16386) fpd_l = rand() * UINT32_MAX;
-        while (fpd_r < 16386) fpd_r = rand() * UINT32_MAX;
+    inline void init_outputs()
+    {
+        while (fpd_l < 16386)
+            fpd_l = rand() * UINT32_MAX;
+        while (fpd_r < 16386)
+            fpd_r = rand() * UINT32_MAX;
 
         noise_shaping_l = 0.0;
         noise_shaping_r = 0.0;
-       
+
         byn_l[0] = 1000;
         byn_l[1] = 301;
         byn_l[2] = 176;
@@ -75,7 +79,7 @@ namespace {
         byn_l[8] = 51;
         byn_l[9] = 46;
         byn_l[10] = 1000;
-    
+
         byn_r[0] = 1000;
         byn_r[1] = 301;
         byn_r[2] = 176;
@@ -89,7 +93,7 @@ namespace {
         byn_r[10] = 1000;
     }
 
-    // Not Just Another Dither 
+    // Not Just Another Dither
     // Not truly random. Uses Benford Real Numbers for the dither values
     // Part of Airwindows plugin suite
     inline int njad(double &sample, int chanNum, float scaleFactor)
@@ -97,17 +101,22 @@ namespace {
         double inputSample = sample;
         uint32_t *fpd;
         double *noiseShaping;
-        double (*byn)[13];
+        double(*byn)[13];
 
-        if (chanNum == 0) {
+        if (chanNum == 0)
+        {
             fpd = &fpd_l;
             noiseShaping = &noise_shaping_l;
             byn = &byn_l;
-        } else if (chanNum ==1) {
+        }
+        else if (chanNum == 1)
+        {
             fpd = &fpd_r;
             noiseShaping = &noise_shaping_r;
             byn = &byn_r;
-        } else {
+        }
+        else
+        {
             cerr << "njad only supports a maximum of 2 channels!";
             return 1;
         }
@@ -131,11 +140,11 @@ namespace {
         while (benfordize < 1.0 && benfordize > 0.0000001)
             benfordize *= 10;
 
-        //hotbin becomes the Benford bin value for this number floored
+        // hotbin becomes the Benford bin value for this number floored
         int hotbinA = floor(benfordize);
 
         double totalA = 0;
-        //produce total number- smaller is closer to Benford real
+        // produce total number- smaller is closer to Benford real
         if ((hotbinA > 0) && (hotbinA < 10))
         {
             *byn[hotbinA] += 1;
@@ -152,10 +161,11 @@ namespace {
             totalA += (51 - (*byn[8]));
             totalA += (46 - (*byn[9]));
             *byn[hotbinA] -= 1;
-        } else
+        }
+        else
             hotbinA = 10;
-        
-        //hotbin becomes the Benford bin value for this number ceiled
+
+        // hotbin becomes the Benford bin value for this number ceiled
         benfordize = ceil(inputSample);
 
         while (benfordize >= 1.0)
@@ -166,7 +176,7 @@ namespace {
         int hotbinB = floor(benfordize);
 
         double totalB = 0;
-        //produce total number- smaller is closer to Benford real
+        // produce total number- smaller is closer to Benford real
         if ((hotbinB > 0) && (hotbinB < 10))
         {
             (*byn[hotbinB]) += 1;
@@ -182,32 +192,37 @@ namespace {
             totalB += (51 - (*byn[8]));
             totalB += (46 - (*byn[9]));
             *byn[hotbinB] -= 1;
-        } else
+        }
+        else
             hotbinB = 10;
-        
+
         double outputSample;
 
-        //assign the relevant one to the delay line
-        //and floor/ceil signal accordingly
-        if (totalA < totalB) {
-            (*byn[hotbinA]) += 1; 
+        // assign the relevant one to the delay line
+        // and floor/ceil signal accordingly
+        if (totalA < totalB)
+        {
+            (*byn[hotbinA]) += 1;
             outputSample = floor(inputSample);
-        } else {
+        }
+        else
+        {
             (*byn[hotbinB]) += 1;
             outputSample = floor(inputSample + 1);
         }
 
-        if (cutbins) {
+        if (cutbins)
+        {
             (*byn[1]) *= 0.99;
             (*byn[2]) *= 0.99;
             (*byn[3]) *= 0.99;
             (*byn[4]) *= 0.99;
-            (*byn[5]) *= 0.99; 
+            (*byn[5]) *= 0.99;
             (*byn[6]) *= 0.99;
             (*byn[7]) *= 0.99;
             (*byn[8]) *= 0.99;
             (*byn[9]) *= 0.99;
-            (*byn[10]) *= 0.99; 
+            (*byn[10]) *= 0.99;
         }
 
         // Store the error
@@ -217,8 +232,8 @@ namespace {
         if (*noiseShaping > fabs(inputSample))
             *noiseShaping = fabs(inputSample);
         if (*noiseShaping < -fabs(inputSample))
-            *noiseShaping = -fabs(inputSample);		
-        
+            *noiseShaping = -fabs(inputSample);
+
         outputSample /= scaleFactor;
 
         if (outputSample > 1.0)
@@ -233,28 +248,33 @@ namespace {
 
     inline int myround(float x)
     {
-        //x += x >= 0 ? 0.5 : -0.5;
+        // x += x >= 0 ? 0.5 : -0.5;
         return static_cast<int>(round(x));
     }
 
-    template<typename T>
-    struct id { typedef T type; };
+    template <typename T>
+    struct id
+    {
+        typedef T type;
+    };
 
-    template<typename T>
+    template <typename T>
     inline T clip(
         typename id<T>::type min,
         T v,
         typename id<T>::type max)
     {
-        if (v < min) {
+        if (v < min)
+        {
             if (lastSampsClippedLow == 1)
                 ++clips;
             ++lastSampsClippedLow;
             return min;
-        } 
+        }
         lastSampsClippedLow = 0;
 
-        if (v > max) {
+        if (v > max)
+        {
             if (lastSampsClippedHigh == 1)
                 ++clips;
             ++lastSampsClippedHigh;
@@ -265,27 +285,29 @@ namespace {
         return v;
     }
 
-    inline void write_intel(unsigned char * ptr, unsigned long word,
-        unsigned char bitsNum)
+    inline void write_intel(unsigned char *ptr, unsigned long word,
+                            unsigned char bitsNum)
     {
-        if (bitsNum == 20) {
+        if (bitsNum == 20)
+        {
             word <<= 4;
         }
 
-        ptr[0] =  word        & 0xFF;
-        ptr[1] = (word >>  8) & 0xFF;
+        ptr[0] = word & 0xFF;
+        ptr[1] = (word >> 8) & 0xFF;
 
-        if (bitsNum == 24 || bitsNum == 20) {
+        if (bitsNum == 24 || bitsNum == 20)
+        {
             ptr[2] = (word >> 16) & 0xFF;
-        } 
+        }
     }
 
     // TPDF dither
     inline void tpdf(double &sample, double scaleFactor)
     {
         sample *= scaleFactor;
-        double rand1 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
-        double rand2 = ((double) rand()) / ((double) RAND_MAX); // rand value between 0 and 1
+        double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
+        double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
         sample += (rand1 - rand2);
     }
 
@@ -293,38 +315,36 @@ namespace {
 
 int main(int argc, char *argv[])
 {
-    argagg::parser argparser {{
-        { "help", {"-h", "--help"},
-            "shows this help message", 0},
-        { "channels", {"-c", "--channels"},
-            "Number of channels (default: 2)", 1},
-        { "format", 
-            {"-f", "--fmt"},
-            "I (interleaved) or P (planar) (DSD stream option) (default: I)", 1},
-        { "bitdepth", {"-b", "--bitdepth"},
-            "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
-        { "filtertype", {"-t", "--filttype"}, 
-            "X (XLD filter) or D (Original dsd2pcm filter) (default: X)", 1},
-        { "endianness", {"-e", "--endianness"},
-            "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
-        { "blocksize", {"-s", "--bs"},
-            "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)",
-                1 },
-        { "dithertype", {"-d", "--dither"},
-            "Which type of dither to use. T (TPDF), or N (Not Just Another Dither)", 1},
+    argagg::parser argparser{{
+        {"help", {"-h", "--help"}, "shows this help message", 0},
+        {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
+        {"format",
+         {"-f", "--fmt"},
+         "I (interleaved) or P (planar) (DSD stream option) (default: I)",
+         1},
+        {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
+        {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) (default: X)", 1},
+        {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
+        {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
+        {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither)", 1},
     }};
 
     argagg::parser_results args;
-    try {
-      args = argparser.parse(argc, argv);
-    } catch (const std::exception& e) {
-      cerr << e.what() << '\n';
-      return 1;
+    try
+    {
+        args = argparser.parse(argc, argv);
+    }
+    catch (const std::exception &e)
+    {
+        cerr << e.what() << '\n';
+        return 1;
     }
 
-    if (args["help"]) {
-        cerr << "\ndsd2dxd filter (raw DSD64 --> 352 kHz raw PCM).\n" 
-        "Reads from stdin and writes to stdout in a *nix environment." << argparser;
+    if (args["help"])
+    {
+        cerr << "\ndsd2dxd filter (raw DSD64 --> 352 kHz raw PCM).\n"
+                "Reads from stdin and writes to stdout in a *nix environment."
+             << argparser;
         return 0;
     }
 
@@ -339,76 +359,101 @@ int main(int argc, char *argv[])
     int lsbitfirst;
     int interleaved;
 
-    if (endianness == 'L') {
+    if (endianness == 'L')
+    {
         lsbitfirst = 1;
-    } else if (endianness == 'M') {
+    }
+    else if (endianness == 'M')
+    {
         lsbitfirst = 0;
-    } else {
+    }
+    else
+    {
         cerr << "\nNo endianness detected!\n";
         return 1;
     }
-    if (fmt == 'P') {
+    if (fmt == 'P')
+    {
         interleaved = 0;
-    } else if (fmt == 'I') {
+    }
+    else if (fmt == 'I')
+    {
         interleaved = 1;
-    } else {
+    }
+    else
+    {
         cerr << "\nNo fmt detected!\n";
         return 1;
     }
 
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
-        << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
-        << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
-        << "\nBit depth: " << bits << "\n\n";
+         << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
+         << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
+         << "\nBit depth: " << bits << "\n\n";
 
     // Seed rng
-    srand (static_cast <unsigned> (time(0)));
+    srand(static_cast<unsigned>(time(0)));
 
     int bytespersample = bits == 20 ? 3 : (bits / 8);
-    vector<dxd> dxds (channelsNum, dxd(filtType, lsbitfirst));
+    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst));
     int peakLevel;
 
-    if (bits == 16) {
+    if (bits == 16)
+    {
         peakLevel = 32768;
-    } else if (bits == 24) {
+    }
+    else if (bits == 24)
+    {
         peakLevel = 8388608;
-    } else if (bits == 20) {
+    }
+    else if (bits == 20)
+    {
         peakLevel = 524288;
-    } else {
+    }
+    else
+    {
         cerr << "Unsupported bit depth\n";
         return 1;
     }
 
-    double scaleFactor = pow(2.0,(bits - 1));
+    double scaleFactor = pow(2.0, (bits - 1));
 
-    if (ditherType == 'N') {
+    if (ditherType == 'N')
+    {
         init_outputs();
     }
 
-    vector<unsigned char> dsdData (blockSize * channelsNum);
-    vector<double> floatData (blockSize);
-    vector<unsigned char> pcmData (blockSize * channelsNum * bytespersample);
-    char * const dsdIn  = reinterpret_cast<char*>(&dsdData[0]);
-    char * const pcmOut = reinterpret_cast<char*>(&pcmData[0]);
+    vector<unsigned char> dsdData(blockSize * channelsNum);
+    vector<double> floatData(blockSize);
+    vector<unsigned char> pcmData(blockSize * channelsNum * bytespersample);
+    char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
+    char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
     int dsdStride = interleaved ? channelsNum : 1;
     int dsdChanOffset = 1; // Default to one byte for interleaved
 
-    while (cin.read(dsdIn, blockSize * channelsNum)) {
-        for (int c = 0; c < channelsNum; ++c) {
-            if (!interleaved) {
+    while (cin.read(dsdIn, blockSize * channelsNum))
+    {
+        for (int c = 0; c < channelsNum; ++c)
+        {
+            if (!interleaved)
+            {
                 dsdChanOffset = blockSize;
             }
             dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
-                lsbitfirst, &floatData[0], 1);
+                              lsbitfirst, &floatData[0], 1);
 
-            unsigned char * out = &pcmData[0] + c * bytespersample;
+            unsigned char *out = &pcmData[0] + c * bytespersample;
 
-            for (int s = 0; s < blockSize; ++s) {
+            for (int s = 0; s < blockSize; ++s)
+            {
                 double r = floatData[s];
-                if (ditherType == 'N') {
+                if (ditherType == 'N')
+                {
                     if (njad(r, c, scaleFactor))
                         return 1;
-                } else {
+                }
+                else
+                {
                     tpdf(r, scaleFactor);
                 }
                 int smp = clip(-peakLevel, myround(r), peakLevel - 1);
@@ -419,7 +464,8 @@ int main(int argc, char *argv[])
         cout.write(pcmOut, blockSize * channelsNum * bytespersample);
     }
 
-    if (clips) {
+    if (clips)
+    {
         cerr << "Clipped " << clips << " times.\n";
     }
 }

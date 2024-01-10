@@ -35,74 +35,74 @@ or implied, of Sebastian Gesemann.
 #include <string.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-#define FIFOSIZE 128             /* must be a power of two */
-#define FIFOMASK (FIFOSIZE-1)   /* bit mask for FIFO offsets */
+#define FIFOSIZE 128            /* must be a power of two */
+#define FIFOMASK (FIFOSIZE - 1) /* bit mask for FIFO offsets */
 
-struct dsd2pcm_ctx_s
-{
-	unsigned char fifo[FIFOSIZE];
-	unsigned fifopos;
-	unsigned int numTables;
-	float **ctables;
-	int lsbfirst;
-	int delay;
-	int delay2;
-	int (*translate)(struct dsd2pcm_ctx_s*, size_t, const unsigned char *, ptrdiff_t, float *, ptrdiff_t);
-	int (*finalize)(struct dsd2pcm_ctx_s*, float *, ptrdiff_t);
-};
+   struct dsd2pcm_ctx_s
+   {
+      unsigned char fifo[FIFOSIZE];
+      unsigned fifopos;
+      unsigned int numTables;
+      float **ctables;
+      int lsbfirst;
+      int delay;
+      int delay2;
+      int (*translate)(struct dsd2pcm_ctx_s *, size_t, const unsigned char *, ptrdiff_t, float *, ptrdiff_t);
+      int (*finalize)(struct dsd2pcm_ctx_s *, float *, ptrdiff_t);
+   };
 
-typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;
+   typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;
 
-/**
- * initializes a "dsd2pcm engine" for one channel
- * (precomputes tables and allocates memory)
- *
- * This is the only function that is not thread-safe in terms of the
- * POSIX thread-safety definition because it modifies global state
- * (lookup tables are computed during the first call)
- */
-extern dsd2pcm_ctx* dsd2pcm_init(char filtType, int lsbf);
+   /**
+    * initializes a "dsd2pcm engine" for one channel
+    * (precomputes tables and allocates memory)
+    *
+    * This is the only function that is not thread-safe in terms of the
+    * POSIX thread-safety definition because it modifies global state
+    * (lookup tables are computed during the first call)
+    */
+   extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf);
 
-/**
- * deinitializes a "dsd2pcm engine"
- * (releases memory, don't forget!)
- */
-extern void dsd2pcm_destroy(dsd2pcm_ctx *ctx);
+   /**
+    * deinitializes a "dsd2pcm engine"
+    * (releases memory, don't forget!)
+    */
+   extern void dsd2pcm_destroy(dsd2pcm_ctx *ctx);
 
-/**
- * clones the context and returns a pointer to the
- * newly allocated copy
- */
-extern dsd2pcm_ctx* dsd2pcm_clone(dsd2pcm_ctx *ctx);
+   /**
+    * clones the context and returns a pointer to the
+    * newly allocated copy
+    */
+   extern dsd2pcm_ctx *dsd2pcm_clone(dsd2pcm_ctx *ctx);
 
-/**
- * resets the internal state for a fresh new stream
- */
-extern void dsd2pcm_reset(dsd2pcm_ctx *ctx);
+   /**
+    * resets the internal state for a fresh new stream
+    */
+   extern void dsd2pcm_reset(dsd2pcm_ctx *ctx);
 
-/**
- * "translates" a stream of octets to a stream of floats
- * (8:1 decimation)
- * @param ctx -- pointer to abstract context (buffers)
- * @param samples -- number of octets/samples to "translate"
- * @param src -- pointer to first octet (input)
- * @param src_stride -- src pointer increment
- * @param lsbitfirst -- bitorder, 0=msb first, 1=lsbfirst
- * @param dst -- pointer to first float (output)
- * @param dst_stride -- dst pointer increment
- */
-extern void dsd2pcm_translate_8to1(dsd2pcm_ctx *handle,
-   size_t blockSize,
-   const unsigned char *dsdData, ptrdiff_t dsdStride,
-   int lsbitfirst,
-   double *floatData, ptrdiff_t floatStride);
+   /**
+    * "translates" a stream of octets to a stream of floats
+    * (8:1 decimation)
+    * @param ctx -- pointer to abstract context (buffers)
+    * @param samples -- number of octets/samples to "translate"
+    * @param src -- pointer to first octet (input)
+    * @param src_stride -- src pointer increment
+    * @param lsbitfirst -- bitorder, 0=msb first, 1=lsbfirst
+    * @param dst -- pointer to first float (output)
+    * @param dst_stride -- dst pointer increment
+    */
+   extern void dsd2pcm_translate_8to1(dsd2pcm_ctx *handle,
+                                      size_t blockSize,
+                                      const unsigned char *dsdData, ptrdiff_t dsdStride,
+                                      int lsbitfirst,
+                                      double *floatData, ptrdiff_t floatStride);
 
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
 
 #endif /* include guard DSD2PCM_H_INCLUDED */
-
