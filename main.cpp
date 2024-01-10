@@ -326,7 +326,7 @@ int main(int argc, char *argv[])
         {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) (default: X)", 1},
         {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
         {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-        {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither)", 1},
+        {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
     }};
 
     argagg::parser_results args;
