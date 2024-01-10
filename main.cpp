@@ -359,11 +359,11 @@ int main(int argc, char *argv[])
     int lsbitfirst;
     int interleaved;
 
-    if (endianness == 'L')
+    if (endianness == 'L' || endianness == 'l')
     {
         lsbitfirst = 1;
     }
-    else if (endianness == 'M')
+    else if (endianness == 'M' || endianness == 'm')
     {
         lsbitfirst = 0;
     }
@@ -372,11 +372,11 @@ int main(int argc, char *argv[])
         cerr << "\nNo endianness detected!\n";
         return 1;
     }
-    if (fmt == 'P')
+    if (fmt == 'P' || fmt == 'p')
     {
         interleaved = 0;
     }
-    else if (fmt == 'I')
+    else if (fmt == 'I' || fmt == 'i')
     {
         interleaved = 1;
     }
@@ -447,14 +447,19 @@ int main(int argc, char *argv[])
             for (int s = 0; s < blockSize; ++s)
             {
                 double r = floatData[s];
-                if (ditherType == 'N')
+                if (ditherType == 'N' || ditherType == 'n')
                 {
                     if (njad(r, c, scaleFactor))
                         return 1;
                 }
-                else
+                else if (ditherType == 'T' || ditherType == 't')
                 {
                     tpdf(r, scaleFactor);
+                }
+                else
+                {
+                    cerr << "\nInvalid dither type!\n";
+                    return 1;
                 }
                 int smp = clip(-peakLevel, myround(r), peakLevel - 1);
                 write_intel(out, smp, bits);
@@ -468,4 +473,6 @@ int main(int argc, char *argv[])
     {
         cerr << "Clipped " << clips << " times.\n";
     }
+
+    return 0;
 }
