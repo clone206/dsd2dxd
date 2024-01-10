@@ -343,7 +343,7 @@ int main(int argc, char *argv[])
     if (args["help"])
     {
         cerr << "\ndsd2dxd filter (raw DSD64 --> 352 kHz raw PCM).\n"
-                "Reads from stdin and writes to stdout in a *nix environment."
+                "Reads from stdin and writes to stdout in a *nix environment.\n"
              << argparser;
         return 0;
     }
