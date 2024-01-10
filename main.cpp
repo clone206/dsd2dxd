@@ -39,6 +39,7 @@ or implied, of Sebastian Gesemann.
 #include <math.h>
 
 #include "dsd2pcm.hpp"
+#include "argagg.hpp"
 
 using namespace std;
 
@@ -292,50 +293,73 @@ namespace {
 
 int main(int argc, char *argv[])
 {
-    const int blockSize = 4096;
-    char filtType = ' ';
-    int channelsNum   = -1;
-    int lsbitfirst = -1;
-    int bits       = -1;
-    int interleaved = -1;
+    argagg::parser argparser {{
+        { "help", {"-h", "--help"},
+            "shows this help message", 0},
+        { "channels", {"-c", "--channels"},
+            "Number of channels (default: 2)", 1},
+        { "format", 
+            {"-f", "--fmt"},
+            "I (interleaved) or P (planar) (DSD stream option) (default: I)", 1},
+        { "bitdepth", {"-b", "--bitdepth"},
+            "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
+        { "filtertype", {"-t", "--filttype"}, 
+            "X (XLD filter) or D (Original dsd2pcm filter) (default: X)", 1},
+        { "endianness", {"-e", "--endianness"},
+            "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
+        { "blocksize", {"-s", "--bs"},
+            "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)",
+                1 },
+        { "dithertype", {"-d", "--dither"},
+            "Which type of dither to use. T (TPDF), or N (Not Just Another Dither)", 1},
+    }};
 
-    if (argc == 5) {
-        if ('1' <= argv[1][0] && argv[1][0] <= '9')
-            channelsNum = 1 + (argv[1][0] - '1');
-        if (argv[2][0] == 'i' || argv[2][0] == 'I') {
-            interleaved = 1;
-            lsbitfirst = 0;
-        }
-        if (argv[2][0] == 'p' || argv[2][0] == 'P') {
-            interleaved = 0;
-            lsbitfirst = 1;
-        }
-        if (!strcmp(argv[3], "16")) bits = 16;
-        if (!strcmp(argv[3], "20")) bits = 20;
-        if (!strcmp(argv[3], "24")) bits = 24;
-        if (argv[4][0] == 'x' || argv[4][0] == 'X') {
-            filtType = 'x';
-        }
-        if (argv[4][0] == 'd' || argv[4][0] == 'D') {
-            filtType = 'd';
-        }
+    argagg::parser_results args;
+    try {
+      args = argparser.parse(argc, argv);
+    } catch (const std::exception& e) {
+      cerr << e.what() << '\n';
+      return 1;
     }
-    if (channelsNum < 1 || lsbitfirst < 0 || bits < 0 || interleaved < 0
-            || filtType == ' ') {
-        cerr << "\nError: Got " << argc << " args.\n";
-        cerr << "\n"
-            "DSD2PCM filter (raw DSD64 --> 352 kHz raw PCM)\n"
-            "(c) 2009 Sebastian Gesemann\n\n"
-            "Syntax: dsd2pcm <channels> <format> <bitdepth> <filter>\n"
-            "channels = 1,2,3,...,9 (number of channels in DSD stream)\n"
-            "format = I (interleaved) or P (planar) (DSD stream option)\n"
-            "bitdepth = 16, 20, or 24 (intel byte order, output option)\n"
-            "filter = X (XLD filter) or D (Original dsd2pcm filter)\n\n"
-            "Send raw dsd with either planar format and 4096 byte block size,\n"
-            "or interleaved with 1 byte per channel, to stdin.\n\n"
-            "Outputs raw pcm to stdout (only supports *nix environment).'\n\n";
+
+    if (args["help"]) {
+        cerr << "\ndsd2dxd filter (raw DSD64 --> 352 kHz raw PCM).\n" 
+        "Reads from stdin and writes to stdout in a *nix environment." << argparser;
+        return 0;
+    }
+
+    int channelsNum = args["channels"].as<int>(2);
+    char fmt = args["format"].as<string>("I").c_str()[0];
+    int bits = args["bitdepth"].as<int>(24);
+    char filtType = args["filtertype"].as<string>("X").c_str()[0];
+    char endianness = args["endianness"].as<string>("M").c_str()[0];
+    int blockSize = args["blocksize"].as<int>(4096);
+    char ditherType = args["dithertype"].as<string>("T").c_str()[0];
+
+    int lsbitfirst;
+    int interleaved;
+
+    if (endianness == 'L') {
+        lsbitfirst = 1;
+    } else if (endianness == 'M') {
+        lsbitfirst = 0;
+    } else {
+        cerr << "\nNo endianness detected!\n";
         return 1;
     }
+    if (fmt == 'P') {
+        interleaved = 0;
+    } else if (fmt == 'I') {
+        interleaved = 1;
+    } else {
+        cerr << "\nNo fmt detected!\n";
+        return 1;
+    }
+
+    cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
+        << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
+        << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
+        << "\nBit depth: " << bits << "\n\n";
 
     // Seed rng
     srand (static_cast <unsigned> (time(0)));
@@ -357,7 +381,9 @@ int main(int argc, char *argv[])
 
     double scaleFactor = pow(2.0,(bits - 1));
 
-    init_outputs();
+    if (ditherType == 'N') {
+        init_outputs();
+    }
 
     vector<unsigned char> dsdData (blockSize * channelsNum);
     vector<double> floatData (blockSize);
@@ -379,9 +405,12 @@ int main(int argc, char *argv[])
 
             for (int s = 0; s < blockSize; ++s) {
                 double r = floatData[s];
-                //if(njad(r, c, scaleFactor))
-                //    return 1;
-                tpdf(r, scaleFactor);
+                if (ditherType == 'N') {
+                    if (njad(r, c, scaleFactor))
+                        return 1;
+                } else {
+                    tpdf(r, scaleFactor);
+                }
                 int smp = clip(-peakLevel, myround(r), peakLevel - 1);
                 write_intel(out, smp, bits);
                 out += channelsNum * bytespersample;

@@ -14,35 +14,29 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 ## C++ program usage
 ### Compling
-`g++ *.c *.cpp -O3 -o dsd2pcm`
+`g++ *.c *.cpp -std=c++11 -O3 -o dsd2pcm`
 ### Running
-```
-  Syntax: dsd2pcm <channels> <format> <bitdepth> <filter>
-  channels = 1,2,3,...,9 (number of channels in DSD stream)
-  format = I (interleaved) or P (planar)
-  bitdepth = 16, 20, or 24 (intel byte order, output option)
-  filter = X (XLD filter) or D (Original dsd2pcm filter)
-
-  Send raw dsd with either planar format and 4096 byte block size,
-  or interleaved with 1 byte per channel, to stdin.
-
-  Outputs raw pcm to stdout (only supports *nix environment).
+```bash
+# See all options
+./dsd2dxd -h|--help
+# Example of using with an input and output file
+./dsd2dxd [options] < infile.dsd > outfile.pcm
+# Example of piping output to ffplay (planar format, lsb first)
+./dsd2dxd -f P -e L < infile.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 ```
 
 ## Testing Examples
 ```bash
-# Compile code; convert and play mono, planar/LSB-first, 24bit, test file,
-# using XLD FIR Filter
-./build_test_mono.sh P 24 X 1kHz_mono_p.dsd
+# Compile code; convert and play mono, planar/LSB-first, 24bit, test file
+./build_test_mono.sh P 24 L 1kHz_mono_p.dsd
 
-# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file,
-# using dsd2pcm FIR filter
-./build_test_stereo.sh P 16 D 1kHz_stereo_p.dsd
+# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file
+./build_test_stereo.sh P 16 L 1kHz_stereo_p.dsd
 ```
 
-.dsd files with `_p` in the names are the equivalent of the .dsf files with the header metadata stripped off.
+.dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
 
-You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it along with the correct input param (I for interleaved).
+You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it directly with the ./dsd2dxd command, with all default options.
 
 ## Modified original info.txt
 ```
@@ -74,7 +68,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -O3 -o dsd2pcm
+  g++ *.c *.cpp -std=c++11 -O3 -o dsd2pcm
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p

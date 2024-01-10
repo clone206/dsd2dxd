@@ -7,5 +7,5 @@ then
     outbits=24
 fi
 
-g++ *.c *.cpp -O3 -o dsd2pcm
-./dsd2pcm 1 $1 $2 $3 < $4 | ffplay -f s${outbits}le -ar 352.8k -ac 1 -i -
+g++ *.c *.cpp -std=c++11 -O3 -o dsd2dxd
+./dsd2dxd -c 1 -f $1 -b $2 -e $3 < $4 | ffplay -f s${outbits}le -ar 352.8k -ac 1 -i -
