@@ -44,7 +44,8 @@ class dxd
     dsd2pcm_ctx *handle;
 
 public:
-    dxd(char filtType, int lsbf) : handle(dsd2pcm_init(filtType, lsbf))
+    dxd(char filtType, int lsbf, int decimation)
+        : handle(dsd2pcm_init(filtType, lsbf, decimation))
     {
         if (!handle)
             throw std::runtime_error("wtf?!");
@@ -72,10 +73,10 @@ public:
     void translate(size_t blockSize,
                    const unsigned char *dsdData, ptrdiff_t dsdStride,
                    bool lsbitfirst,
-                   double *floatData, ptrdiff_t floatStride)
+                   double *floatData, ptrdiff_t floatStride, int decimation)
     {
-        dsd2pcm_translate_8to1(handle, blockSize, dsdData, dsdStride,
-                               lsbitfirst, floatData, floatStride);
+        dsd2pcm_translate(handle, blockSize, dsdData, dsdStride,
+                          lsbitfirst, floatData, floatStride, decimation);
     }
 };
 

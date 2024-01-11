@@ -315,19 +315,18 @@ namespace
 
 int main(int argc, char *argv[])
 {
-    argagg::parser argparser{{
-        {"help", {"-h", "--help"}, "shows this help message", 0},
-        {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
-        {"format",
-         {"-f", "--fmt"},
-         "I (interleaved) or P (planar) (DSD stream option) (default: I)",
-         1},
-        {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
-        {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) (default: X)", 1},
-        {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
-        {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-        {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
-    }};
+    argagg::parser argparser{{{"help", {"-h", "--help"}, "shows this help message", 0},
+                              {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
+                              {"format",
+                               {"-f", "--fmt"},
+                               "I (interleaved) or P (planar) (DSD stream option) (default: I)",
+                               1},
+                              {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
+                              {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) Only has effect with 8:1 decimation ratio (default: X)", 1},
+                              {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
+                              {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
+                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
+                              {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8 or 16 (to 1) (default: 8)", 1}}};
 
     argagg::parser_results args;
     try
@@ -355,6 +354,7 @@ int main(int argc, char *argv[])
     char endianness = args["endianness"].as<string>("M").c_str()[0];
     int blockSize = args["blocksize"].as<int>(4096);
     char ditherType = args["dithertype"].as<string>("T").c_str()[0];
+    int decimation = args["decimation"].as<int>(8);
 
     int lsbitfirst;
     int interleaved;
@@ -389,13 +389,14 @@ int main(int argc, char *argv[])
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
          << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
          << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
-         << "\nBit depth: " << bits << "\n\n";
+         << "\nBit depth: " << bits
+         << "\nDecimation: " << decimation << "\n\n";
 
     // Seed rng
     srand(static_cast<unsigned>(time(0)));
 
-    int bytespersample = bits == 20 ? 3 : (bits / 8);
-    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst));
+    int bytespersample = bits == 20 ? 3 : bits / 8;
+    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation));
     int peakLevel;
 
     if (bits == 16)
@@ -423,9 +424,10 @@ int main(int argc, char *argv[])
         init_outputs();
     }
 
+    int pcmBlockSize = blockSize / (decimation / 8);
     vector<unsigned char> dsdData(blockSize * channelsNum);
-    vector<double> floatData(blockSize);
-    vector<unsigned char> pcmData(blockSize * channelsNum * bytespersample);
+    vector<double> floatData(pcmBlockSize);
+    vector<unsigned char> pcmData(pcmBlockSize * channelsNum * bytespersample);
     char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
     char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
     int dsdStride = interleaved ? channelsNum : 1;
@@ -440,11 +442,11 @@ int main(int argc, char *argv[])
                 dsdChanOffset = blockSize;
             }
             dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
-                              lsbitfirst, &floatData[0], 1);
+                              lsbitfirst, &floatData[0], 1, decimation);
 
             unsigned char *out = &pcmData[0] + c * bytespersample;
 
-            for (int s = 0; s < blockSize; ++s)
+            for (int s = 0; s < pcmBlockSize; ++s)
             {
                 double r = floatData[s];
                 if (ditherType == 'N' || ditherType == 'n')
@@ -466,7 +468,7 @@ int main(int argc, char *argv[])
                 out += channelsNum * bytespersample;
             }
         }
-        cout.write(pcmOut, blockSize * channelsNum * bytespersample);
+        cout.write(pcmOut, pcmBlockSize * channelsNum * bytespersample);
     }
 
     if (clips)
