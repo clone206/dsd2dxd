@@ -7,15 +7,20 @@ Added shell scripts to build and test with 1kHz test tone files.
 Handles planar format as well. Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
 ## Dependencies
+
 - ffmpeg
 - ffplay
 - g++
-- *nix environment
+- \*nix environment
 
 ## C++ program usage
+
 ### Compling
+
 `g++ *.c *.cpp -std=c++11 -O3 -o dsd2dxd`
+
 ### Running
+
 ```bash
 # See all options
 ./dsd2dxd -h|--help
@@ -23,9 +28,13 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 ./dsd2dxd [options] < infile.dsd > outfile.pcm
 # Example of piping output to ffplay (planar format, lsb first)
 ./dsd2dxd -f P -e L < infile.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
+# Example of piping output to ffmpeg to save to file
+# (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
+./dsd2dxd -f P -e L -d N -r 16 -b 20 < infile.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a pcm_s24le outfile.wav
 ```
 
 ## Testing Examples
+
 ```bash
 # Compile code; convert and play mono, planar/LSB-first, 24bit, test file
 ./build_test_mono.sh P 24 L 1kHz_mono_p.dsd
@@ -39,6 +48,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it directly with the ./dsd2dxd command, with all default options.
 
 ## Modified original info.txt
+
 ```
 You downloaded the source code for "dsd2pcm" which is a simple little
 "filter" program, that takes a DSD data stream on stdin and converts
@@ -51,7 +61,7 @@ stdout. The code is split into two modules:
       implementation of a symmetric 96-taps FIR lowpass filter
       optimized for DSD inputs. If you feed this converter with
       DSD64 you get a PCM stream at 352.8 kHz and floating point
-      samples. This module is independent and can be reused. 
+      samples. This module is independent and can be reused.
 
   (2) main.cpp (file contains the main function and handles I/O)
 
