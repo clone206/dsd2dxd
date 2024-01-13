@@ -44,8 +44,8 @@ class dxd
     dsd2pcm_ctx *handle;
 
 public:
-    dxd(char filtType, int lsbf, int decimation)
-        : handle(dsd2pcm_init(filtType, lsbf, decimation))
+    dxd(char filtType, int lsbf, int decimation, int dsdRate)
+        : handle(dsd2pcm_init(filtType, lsbf, decimation, dsdRate))
     {
         if (!handle)
             throw std::runtime_error("wtf?!");

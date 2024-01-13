@@ -79,7 +79,7 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int ls
     }
 }
 
-extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation)
+extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int dsdRate)
 {
     dsd2pcm_ctx *ptr;
     ptr = (dsd2pcm_ctx *)malloc(sizeof(dsd2pcm_ctx));
@@ -90,7 +90,14 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation)
         const double *htaps;
         int err = 0;
 
-        if (decimation == 8)
+        if (dsdRate == 2 && decimation == 16)
+        {
+            numCoeffs = 112;
+            htaps = htaps_ddr_16to1;
+            ptr->decimation = 16;
+            ptr->delay = 6;
+        }
+        else if (decimation == 8)
         {
             if (filtType == 'X' || filtType == 'x')
             {

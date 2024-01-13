@@ -315,20 +315,19 @@ namespace
 
 int main(int argc, char *argv[])
 {
-    argagg::parser argparser{{
-        {"help", {"-h", "--help"}, "shows this help message", 0},
-        {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
-        {"format",
-         {"-f", "--fmt"},
-         "I (interleaved) or P (planar) (DSD stream option) (default: I)",
-         1},
-        {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
-        {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) Only has effect with 8:1 decimation ratio (default: X)", 1},
-        {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
-        {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-        {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
-        {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, or 32 (to 1) (default: 8)", 1},
-    }};
+    argagg::parser argparser{{{"help", {"-h", "--help"}, "shows this help message", 0},
+                              {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
+                              {"format",
+                               {"-f", "--fmt"},
+                               "I (interleaved) or P (planar) (DSD stream option) (default: I)",
+                               1},
+                              {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
+                              {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) Only has effect with 8:1 decimation ratio (default: X)", 1},
+                              {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
+                              {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
+                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
+                              {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, or 32 (to 1) (default: 8)", 1},
+                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16)", 1}}};
 
     argagg::parser_results args;
     try
@@ -357,6 +356,7 @@ int main(int argc, char *argv[])
     int blockSize = args["blocksize"].as<int>(4096);
     char ditherType = args["dithertype"].as<string>("T").c_str()[0];
     int decimation = args["decimation"].as<int>(8);
+    int dsdRate = args["inputrate"].as<int>(1);
 
     int lsbitfirst;
     int interleaved;
@@ -391,14 +391,20 @@ int main(int argc, char *argv[])
 
     if (bits != 16 && bits != 20 && bits != 24)
     {
-        cerr << "Unsupported bit depth\n";
+        cerr << "\nUnsupported bit depth\n";
+        return 1;
+    }
+
+    if (dsdRate == 2 && decimation != 16)
+    {
+        cerr << "\nOnly decimation value of 16 allowed with dsd128 input.\n";
         return 1;
     }
 
     // Seed rng
     srand(static_cast<unsigned>(time(0)));
 
-    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation));
+    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation, dsdRate));
 
     int bytespersample = bits == 20 ? 3 : bits / 8;
     double scaleFactor = pow(2.0, (bits - 1));
