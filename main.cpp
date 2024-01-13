@@ -241,12 +241,12 @@ namespace
         if (outputSample < -1.0)
             outputSample = -1.0;
 
-        sample = (float)(inputSample + outputSample);
+        sample = inputSample + outputSample;
 
         return 0;
     }
 
-    inline int myround(float x)
+    inline int myround(double x)
     {
         // x += x >= 0 ? 0.5 : -0.5;
         return static_cast<int>(round(x));
@@ -315,18 +315,20 @@ namespace
 
 int main(int argc, char *argv[])
 {
-    argagg::parser argparser{{{"help", {"-h", "--help"}, "shows this help message", 0},
-                              {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
-                              {"format",
-                               {"-f", "--fmt"},
-                               "I (interleaved) or P (planar) (DSD stream option) (default: I)",
-                               1},
-                              {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
-                              {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) Only has effect with 8:1 decimation ratio (default: X)", 1},
-                              {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
-                              {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
-                              {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8 or 16 (to 1) (default: 8)", 1}}};
+    argagg::parser argparser{{
+        {"help", {"-h", "--help"}, "shows this help message", 0},
+        {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
+        {"format",
+         {"-f", "--fmt"},
+         "I (interleaved) or P (planar) (DSD stream option) (default: I)",
+         1},
+        {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
+        {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) Only has effect with 8:1 decimation ratio (default: X)", 1},
+        {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
+        {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
+        {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
+        {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, or 32 (to 1) (default: 8)", 1},
+    }};
 
     argagg::parser_results args;
     try
@@ -341,7 +343,7 @@ int main(int argc, char *argv[])
 
     if (args["help"])
     {
-        cerr << "\ndsd2dxd filter (raw DSD64 --> 352 kHz raw PCM).\n"
+        cerr << "\ndsd2dxd filter (raw DSD --> raw PCM).\n"
                 "Reads from stdin and writes to stdout in a *nix environment.\n"
              << argparser;
         return 0;
@@ -372,6 +374,7 @@ int main(int argc, char *argv[])
         cerr << "\nNo endianness detected!\n";
         return 1;
     }
+
     if (fmt == 'P' || fmt == 'p')
     {
         interleaved = 0;
@@ -386,38 +389,28 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
-         << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
-         << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
-         << "\nBit depth: " << bits
-         << "\nDecimation: " << decimation << "\n\n";
-
-    // Seed rng
-    srand(static_cast<unsigned>(time(0)));
-
-    int bytespersample = bits == 20 ? 3 : bits / 8;
-    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation));
-    int peakLevel;
-
-    if (bits == 16)
-    {
-        peakLevel = 32768;
-    }
-    else if (bits == 24)
-    {
-        peakLevel = 8388608;
-    }
-    else if (bits == 20)
-    {
-        peakLevel = 524288;
-    }
-    else
+    if (bits != 16 && bits != 20 && bits != 24)
     {
         cerr << "Unsupported bit depth\n";
         return 1;
     }
 
+    // Seed rng
+    srand(static_cast<unsigned>(time(0)));
+
+    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation));
+
+    int bytespersample = bits == 20 ? 3 : bits / 8;
     double scaleFactor = pow(2.0, (bits - 1));
+    int peakLevel = (int)floor(scaleFactor);
+
+    cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
+         << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
+         << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
+         << "\nBit depth: " << bits
+         << "\nDecimation: " << decimation
+         << "\nPeak level: " << peakLevel
+         << "\nChannels: " << channelsNum << "\n\n";
 
     if (ditherType == 'N')
     {

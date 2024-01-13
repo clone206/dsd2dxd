@@ -74,7 +74,7 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int ls
                 else
                     acc += (((dsdSeq >> (7 - bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
             }
-            ctx->ctables[ctx->numTables - 1 - t][dsdSeq] = (float)acc;
+            ctx->ctables[ctx->numTables - 1 - t][dsdSeq] = acc;
         }
     }
 }
@@ -104,6 +104,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation)
                 numCoeffs = 48;
                 htaps = htaps_d2p;
                 ptr->decimation = 8;
+                ptr->delay = 0;
             }
             else
             {
@@ -117,6 +118,13 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation)
             ptr->decimation = 16;
             ptr->delay = 6;
         }
+        else if (decimation == 32)
+        {
+            numCoeffs = 288;
+            htaps = htaps_32to1;
+            ptr->decimation = 32;
+            ptr->delay = 8;
+        }
         else
         {
             err = 1;
@@ -129,11 +137,11 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation)
 
         ptr->numTables = (numCoeffs + 7) / 8;
         ptr->lsbfirst = lsbf;
-        ptr->ctables = (float **)malloc(sizeof(float *) * ptr->numTables);
+        ptr->ctables = (double **)malloc(sizeof(double *) * ptr->numTables);
 
         for (int i = 0; i < ptr->numTables; ++i)
         {
-            ptr->ctables[i] = (float *)malloc(sizeof(float) * 256);
+            ptr->ctables[i] = (double *)malloc(sizeof(double) * 256);
         }
 
         precalc(ptr, htaps, numCoeffs, lsbf);
