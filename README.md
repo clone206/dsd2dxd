@@ -86,10 +86,10 @@ stdout. The code is split into two modules:
 
   (1) dsd2pcm
 
-      This is where the 8:1 decimation magic happens. It's an
-      implementation of a symmetric 96-taps FIR lowpass filter
+      This is where the decimation magic happens. It's an
+      implementation of a FIR lowpass filter
       optimized for DSD inputs. If you feed this converter with
-      DSD64 you get a PCM stream and double precision floating point
+      DSD you get a PCM stream and double precision floating point
       samples. This module is independent and can be reused.
 
   (2) main.cpp (file contains the main function and handles I/O)
