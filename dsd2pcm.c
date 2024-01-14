@@ -100,7 +100,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                 case 'x':
                 case 'c':
                 case 'C':
-                    numCoeffs = 450;
+                    numCoeffs = 125;
                     htaps = htaps_ddr_16to1_cheb;
                     ptr->decimation = 16;
                     ptr->delay = 6;
