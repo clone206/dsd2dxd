@@ -21,6 +21,8 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 ### Running
 
+## Examples
+
 ```bash
 # See all options
 ./dsd2dxd -h|--help
@@ -47,12 +49,39 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it directly with the ./dsd2dxd command, with all default options.
 
+## Options
+
+```
+   -h, --help
+        shows this help message
+    -c, --channels
+        Number of channels (default: 2)
+    -f, --fmt
+        I (interleaved) or P (planar) (DSD stream option) (default: I)
+    -b, --bitdepth
+        16, 20, or 24 (intel byte order, output option) (default: 24)
+    -t, --filttype
+        X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio),
+        E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
+        (default: X [single rate] or C [double rate])
+    -e, --endianness
+        Byte order of input. M (MSB first) or L (LSB first) (default: M)
+    -s, --bs
+        Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
+    -d, --dither
+        Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)
+    -r, --ratio
+        Decimation ratio. 8, 16, or 32 (to 1) (default: 8)
+    -i, --inrate
+        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16 or 32)
+```
+
 ## Modified original info.txt
 
 ```
 You downloaded the source code for "dsd2pcm" which is a simple little
 "filter" program, that takes a DSD data stream on stdin and converts
-it to a PCM stream (352.8 kHz, either 16 or 24 bits) and writes it to
+it to a PCM stream (either 16, 20 or 24 bits) and writes it to
 stdout. The code is split into two modules:
 
   (1) dsd2pcm
@@ -60,7 +89,7 @@ stdout. The code is split into two modules:
       This is where the 8:1 decimation magic happens. It's an
       implementation of a symmetric 96-taps FIR lowpass filter
       optimized for DSD inputs. If you feed this converter with
-      DSD64 you get a PCM stream at 352.8 kHz and floating point
+      DSD64 you get a PCM stream and double precision floating point
       samples. This module is independent and can be reused.
 
   (2) main.cpp (file contains the main function and handles I/O)

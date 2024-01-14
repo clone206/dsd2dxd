@@ -90,12 +90,60 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
         const double *htaps;
         int err = 0;
 
-        if (dsdRate == 2 && decimation == 16)
+        if (dsdRate == 2)
         {
-            numCoeffs = 112;
-            htaps = htaps_ddr_16to1;
-            ptr->decimation = 16;
-            ptr->delay = 6;
+            if (decimation == 16)
+            {
+                switch (filtType)
+                {
+                case 'X':
+                case 'x':
+                case 'c':
+                case 'C':
+                    numCoeffs = 57;
+                    htaps = htaps_ddr_16to1_cheb;
+                    ptr->decimation = 16;
+                    ptr->delay = 6;
+                    break;
+                case 'D':
+                case 'd':
+                case 'e':
+                case 'E':
+                    numCoeffs = 52;
+                    htaps = htaps_ddr_16to1_eq;
+                    ptr->decimation = 16;
+                    ptr->delay = 6;
+                    break;
+                default:
+                    err = 1;
+                }
+            }
+            else if (decimation == 32)
+            {
+                switch (filtType)
+                {
+                case 'X':
+                case 'x':
+                case 'c':
+                case 'C':
+                    numCoeffs = 250;
+                    htaps = htaps_ddr_32to1_cheb;
+                    ptr->decimation = 32;
+                    ptr->delay = 8;
+                    break;
+                case 'D':
+                case 'd':
+                case 'e':
+                case 'E':
+                    numCoeffs = 184;
+                    htaps = htaps_ddr_32to1_eq;
+                    ptr->decimation = 32;
+                    ptr->delay = 8;
+                    break;
+                default:
+                    err = 1;
+                }
+            }
         }
         else if (decimation == 8)
         {

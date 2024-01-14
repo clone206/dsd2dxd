@@ -322,12 +322,12 @@ int main(int argc, char *argv[])
                                "I (interleaved) or P (planar) (DSD stream option) (default: I)",
                                1},
                               {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
-                              {"filtertype", {"-t", "--filttype"}, "X (XLD filter) or D (Original dsd2pcm filter) Only has effect with 8:1 decimation ratio (default: X)", 1},
+                              {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), \n\tE (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
                               {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
                               {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, or 32 (to 1) (default: 8)", 1},
-                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16)", 1}}};
+                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16 or 32)", 1}}};
 
     argagg::parser_results args;
     try
@@ -395,9 +395,9 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (dsdRate == 2 && decimation != 16)
+    if (dsdRate == 2 && decimation != 16 && decimation != 32)
     {
-        cerr << "\nOnly decimation value of 16 allowed with dsd128 input.\n";
+        cerr << "\nOnly decimation value of 16 or 32 allowed with dsd128 input.\n";
         return 1;
     }
 
