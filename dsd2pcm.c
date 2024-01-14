@@ -100,7 +100,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                 case 'x':
                 case 'c':
                 case 'C':
-                    numCoeffs = 57;
+                    numCoeffs = 450;
                     htaps = htaps_ddr_16to1_cheb;
                     ptr->decimation = 16;
                     ptr->delay = 6;
@@ -109,7 +109,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                 case 'd':
                 case 'e':
                 case 'E':
-                    numCoeffs = 52;
+                    numCoeffs = 220;
                     htaps = htaps_ddr_16to1_eq;
                     ptr->decimation = 16;
                     ptr->delay = 6;
@@ -126,7 +126,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                 case 'x':
                 case 'c':
                 case 'C':
-                    numCoeffs = 250;
+                    numCoeffs = 750;
                     htaps = htaps_ddr_32to1_cheb;
                     ptr->decimation = 32;
                     ptr->delay = 8;
@@ -135,7 +135,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                 case 'd':
                 case 'e':
                 case 'E':
-                    numCoeffs = 184;
+                    numCoeffs = 250;
                     htaps = htaps_ddr_32to1_eq;
                     ptr->decimation = 32;
                     ptr->delay = 8;
