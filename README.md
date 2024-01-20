@@ -69,7 +69,7 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)
     -r, --ratio
         Decimation ratio. 8, 16, or 32 (to 1) (default: 8)
     -i, --inrate
