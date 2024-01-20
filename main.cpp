@@ -68,6 +68,7 @@ namespace
         noise_shaping_l = 0.0;
         noise_shaping_r = 0.0;
 
+        // Weight coeffs based on Benford's law. Smaller leading digits more likely.
         byn_l[0] = 1000;
         byn_l[1] = 301;
         byn_l[2] = 176;
@@ -124,33 +125,42 @@ namespace
         if (fabs(inputSample) < 1.18e-23)
             inputSample = *fpd * 1.18e-17;
 
+        // Randomize floating point dither
         *fpd ^= (*fpd) << 13;
         *fpd ^= (*fpd) >> 17;
         *fpd ^= (*fpd) << 5;
 
+        // Scale up so 0-1 is one bit of output format
         inputSample *= scaleFactor;
 
         bool cutbins = false;
         double drySample = inputSample;
+
+        // Subtract error from previous
         inputSample -= *noiseShaping;
 
+        // Isolate leading digit of number
         double benfordize = floor(inputSample);
         while (benfordize >= 1.0)
             benfordize /= 10;
         while (benfordize < 1.0 && benfordize > 0.0000001)
             benfordize *= 10;
 
-        // hotbin becomes the Benford bin value for this number floored
+        // Hotbin A becomes the Benford bin value for this number floored (leading digit)
         int hotbinA = floor(benfordize);
 
         double totalA = 0;
-        // produce total number- smaller is closer to Benford real
+        // produce total number- smaller of totalA & totalB is closer to Benford real
         if ((hotbinA > 0) && (hotbinA < 10))
         {
+            // Temp add weight to this leading digit
             *byn[hotbinA] += 1;
 
+            // Coeffs get permanently incremented later in the loop, eventually need
+            // to be scaled back down (cut bins).
             if (*byn[hotbinA] > 982)
                 cutbins = true;
+
             totalA += (301 - (*byn[1]));
             totalA += (176 - (*byn[2]));
             totalA += (125 - (*byn[3]));
@@ -160,12 +170,14 @@ namespace
             totalA += (58 - (*byn[7]));
             totalA += (51 - (*byn[8]));
             totalA += (46 - (*byn[9]));
+
+            // Remove temp weight from this leading digit
             *byn[hotbinA] -= 1;
         }
         else
-            hotbinA = 10;
+            hotbinA = 10; // 1000
 
-        // hotbin becomes the Benford bin value for this number ceiled
+        // Isolate leading digit of number
         benfordize = ceil(inputSample);
 
         while (benfordize >= 1.0)
@@ -173,15 +185,21 @@ namespace
         while (benfordize < 1.0 && benfordize > 0.0000001)
             benfordize *= 10;
 
+        // Hotbin B becomes the Benford bin value for this number ceiled
         int hotbinB = floor(benfordize);
 
         double totalB = 0;
-        // produce total number- smaller is closer to Benford real
+        // produce total number- smaller of totalA & totalB is closer to Benford real
         if ((hotbinB > 0) && (hotbinB < 10))
         {
+            // Temp add weight to this leading digit
             (*byn[hotbinB]) += 1;
+
+            // Coeffs get permanently incremented later in the loop, eventually need
+            // to be scaled back down (cut bins).
             if (*byn[hotbinB] > 982)
                 cutbins = true;
+
             totalB += (301 - (*byn[1]));
             totalB += (176 - (*byn[2]));
             totalB += (125 - (*byn[3]));
@@ -191,6 +209,8 @@ namespace
             totalB += (58 - (*byn[7]));
             totalB += (51 - (*byn[8]));
             totalB += (46 - (*byn[9]));
+
+            // Remove temp weight from this leading digit
             *byn[hotbinB] -= 1;
         }
         else
@@ -199,20 +219,25 @@ namespace
         double outputSample;
 
         // assign the relevant one to the delay line
-        // and floor/ceil signal accordingly
+        // and floor/ceil (quantize) signal accordingly
         if (totalA < totalB)
         {
+            // Add weight to relevant coeff
             (*byn[hotbinA]) += 1;
             outputSample = floor(inputSample);
         }
         else
         {
+            // Add weight to relevant coeff
             (*byn[hotbinB]) += 1;
+            // If totalB is less, we got here by using a sample that was
+            // previously ceil'd to create hotbin, so add one
             outputSample = floor(inputSample + 1);
         }
 
         if (cutbins)
         {
+            // Scale down coeffs (weights based on Benford's Law)
             (*byn[1]) *= 0.99;
             (*byn[2]) *= 0.99;
             (*byn[3]) *= 0.99;
@@ -234,16 +259,27 @@ namespace
         if (*noiseShaping < -fabs(inputSample))
             *noiseShaping = -fabs(inputSample);
 
-        outputSample /= scaleFactor;
+        // outputSample /= scaleFactor;
 
-        if (outputSample > 1.0)
-            outputSample = 1.0;
-        if (outputSample < -1.0)
-            outputSample = -1.0;
+        //// Maximum dither level
+        // if (outputSample > 1.0)
+        //     outputSample = 1.0;
+        // if (outputSample < -1.0)
+        //     outputSample = -1.0;
 
-        sample = inputSample + outputSample;
+        sample = outputSample / scaleFactor;
 
         return 0;
+    }
+
+    // TPDF dither
+    inline void tpdf(double &sample, double scaleFactor)
+    {
+        sample *= scaleFactor;
+        double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
+        double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
+        sample += (rand1 - rand2);
+        sample /= scaleFactor;
     }
 
     inline int myround(double x)
@@ -301,16 +337,6 @@ namespace
             ptr[2] = (word >> 16) & 0xFF;
         }
     }
-
-    // TPDF dither
-    inline void tpdf(double &sample, double scaleFactor)
-    {
-        sample *= scaleFactor;
-        double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-        double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-        sample += (rand1 - rand2);
-    }
-
 } // anonymous namespace
 
 int main(int argc, char *argv[])
@@ -325,7 +351,7 @@ int main(int argc, char *argv[])
                               {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), \n\tE (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
                               {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), or N (Not Just Another Dither) (default: T)", 1},
+                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, or 32 (to 1) (default: 8)", 1},
                               {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16 or 32)", 1}}};
 
@@ -448,6 +474,7 @@ int main(int argc, char *argv[])
             for (int s = 0; s < pcmBlockSize; ++s)
             {
                 double r = floatData[s];
+
                 if (ditherType == 'N' || ditherType == 'n')
                 {
                     if (njad(r, c, scaleFactor))
@@ -457,12 +484,15 @@ int main(int argc, char *argv[])
                 {
                     tpdf(r, scaleFactor);
                 }
-                else
+                else if (ditherType != 'X' && ditherType != 'x')
                 {
-                    cerr << "\nInvalid dither type!\n";
+                    cerr << "\nInvalid dither type!\n\n";
                     return 1;
                 }
+
+                r *= scaleFactor;
                 int smp = clip(-peakLevel, myround(r), peakLevel - 1);
+
                 write_intel(out, smp, bits);
                 out += channelsNum * bytespersample;
             }
