@@ -52,29 +52,39 @@ static const unsigned char bitreverse[] =
         0x07, 0x87, 0x47, 0xC7, 0x27, 0xA7, 0x67, 0xE7, 0x17, 0x97, 0x57, 0xD7, 0x37, 0xB7, 0x77, 0xF7,
         0x0F, 0x8F, 0x4F, 0xCF, 0x2F, 0xAF, 0x6F, 0xEF, 0x1F, 0x9F, 0x5F, 0xDF, 0x3F, 0xBF, 0x7F, 0xFF};
 
+/**
+ * @brief Pre-populate lookup table with filtered results of 8 bit DSD sequences
+ *
+ * @param ctx Conversion context
+ * @param htaps Filter Coeffs
+ * @param numCoeffs Number of Filter Coeffs
+ */
 static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs)
 {
     int t, dsdSeq, bit, k;
     double acc;
     int lsbf = ctx->lsbfirst;
 
+    // loop over each entry in the lookup table
     for (t = 0; t < ctx->numTables; ++t)
     {
+        // k = how many samples from the filter are spanned in this entry
         k = numCoeffs - t * 8;
+        // No more than 8 (1 bit) samples at a time
+        k = k > 8 ? 8 : k;
 
-        if (k > 8)
-            k = 8;
-
+        // loop over all possible 8bit dsd sequences (2^8 = 256)
         for (dsdSeq = 0; dsdSeq < 256; ++dsdSeq)
         {
             acc = 0.0;
+            // 1 (1bit) DSD sample through the filter at a time
             for (bit = 0; bit < k; ++bit)
             {
-                if (lsbf)
-                    acc += (((dsdSeq >> (bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
-                else
-                    acc += (((dsdSeq >> (7 - bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
+                acc += lsbf
+                           ? (((dsdSeq >> (bit)) & 1) * 2 - 1) * htaps[t * 8 + bit]
+                           : (((dsdSeq >> (7 - bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
             }
+            // Store filtered result in lookup table
             ctx->ctables[ctx->numTables - 1 - t][dsdSeq] = acc;
         }
     }
