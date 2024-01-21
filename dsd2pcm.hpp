@@ -70,13 +70,12 @@ public:
         return *this;
     }
 
-    void translate(size_t blockSize,
-                   const unsigned char *dsdData, ptrdiff_t dsdStride,
-                   bool lsbitfirst,
-                   double *floatData, ptrdiff_t floatStride, int decimation)
+    void translate(
+        size_t blockSize, const unsigned char *dsdData, ptrdiff_t dsdStride,
+        double *floatData, ptrdiff_t floatStride, int decimation)
     {
-        dsd2pcm_translate(handle, blockSize, dsdData, dsdStride,
-                          lsbitfirst, floatData, floatStride, decimation);
+        dsd2pcm_translate(handle, blockSize, dsdData, dsdStride, floatData,
+                          floatStride, decimation);
     }
 };
 

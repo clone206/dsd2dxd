@@ -52,10 +52,11 @@ static const unsigned char bitreverse[] =
         0x07, 0x87, 0x47, 0xC7, 0x27, 0xA7, 0x67, 0xE7, 0x17, 0x97, 0x57, 0xD7, 0x37, 0xB7, 0x77, 0xF7,
         0x0F, 0x8F, 0x4F, 0xCF, 0x2F, 0xAF, 0x6F, 0xEF, 0x1F, 0x9F, 0x5F, 0xDF, 0x3F, 0xBF, 0x7F, 0xFF};
 
-static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs, int lsbf)
+static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs)
 {
     int t, dsdSeq, bit, k;
     double acc;
+    int lsbf = ctx->lsbfirst;
 
     for (t = 0; t < ctx->numTables; ++t)
     {
@@ -199,7 +200,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
             ptr->ctables[i] = (double *)malloc(sizeof(double) * 256);
         }
 
-        precalc(ptr, htaps, numCoeffs, lsbf);
+        precalc(ptr, htaps, numCoeffs);
         dsd2pcm_reset(ptr);
     }
 
@@ -239,8 +240,8 @@ extern void dsd2pcm_reset(dsd2pcm_ctx *ptr)
 
 extern void dsd2pcm_translate(
     dsd2pcm_ctx *handle, size_t blockSize,
-    const unsigned char *dsdData, ptrdiff_t dsdStride,
-    int lsbf, double *floatData, ptrdiff_t floatStride, int decimation)
+    const unsigned char *dsdData, ptrdiff_t dsdStride, double *floatData,
+    ptrdiff_t floatStride, int decimation)
 {
     unsigned fifoPos, i, bite1, bite2;
     unsigned char *p;

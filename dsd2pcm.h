@@ -2178,14 +2178,14 @@ extern "C"
      * @param blockSize -- number of octets/samples to "translate"
      * @param dsdData -- pointer to first octet (input)
      * @param dsdStride -- src pointer increment
-     * @param lsbitfirst -- bitorder, 0=msb first, 1=lsbfirst
      * @param floatData -- pointer to first float (output)
      * @param floatStride -- dst pointer increment
      * @param decimation -- decimation ration (to 1)
      */
-    extern void dsd2pcm_translate(dsd2pcm_ctx *handle, size_t blockSize,
-                                  const unsigned char *dsdData, ptrdiff_t dsdStride, int lsbitfirst,
-                                  double *floatData, ptrdiff_t floatStride, int decimation);
+    extern void dsd2pcm_translate(
+        dsd2pcm_ctx *handle, size_t blockSize,
+        const unsigned char *dsdData, ptrdiff_t dsdStride,
+        double *floatData, ptrdiff_t floatStride, int decimation);
 
 #ifdef __cplusplus
 } /* extern "C" */

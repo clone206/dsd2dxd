@@ -136,7 +136,7 @@ namespace
         bool cutbins = false;
         double drySample = inputSample;
 
-        // Subtract error from previous
+        // Subtract error from previous iteration
         inputSample -= *noiseShaping;
 
         // Isolate leading digit of number
@@ -456,18 +456,14 @@ int main(int argc, char *argv[])
     char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
     char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
     int dsdStride = interleaved ? channelsNum : 1;
-    int dsdChanOffset = 1; // Default to one byte for interleaved
+    int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
 
     while (cin.read(dsdIn, blockSize * channelsNum))
     {
         for (int c = 0; c < channelsNum; ++c)
         {
-            if (!interleaved)
-            {
-                dsdChanOffset = blockSize;
-            }
             dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
-                              lsbitfirst, &floatData[0], 1, decimation);
+                              &floatData[0], 1, decimation);
 
             unsigned char *out = &pcmData[0] + c * bytespersample;
 
