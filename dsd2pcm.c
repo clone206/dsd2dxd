@@ -266,7 +266,8 @@ extern void dsd2pcm_translate(
             for (i = 0; i < numTables; ++i)
             {
                 bite1 = handle->fifo[(fifoPos - i) & FIFOMASK] & 0xFF;
-                bite2 = handle->fifo[(fifoPos - (numTables * 2 - 1) + i) & FIFOMASK] & 0xFF;
+                bite2 =
+                    handle->fifo[(fifoPos - (numTables * 2 - 1) + i) & FIFOMASK] & 0xFF;
                 acc += handle->ctables[i][bite1] + handle->ctables[i][bite2];
             }
 
