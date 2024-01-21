@@ -33,6 +33,8 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 # Example of piping output to ffmpeg to save to file
 # (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
 ./dsd2dxd -f P -e L -d N -r 16 -b 20 < infile.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a pcm_s24le outfile.wav
+# Using dsdextractor with a dsf file as input, 20 bit, 32:1 ratio, njad dither
+./dsdextractor input.dsf | ./dsd2dxd -d N -b 20 -r 32 | ffplay -f s24le -ar 88.2k -ac 2 -i -
 ```
 
 ## Testing Examples
@@ -47,12 +49,14 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
 
+See [dsdextractor](https://github.com/clone206/dsdextractor) repo for a tool that can read .dsf audio data to stdout as used in above usage example, for piping to dsd2dxd.
+
 You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it directly with the ./dsd2dxd command, with all default options.
 
 ## Options
 
 ```
-   -h, --help
+    -h, --help
         shows this help message
     -c, --channels
         Number of channels (default: 2)
@@ -69,7 +73,8 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither),
+        or X (no dither) (default: T)
     -r, --ratio
         Decimation ratio. 8, 16, or 32 (to 1) (default: 8)
     -i, --inrate
