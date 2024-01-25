@@ -107,8 +107,6 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
             {
                 switch (filtType)
                 {
-                case 'X':
-                case 'x':
                 case 'c':
                 case 'C':
                     numCoeffs = 125;
@@ -116,8 +114,6 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                     ptr->decimation = 16;
                     ptr->delay = 6;
                     break;
-                case 'D':
-                case 'd':
                 case 'e':
                 case 'E':
                     numCoeffs = 220;
@@ -133,8 +129,6 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
             {
                 switch (filtType)
                 {
-                case 'X':
-                case 'x':
                 case 'c':
                 case 'C':
                     numCoeffs = 750;
@@ -142,8 +136,6 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                     ptr->decimation = 32;
                     ptr->delay = 8;
                     break;
-                case 'D':
-                case 'd':
                 case 'e':
                 case 'E':
                     numCoeffs = 250;
@@ -259,6 +251,7 @@ extern void dsd2pcm_translate(
     unsigned int out = decimation / 8;
     fifoPos = handle->fifopos;
     int numTables = handle->numTables;
+    int tableSubt = numTables * 2 - 1;
 
     while (blockSize-- > 0)
     {
@@ -276,8 +269,7 @@ extern void dsd2pcm_translate(
             for (i = 0; i < numTables; ++i)
             {
                 bite1 = handle->fifo[(fifoPos - i) & FIFOMASK] & 0xFF;
-                bite2 =
-                    handle->fifo[(fifoPos - (numTables * 2 - 1) + i) & FIFOMASK] & 0xFF;
+                bite2 = handle->fifo[(fifoPos - tableSubt + i) & FIFOMASK] & 0xFF;
                 acc += handle->ctables[i][bite1] + handle->ctables[i][bite2];
             }
 

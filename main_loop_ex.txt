@@ -1,0 +1,66 @@
+// 750 Coeffs
+// Iteration 1 (fifoPos = 0)
+ 00000000
+-01011110 // 94 (numTables = [750+7] / 8)
+
+ 10100001 // negation of 94 (0 - 94 unsigned)
+&01111111 // fifo mask (127)
+
+=00100001 // 33 (resolved fifo index for pointer p, where bitreversed dsd sample is placed)
+
+	// Inner loop iteration 1 (table index i = 0)
+	 00000000 // bite1 fifo index = 0 (fifoPos - 0)
+
+	// Begin bite2 index
+	 00000000
+	-10111011 // 187 (numTables * 2 - 1)
+	
+	 01000100 // negation of 187
+	&01111111 // fifo mask (127)
+	
+	=01000100 // 68 (resolved fifo index for bite2 [silence])
+
+	// Inner loop iteration 2 (table index i = 1)
+	// Begin bite1 index
+	 00000000 // fifoPos
+	-00000001 // i = 1
+	
+	 11111110 // 254 (negation of 1)
+	&01111111 // fifo mask (127)
+	
+	=01111110 // 126 (index for bite1)
+
+	// Begin bite2 index
+	 00000000
+	-10111011 // 187 (numTables * 2 - 1)
+	
+	 01000100 // negation of 187
+	+00000001 // i = 1
+
+	 01000101
+	&01111111 // fifo mask (127)
+	
+	=01000101 // 69 (resolved fifo index for bite2 [silence])
+	...
+
+	// Inner loop iteration 94 (table index i = 93)
+	// Begin bite1 index
+	 00000000 // fifoPos
+	-01011101 // i = 93
+	
+	 10100010 // 162 (negation of 93)
+	&01111111 // fifo mask (127)
+	
+	=00100010 // 34 (resolved index for bite1)
+
+	// Begin bite2 index
+	 00000000
+	-10111011 // 187 (numTables * 2 - 1)
+	
+	 01000100 // negation of 187
+	+01011101 // i = 93
+
+	 10100001
+	&01111111 // fifo mask (127)
+	
+	=00100001 // 33 (resolved fifo index for bite2 [ends up being the bit-reversed value of the dsd sample])

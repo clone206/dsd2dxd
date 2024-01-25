@@ -48,13 +48,13 @@ public:
         : handle(dsd2pcm_init(filtType, lsbf, decimation, dsdRate))
     {
         if (!handle)
-            throw std::runtime_error("wtf?!");
+            throw std::runtime_error("Couldn't init. Check inputs.");
     }
 
     dxd(dxd const &x) : handle(dsd2pcm_clone(x.handle))
     {
         if (!handle)
-            throw std::runtime_error("wtf?!");
+            throw std::runtime_error("Couldn't clone. Check inputs.");
     }
 
     ~dxd() { dsd2pcm_destroy(handle); }

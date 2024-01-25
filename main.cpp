@@ -377,12 +377,12 @@ int main(int argc, char *argv[])
     int channelsNum = args["channels"].as<int>(2);
     char fmt = args["format"].as<string>("I").c_str()[0];
     int bits = args["bitdepth"].as<int>(24);
-    char filtType = args["filtertype"].as<string>("X").c_str()[0];
     char endianness = args["endianness"].as<string>("M").c_str()[0];
     int blockSize = args["blocksize"].as<int>(4096);
     char ditherType = args["dithertype"].as<string>("T").c_str()[0];
     int decimation = args["decimation"].as<int>(8);
     int dsdRate = args["inputrate"].as<int>(1);
+    char filtType = args["filtertype"].as<string>(dsdRate == 2 ? "C" : "X").c_str()[0];
 
     int lsbitfirst;
     int interleaved;
@@ -439,6 +439,7 @@ int main(int argc, char *argv[])
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
          << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
          << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
+         << "\nFilter type: " << filtType
          << "\nBit depth: " << bits
          << "\nDecimation: " << decimation
          << "\nPeak level: " << peakLevel
