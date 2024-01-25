@@ -64,6 +64,7 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs)
     int t, dsdSeq, bit, k;
     double acc;
     int lsbf = ctx->lsbfirst;
+    unsigned int tableIdx;
 
     // loop over each entry in the lookup table
     for (t = 0; t < ctx->numTables; ++t)
@@ -72,6 +73,9 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs)
         k = numCoeffs - t * 8;
         // No more than 8 (1 bit) samples at a time
         k = k > 8 ? 8 : k;
+
+        // Index of table array where we store the precalculated results
+        tableIdx = ctx->numTables - 1 - t; // Gets progressively smaller until zero
 
         // loop over all possible 8bit dsd sequences (2^8 = 256)
         for (dsdSeq = 0; dsdSeq < 256; ++dsdSeq)
@@ -85,7 +89,7 @@ static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs)
                            : (((dsdSeq >> (7 - bit)) & 1) * 2 - 1) * htaps[t * 8 + bit];
             }
             // Store filtered result in lookup table
-            ctx->ctables[ctx->numTables - 1 - t][dsdSeq] = acc;
+            ctx->ctables[tableIdx][dsdSeq] = acc;
         }
     }
 }

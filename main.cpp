@@ -122,6 +122,7 @@ namespace
             return 1;
         }
 
+        // Apply floating point dither if sample is low enough
         if (fabs(inputSample) < 1.18e-23)
             inputSample = *fpd * 1.18e-17;
 
