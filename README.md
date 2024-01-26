@@ -73,12 +73,11 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither),
-        or X (no dither) (default: T)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)
     -r, --ratio
-        Decimation ratio. 8, 16, or 32 (to 1) (default: 8)
+        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
     -i, --inrate
-        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16 or 32)
+        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, oe 64)
 ```
 
 ## Modified original info.txt
