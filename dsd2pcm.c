@@ -135,7 +135,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                 {
                 case 'c':
                 case 'C':
-                    numCoeffs = 750;
+                    numCoeffs = 300;
                     htaps = htaps_ddr_32to1_cheb;
                     ptr->decimation = 32;
                     ptr->delay = 8;
@@ -145,6 +145,21 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                     numCoeffs = 250;
                     htaps = htaps_ddr_32to1_eq;
                     ptr->decimation = 32;
+                    ptr->delay = 8;
+                    break;
+                default:
+                    err = 1;
+                }
+            }
+            else if (decimation == 64)
+            {
+                switch (filtType)
+                {
+                case 'c':
+                case 'C':
+                    numCoeffs = 700;
+                    htaps = htaps_ddr_64to1_cheb;
+                    ptr->decimation = 64;
                     ptr->delay = 8;
                     break;
                 default:

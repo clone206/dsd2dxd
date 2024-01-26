@@ -50,8 +50,6 @@ namespace
     int lastSampsClippedHigh = 0;
 
     // Output/dither vars
-    uint32_t fpd_l = 1.0;   // FP Dither L
-    uint32_t fpd_r = 1.0;   // FP Dither R
     double noise_shaping_l; // Noise shape state L
     double noise_shaping_r; // Noise shape state R
     double byn_l[13];       // Delay line L
@@ -60,15 +58,7 @@ namespace
     // Initialize outputs/dither state
     inline void init_outputs()
     {
-        while (fpd_l < 16386)
-            fpd_l = rand() * UINT32_MAX;
-        while (fpd_r < 16386)
-            fpd_r = rand() * UINT32_MAX;
-
-        noise_shaping_l = 0.0;
-        noise_shaping_r = 0.0;
-
-        // Weight coeffs based on Benford's law. Smaller leading digits more likely.
+        // Weights based on Benford's law. Smaller leading digits more likely.
         byn_l[0] = 1000;
         byn_l[1] = 301;
         byn_l[2] = 176;
@@ -97,22 +87,19 @@ namespace
     // Not Just Another Dither
     // Not truly random. Uses Benford Real Numbers for the dither values
     // Part of Airwindows plugin suite
-    inline int njad(double &sample, int chanNum, float scaleFactor)
+    inline int njad(double &sample, int chanNum, double scaleFactor)
     {
         double inputSample = sample;
-        uint32_t *fpd;
         double *noiseShaping;
         double(*byn)[13];
 
         if (chanNum == 0)
         {
-            fpd = &fpd_l;
             noiseShaping = &noise_shaping_l;
             byn = &byn_l;
         }
         else if (chanNum == 1)
         {
-            fpd = &fpd_r;
             noiseShaping = &noise_shaping_r;
             byn = &byn_r;
         }
@@ -121,15 +108,6 @@ namespace
             cerr << "njad only supports a maximum of 2 channels!";
             return 1;
         }
-
-        // Apply floating point dither if sample is low enough
-        if (fabs(inputSample) < 1.18e-23)
-            inputSample = *fpd * 1.18e-17;
-
-        // Randomize floating point dither
-        *fpd ^= (*fpd) << 13;
-        *fpd ^= (*fpd) >> 17;
-        *fpd ^= (*fpd) << 5;
 
         // Scale up so 0-1 is one bit of output format
         inputSample *= scaleFactor;
@@ -260,14 +238,6 @@ namespace
         if (*noiseShaping < -fabs(inputSample))
             *noiseShaping = -fabs(inputSample);
 
-        // outputSample /= scaleFactor;
-
-        //// Maximum dither level
-        // if (outputSample > 1.0)
-        //     outputSample = 1.0;
-        // if (outputSample < -1.0)
-        //     outputSample = -1.0;
-
         sample = outputSample / scaleFactor;
 
         return 0;
@@ -353,7 +323,7 @@ int main(int argc, char *argv[])
                               {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
                               {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)", 1},
-                              {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, or 32 (to 1) (default: 8)", 1},
+                              {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                               {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. Only available with Decimation ratio of 16 or 32)", 1}}};
 
     argagg::parser_results args;
@@ -422,9 +392,19 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (dsdRate == 2 && decimation != 16 && decimation != 32)
+    if (dsdRate != 1 && dsdRate != 2)
     {
-        cerr << "\nOnly decimation value of 16 or 32 allowed with dsd128 input.\n";
+        cerr << "Unsupported DSD input rate.\n";
+        return 1;
+    }
+    else if (dsdRate == 2 && decimation != 16 && decimation != 32 && decimation != 64)
+    {
+        cerr << "\nOnly decimation value of 16, 32, or 64 allowed with dsd128 input.\n";
+        return 1;
+    }
+    else if (dsdRate == 1 && decimation != 8 && decimation != 16 && decimation != 32)
+    {
+        cerr << "\nOnly decimation value of 8, 16, or 32 allowed with dsd64 input.\n";
         return 1;
     }
 
