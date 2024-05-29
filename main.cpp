@@ -308,6 +308,14 @@ namespace
             ptr[2] = (word >> 16) & 0xFF;
         }
     }
+
+    inline void write_float(unsigned char *ptr, double sample)
+    {
+        float word = (float)sample;
+
+        memcpy(ptr, &word, 4);
+    }
+    
 } // anonymous namespace
 
 int main(int argc, char *argv[])
@@ -318,7 +326,7 @@ int main(int argc, char *argv[])
                                {"-f", "--fmt"},
                                "I (interleaved) or P (planar) (DSD stream option) (default: I)",
                                1},
-                              {"bitdepth", {"-b", "--bitdepth"}, "16, 20, or 24 (intel byte order, output option) (default: 24)", 1},
+                              {"bitdepth", {"-b", "--bitdepth"}, "16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)", 1},
                               {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), \n\tE (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
                               {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
@@ -386,7 +394,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (bits != 16 && bits != 20 && bits != 24)
+    if (bits != 16 && bits != 20 && bits != 24 && bits != 32)
     {
         cerr << "\nUnsupported bit depth\n";
         return 1;
@@ -414,7 +422,12 @@ int main(int argc, char *argv[])
     vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation, dsdRate));
 
     int bytespersample = bits == 20 ? 3 : bits / 8;
-    double scaleFactor = pow(2.0, (bits - 1));
+    double scaleFactor = 1.0;
+
+    if (bits != 32) {
+        scaleFactor = pow(2.0, (bits - 1));
+    }
+
     int peakLevel = (int)floor(scaleFactor);
 
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
@@ -469,9 +482,17 @@ int main(int argc, char *argv[])
                 }
 
                 r *= scaleFactor;
-                int smp = clip(-peakLevel, myround(r), peakLevel - 1);
 
-                write_intel(out, smp, bits);
+                if (bits == 32) {
+                    write_float(out, r);
+                }
+                else
+                {
+                    int smp = clip(-peakLevel, myround(r), peakLevel - 1);
+
+                    write_intel(out, smp, bits);
+                }
+
                 out += channelsNum * bytespersample;
             }
         }
