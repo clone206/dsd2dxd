@@ -45,6 +45,9 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 # Compile code; convert and play stereo, planar/LSB-first, 16bit, test file
 ./build_test_stereo.sh P 16 L 1kHz_stereo_p.dsd
+
+# Compile code; convert and play stereo, planar/LSB-first, 32bit float, test file
+./build_test_stereo_flt.sh P L 1kHz_stereo_p.dsd
 ```
 
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
@@ -63,7 +66,7 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -f, --fmt
         I (interleaved) or P (planar) (DSD stream option) (default: I)
     -b, --bitdepth
-        16, 20, or 24 (intel byte order, output option) (default: 24)
+        16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
     -t, --filttype
         X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio),
         E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
@@ -78,6 +81,8 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
         Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
     -i, --inrate
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, oe 64)
+    -o --output
+        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to "outfile.wav" in current directory)
 ```
 
 ## Modified original info.txt
@@ -111,7 +116,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -std=c++11 -O3 -o dsd2dxd
+  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p

@@ -40,8 +40,11 @@ or implied, of Sebastian Gesemann.
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
+#include "AudioFile.h"
 
 using namespace std;
+
+#define DSD_64_RATE 2822400
 
 namespace
 {
@@ -332,7 +335,8 @@ int main(int argc, char *argv[])
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
                               {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
-                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, oe 64)", 1}}};
+                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, oe 64)", 1},
+                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S)", 1}}};
 
     argagg::parser_results args;
     try
@@ -362,6 +366,7 @@ int main(int argc, char *argv[])
     int decimation = args["decimation"].as<int>(8);
     int dsdRate = args["inputrate"].as<int>(1);
     char filtType = args["filtertype"].as<string>(dsdRate == 2 ? "C" : "X").c_str()[0];
+    char output = args["output"].as<string>("S").c_str()[0];
 
     int lsbitfirst;
     int interleaved;
@@ -430,11 +435,14 @@ int main(int argc, char *argv[])
 
     int peakLevel = (int)floor(scaleFactor);
 
+    int outRate = DSD_64_RATE * dsdRate / decimation;
+
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
          << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
          << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
          << "\nFilter type: " << filtType
          << "\nBit depth: " << bits
+         << "\nOutput Rate: " << outRate
          << "\nDecimation: " << decimation
          << "\nPeak level: " << peakLevel
          << "\nChannels: " << channelsNum << "\n\n";
@@ -452,6 +460,14 @@ int main(int argc, char *argv[])
     char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
     int dsdStride = interleaved ? channelsNum : 1;
     int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
+    int outBlockSize = pcmBlockSize * channelsNum * bytespersample;
+    AudioFile<float> a;
+
+    if (bits == 32 && output != 'S' && output != 's') {
+        a.setNumChannels(channelsNum);
+        a.setBitDepth(bits);
+        a.setSampleRate(outRate);
+    }
 
     while (cin.read(dsdIn, blockSize * channelsNum))
     {
@@ -483,8 +499,13 @@ int main(int argc, char *argv[])
 
                 r *= scaleFactor;
 
-                if (bits == 32) {
-                    write_float(out, r);
+                if (bits == 32) 
+                {
+                    if (output == 's' || output == 'S') {
+                        write_float(out, r);
+                    } else {
+                        a.samples[c].push_back((float)r);
+                    }
                 }
                 else
                 {
@@ -496,12 +517,21 @@ int main(int argc, char *argv[])
                 out += channelsNum * bytespersample;
             }
         }
-        cout.write(pcmOut, pcmBlockSize * channelsNum * bytespersample);
+
+        if (output == 'S' || output == 's') 
+        {
+            cout.write(pcmOut, outBlockSize);
+        }
     }
 
     if (clips)
     {
         cerr << "Clipped " << clips << " times.\n";
+    }
+
+    if (bits == 32 && output != 'S' && output != 's') {
+        a.save("outfile.wav", AudioFileFormat::Wave);
+        a.printSummary();
     }
 
     return 0;
