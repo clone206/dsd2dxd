@@ -17,7 +17,7 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 
 ### Compling
 
-`g++ *.c *.cpp -std=c++11 -O3 -o dsd2dxd`
+`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd`
 
 ### Running
 
