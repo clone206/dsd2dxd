@@ -535,7 +535,7 @@ int main(int argc, char *argv[])
         cerr << "Clipped " << clips << " times.\n";
     }
 
-    if (output != 'S' && output != 's')
+    if (bits == 32 && output != 'S' && output != 's')
     {
         a.save("outfile.wav", AudioFileFormat::Wave);
         a.printSummary();
