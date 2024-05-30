@@ -318,7 +318,7 @@ namespace
 
         memcpy(ptr, &word, 4);
     }
-    
+
 } // anonymous namespace
 
 int main(int argc, char *argv[])
@@ -335,8 +335,8 @@ int main(int argc, char *argv[])
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
                               {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
-                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, oe 64)", 1},
-                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S)", 1}}};
+                              {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
+                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W  only supports 32 bit float, and outputs to outfile.wav in current directory)", 1}}};
 
     argagg::parser_results args;
     try
@@ -425,16 +425,15 @@ int main(int argc, char *argv[])
     srand(static_cast<unsigned>(time(0)));
 
     vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation, dsdRate));
-
     int bytespersample = bits == 20 ? 3 : bits / 8;
     double scaleFactor = 1.0;
 
-    if (bits != 32) {
+    if (bits != 32)
+    {
         scaleFactor = pow(2.0, (bits - 1));
     }
 
     int peakLevel = (int)floor(scaleFactor);
-
     int outRate = DSD_64_RATE * dsdRate / decimation;
 
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
@@ -447,7 +446,7 @@ int main(int argc, char *argv[])
          << "\nPeak level: " << peakLevel
          << "\nChannels: " << channelsNum << "\n\n";
 
-    if (ditherType == 'N')
+    if (ditherType == 'N' || ditherType == 'n')
     {
         init_outputs();
     }
@@ -463,7 +462,8 @@ int main(int argc, char *argv[])
     int outBlockSize = pcmBlockSize * channelsNum * bytespersample;
     AudioFile<float> a;
 
-    if (bits == 32 && output != 'S' && output != 's') {
+    if (bits == 32 && output != 'S' && output != 's')
+    {
         a.setNumChannels(channelsNum);
         a.setBitDepth(bits);
         a.setSampleRate(outRate);
@@ -499,11 +499,14 @@ int main(int argc, char *argv[])
 
                 r *= scaleFactor;
 
-                if (bits == 32) 
+                if (bits == 32)
                 {
-                    if (output == 's' || output == 'S') {
+                    if (output == 's' || output == 'S')
+                    {
                         write_float(out, r);
-                    } else {
+                    }
+                    else
+                    {
                         a.samples[c].push_back((float)r);
                     }
                 }
@@ -514,11 +517,14 @@ int main(int argc, char *argv[])
                     write_intel(out, smp, bits);
                 }
 
-                out += channelsNum * bytespersample;
+                if (output == 's' || output == 'S')
+                {
+                    out += channelsNum * bytespersample;
+                }
             }
         }
 
-        if (output == 'S' || output == 's') 
+        if (output == 'S' || output == 's')
         {
             cout.write(pcmOut, outBlockSize);
         }
@@ -529,7 +535,8 @@ int main(int argc, char *argv[])
         cerr << "Clipped " << clips << " times.\n";
     }
 
-    if (bits == 32 && output != 'S' && output != 's') {
+    if (output != 'S' && output != 's')
+    {
         a.save("outfile.wav", AudioFileFormat::Wave);
         a.printSummary();
     }

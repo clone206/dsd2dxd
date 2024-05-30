@@ -80,9 +80,9 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -r, --ratio
         Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
     -i, --inrate
-        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, oe 64)
+        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)
     -o --output
-        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to "outfile.wav" in current directory)
+        Output type. S (stdout), or W (wave) (default: S. Note that W  only supports 32 bit float, and outputs to "outfile.wav" in current directory)
 ```
 
 ## Modified original info.txt
