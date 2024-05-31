@@ -68,7 +68,7 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -b, --bitdepth
         16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
     -t, --filttype
-        X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio),
+        X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), 
         E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
         (default: X [single rate] or C [double rate])
     -e, --endianness
@@ -76,13 +76,13 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: T)
     -r, --ratio
         Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
     -i, --inrate
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)
-    -o --output
-        Output type. S (stdout), or W (wave) (default: S. Note that W  only supports 32 bit float, and outputs to "outfile.wav" in current directory)
+    -o, --output
+        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)
 ```
 
 ## Modified original info.txt

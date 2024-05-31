@@ -57,6 +57,7 @@ namespace
     double noise_shaping_r; // Noise shape state R
     double byn_l[13];       // Delay line L
     double byn_r[13];       // Delay line R;
+    uint32_t fpd;           // Floating-point dither
 
     // Initialize outputs/dither state
     inline void init_outputs()
@@ -85,6 +86,26 @@ namespace
         byn_r[8] = 51;
         byn_r[9] = 46;
         byn_r[10] = 1000;
+    }
+
+    inline void init_rand() {
+        fpd = 1.0; while (fpd < 16386) fpd = rand()*UINT32_MAX;
+    }
+
+    // Floating point dither for going from double to float
+    // Part of Airwindows plugin suite
+    inline void fpdither(double &sample) {
+        double inputSample = sample;
+
+        //begin stereo 32 bit floating point dither
+		int expon; frexpf((float)inputSample, &expon);
+		fpd ^= fpd<<13; fpd ^= fpd>>17; fpd ^= fpd<<5;
+		inputSample += (fpd*3.4e-36l*pow(2,expon+62));	//remove 'blend' for real use, it's for the demo;	
+		//end stereo 32 bit floating point dither
+
+        inputSample = (float)inputSample; //equivalent of 'floor' for 32 bit floating point
+
+        sample = inputSample;
     }
 
     // Not Just Another Dither
@@ -316,7 +337,7 @@ namespace
     {
         float word = (float)sample;
 
-        memcpy(ptr, &word, 4);
+        memcpy(ptr, &word, sizeof(float));
     }
 
 } // anonymous namespace
@@ -333,10 +354,10 @@ int main(int argc, char *argv[])
                               {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), \n\tE (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
                               {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), or X (no dither) (default: T)", 1},
+                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: T)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                               {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
-                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W  only supports 32 bit float, and outputs to outfile.wav in current directory)", 1}}};
+                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)", 1}}};
 
     argagg::parser_results args;
     try
@@ -438,7 +459,7 @@ int main(int argc, char *argv[])
 
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
          << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
-         << "\nDither type: " << (ditherType == 'N' ? "NJAD" : "TPDF")
+         << "\nDither type: " << ditherType
          << "\nFilter type: " << filtType
          << "\nBit depth: " << bits
          << "\nOutput Rate: " << outRate
@@ -450,6 +471,10 @@ int main(int argc, char *argv[])
     {
         init_outputs();
     }
+    else if (ditherType == 'F' || ditherType == 'f')
+    {
+        init_rand();
+    }
 
     int pcmBlockSize = blockSize / (decimation / 8);
     vector<unsigned char> dsdData(blockSize * channelsNum);
@@ -460,13 +485,22 @@ int main(int argc, char *argv[])
     int dsdStride = interleaved ? channelsNum : 1;
     int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
     int outBlockSize = pcmBlockSize * channelsNum * bytespersample;
-    AudioFile<float> a;
+    AudioFile<float> aFileFloat;
+    AudioFile<int> aFileInt;
 
-    if (bits == 32 && output != 'S' && output != 's')
-    {
-        a.setNumChannels(channelsNum);
-        a.setBitDepth(bits);
-        a.setSampleRate(outRate);
+    if (output != 'S' && output != 's') {
+        if (bits == 32)
+        {
+            aFileFloat.setNumChannels(channelsNum);
+            aFileFloat.setBitDepth(bits);
+            aFileFloat.setSampleRate(outRate);
+        }
+        else
+        {
+            aFileInt.setNumChannels(channelsNum);
+            aFileInt.setBitDepth(bits);
+            aFileInt.setSampleRate(outRate);
+        }
     }
 
     while (cin.read(dsdIn, blockSize * channelsNum))
@@ -491,6 +525,10 @@ int main(int argc, char *argv[])
                 {
                     tpdf(r, scaleFactor);
                 }
+                else if (ditherType == 'F' || ditherType == 'f')
+                {
+                    fpdither(r);
+                }
                 else if (ditherType != 'X' && ditherType != 'x')
                 {
                     cerr << "\nInvalid dither type!\n\n";
@@ -499,27 +537,31 @@ int main(int argc, char *argv[])
 
                 r *= scaleFactor;
 
-                if (bits == 32)
+                if (output == 's' || output == 'S')
                 {
-                    if (output == 's' || output == 'S')
+                    if (bits == 32)
                     {
                         write_float(out, r);
                     }
                     else
                     {
-                        a.samples[c].push_back((float)r);
+                        int smp = clip(-peakLevel, myround(r), peakLevel - 1);
+                        write_intel(out, smp, bits);
                     }
+
+                    out += channelsNum * bytespersample;
                 }
                 else
                 {
-                    int smp = clip(-peakLevel, myround(r), peakLevel - 1);
-
-                    write_intel(out, smp, bits);
-                }
-
-                if (output == 's' || output == 'S')
-                {
-                    out += channelsNum * bytespersample;
+                    if (bits == 32)
+                    {
+                        aFileFloat.samples[c].push_back((float)r);
+                    }
+                    else
+                    {
+                        aFileInt.samples[c]
+                            .push_back(clip(-peakLevel, myround(r), peakLevel - 1));
+                    }
                 }
             }
         }
@@ -535,10 +577,17 @@ int main(int argc, char *argv[])
         cerr << "Clipped " << clips << " times.\n";
     }
 
-    if (bits == 32 && output != 'S' && output != 's')
+    if (output != 'S' && output != 's')
     {
-        a.save("outfile.wav", AudioFileFormat::Wave);
-        a.printSummary();
+        if (bits == 32) {
+            aFileFloat.save("outfile.wav", AudioFileFormat::Wave);
+            aFileFloat.printSummary();
+        }
+        else
+        {
+            aFileInt.save("outfile.wav", AudioFileFormat::Wave);
+            aFileInt.printSummary();
+        }
     }
 
     return 0;
