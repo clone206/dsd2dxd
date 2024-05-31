@@ -2,9 +2,9 @@
 
 Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/)
 
-Added shell scripts to build and test with 1kHz test tone files.
+Added many enhancements, and shell scripts to build and test with 1kHz test tone files.
 
-Handles planar format as well. Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
+Handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
 ## Dependencies
 
@@ -40,14 +40,14 @@ Handles planar format as well. Assumes block size (per channel) of 4096 bytes fo
 ## Testing Examples
 
 ```bash
-# Compile code; convert and play mono, planar/LSB-first, 24bit, test file
-./build_test_mono.sh P 24 L 1kHz_mono_p.dsd
+# Compile code; convert and play mono, planar/LSB-first, 24bit, test file w 4dB boost
+./build_test_mono.sh P 24 L 4 1kHz_mono_p.dsd
 
-# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file
-./build_test_stereo.sh P 16 L 1kHz_stereo_p.dsd
+# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file w 4dB cut
+./build_test_stereo.sh P 16 L -4 1kHz_stereo_p.dsd
 
-# Compile code; convert and play stereo, planar/LSB-first, 32bit float, test file
-./build_test_stereo_flt.sh P L 1kHz_stereo_p.dsd
+# Compile code; convert and play stereo, planar/LSB-first, 32bit float, test file with no volume adj
+./build_test_stereo_flt.sh P L 0 1kHz_stereo_p.dsd
 ```
 
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
@@ -83,6 +83,9 @@ You can also strip off the metadata at the beginning of any dff file in a hex ed
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)
     -o, --output
         Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)
+    -v, --volume
+        Volume adjustment in dB. If a negative number is needed (volume cut),
+        use the --volume= format. (default: 0).
 ```
 
 ## Modified original info.txt

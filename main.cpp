@@ -357,7 +357,8 @@ int main(int argc, char *argv[])
                               {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: T)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                               {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
-                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)", 1}}};
+                              {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)", 1},
+                              {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).", 1}}};
 
     argagg::parser_results args;
     try
@@ -388,6 +389,7 @@ int main(int argc, char *argv[])
     int dsdRate = args["inputrate"].as<int>(1);
     char filtType = args["filtertype"].as<string>(dsdRate == 2 ? "C" : "X").c_str()[0];
     char output = args["output"].as<string>("S").c_str()[0];
+    double volAdj = args["volume"].as<double>(0.0);
 
     int lsbitfirst;
     int interleaved;
@@ -448,6 +450,7 @@ int main(int argc, char *argv[])
     vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation, dsdRate));
     int bytespersample = bits == 20 ? 3 : bits / 8;
     double scaleFactor = 1.0;
+    double volScale = pow(10.0,volAdj/20);
 
     if (bits != 32)
     {
@@ -455,6 +458,7 @@ int main(int argc, char *argv[])
     }
 
     int peakLevel = (int)floor(scaleFactor);
+    scaleFactor *= volScale;
     int outRate = DSD_64_RATE * dsdRate / decimation;
 
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
@@ -516,6 +520,7 @@ int main(int argc, char *argv[])
             {
                 double r = floatData[s];
 
+                // Dither (scaled up and down within functions)
                 if (ditherType == 'N' || ditherType == 'n')
                 {
                     if (njad(r, c, scaleFactor))
@@ -535,6 +540,7 @@ int main(int argc, char *argv[])
                     return 1;
                 }
 
+                // Scale based on destination bit depth/vol adjustment
                 r *= scaleFactor;
 
                 if (output == 's' || output == 'S')
