@@ -1,8 +1,14 @@
 # dsd2dxd
 
-Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/)
+Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from dsf2flac, XLD, and Airwindows.
 
-Added many enhancements, and shell scripts to build and test with 1kHz test tone files.
+Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to a wav file.
+
+Many of the decimation filters were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality. Some of the filters were copied over from XLD, and the original dsd2pcm filter is an option as well.
+
+For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters. For a more "correct" sound, try the equiripple filters, especially if going from dsd128 to 176.4 kHz. If you like the sound of XLD then feel free to use those filters here, but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material.
+
+There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
 Handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
@@ -33,8 +39,10 @@ Handles either planar format DSD (as found in .dsf files), or interleaved format
 # Example of piping output to ffmpeg to save to file
 # (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
 ./dsd2dxd -f P -e L -d N -r 16 -b 20 < infile.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a pcm_s24le outfile.wav
-# Using dsdextractor with a dsf file as input, 20 bit, 32:1 ratio, njad dither
+# Using dsdextractor with a dsf file as input, 20 bit, 32:1 ratio, njad dither (see below explanation of dsdextractor)
 ./dsdextractor input.dsf | ./dsd2dxd -d N -b 20 -r 32 | ffplay -f s24le -ar 88.2k -ac 2 -i -
+# Using dsdunpack with a dff file as input, outputting to wav file with all other options set to default (see below explanation of dsdunpack)
+./dsdunpack -o -v input.dff | ./dsd2dxd -o W
 ```
 
 ## Testing Examples
@@ -54,7 +62,9 @@ Handles either planar format DSD (as found in .dsf files), or interleaved format
 
 See [dsdextractor](https://github.com/clone206/dsdextractor) repo for a tool that can read .dsf audio data to stdout as used in above usage example, for piping to dsd2dxd.
 
-You can also strip off the metadata at the beginning of any dff file in a hex editor, and use it directly with the ./dsd2dxd command, with all default options.
+See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can read .dff autio data to stdout as used in above usage example, for piping to dsd2dxd. This tool can also be used with .dsf files but there is currently an issue with pops at the end of the audio, which can be easily removed if you're loading the resulting PCM audio into an editor or DAW.
+
+Both of these tools need to be compiled separately and their binaries can then be copied into your current working directory.
 
 ## Options
 
