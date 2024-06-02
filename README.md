@@ -60,7 +60,7 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can read .dff autio data to stdout as used in above usage example, for piping to dsd2dxd. That tool can also be used with .dsf files but there is currently an issue with pops at the end of the audio on certain unpacked dsf files, which can be easily removed if you're loading the resulting PCM audio into an editor or DAW. This may be related to metadata appearing after the audio that is unhandled by dsdunpack.
 
-Both of these tools need to be compiled separately and their binaries can then be copied into your current working directory.
+`dsdunpack` needs to be compiled separately and its binary can then be copied into your current working directory.
 
 ## Options
 
