@@ -10,7 +10,7 @@ For a natural sound with slight rolloff but good time-domain performance, try th
 
 There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
-Thia tool handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
+`dsd2dxd` handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
 ## Dependencies
 
