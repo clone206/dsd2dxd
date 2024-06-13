@@ -354,7 +354,7 @@ int main(int argc, char *argv[])
                               {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), \n\tE (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
                               {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                               {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
-                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: T)", 1},
+                              {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)", 1},
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                               {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
                               {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)", 1},
@@ -384,7 +384,7 @@ int main(int argc, char *argv[])
     int bits = args["bitdepth"].as<int>(24);
     char endianness = args["endianness"].as<string>("M").c_str()[0];
     int blockSize = args["blocksize"].as<int>(4096);
-    char ditherType = args["dithertype"].as<string>("T").c_str()[0];
+    char ditherType = args["dithertype"].as<string>(bits == 32 ? "F" : "T").c_str()[0];
     int decimation = args["decimation"].as<int>(8);
     int dsdRate = args["inputrate"].as<int>(1);
     char filtType = args["filtertype"].as<string>(dsdRate == 2 ? "C" : "X").c_str()[0];
@@ -561,7 +561,7 @@ int main(int argc, char *argv[])
                 {
                     if (bits == 32)
                     {
-                        aFileFloat.samples[c].push_back((float)r);
+                        aFileFloat.samples[c].push_back(r);
                     }
                     else
                     {
