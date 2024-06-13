@@ -82,7 +82,7 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: T)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F if 32 bit, T otherwise)
     -r, --ratio
         Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
     -i, --inrate
