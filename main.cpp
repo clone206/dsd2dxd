@@ -81,30 +81,23 @@ namespace
                 if (outBits == 32)
                 {
                     aFile<float> = AudioFile<float>();
+                    setFileParams<float>();
                 }
                 else
                 {
                     aFile<int> = AudioFile<int>();
+                    setFileParams<int>();
                 }
 
-                setFileParams();
             }
         }
 
+        template <typename ST>
         void setFileParams()
         {
-            if (bits == 32)
-            {
-                aFile<float>.setNumChannels(channelsNum);
-                aFile<float>.setBitDepth(bits);
-                aFile<float>.setSampleRate(rate);
-            }
-            else
-            {
-                aFile<int>.setNumChannels(channelsNum);
-                aFile<int>.setBitDepth(bits);
-                aFile<int>.setSampleRate(rate);
-            }
+            aFile<ST>.setNumChannels(channelsNum);
+            aFile<ST>.setBitDepth(bits);
+            aFile<ST>.setSampleRate(rate);
         }
 
         void saveAndPrintFile(string fileName)
