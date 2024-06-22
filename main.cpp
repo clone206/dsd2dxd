@@ -61,24 +61,33 @@ namespace
 
     struct OutputContext
     {
-        AudioFile<float> aFileFloat;
-        AudioFile<int> aFileInt;
         int bits;
         int channelsNum;
         int rate;
+        char output;
 
-        OutputContext(int outBits, int outChansNum, int outRate)
+        template <typename T>
+        static AudioFile<T> aFile;
+
+        OutputContext(int outBits, int outChansNum, int outRate, char outType)
         {
             bits = outBits;
             channelsNum = outChansNum;
             rate = outRate;
-            if (outBits == 32)
+            output = outType;
+
+            if (output != 'S' && output != 's')
             {
-                aFileFloat = AudioFile<float>();
-            }
-            else
-            {
-                aFileInt = AudioFile<int>();
+                if (outBits == 32)
+                {
+                    aFile<float> = AudioFile<float>();
+                }
+                else
+                {
+                    aFile<int> = AudioFile<int>();
+                }
+
+                setFileParams();
             }
         }
 
@@ -86,45 +95,41 @@ namespace
         {
             if (bits == 32)
             {
-                aFileFloat.setNumChannels(channelsNum);
-                aFileFloat.setBitDepth(bits);
-                aFileFloat.setSampleRate(rate);
+                aFile<float>.setNumChannels(channelsNum);
+                aFile<float>.setBitDepth(bits);
+                aFile<float>.setSampleRate(rate);
             }
             else
             {
-                aFileInt.setNumChannels(channelsNum);
-                aFileInt.setBitDepth(bits);
-                aFileInt.setSampleRate(rate);
+                aFile<int>.setNumChannels(channelsNum);
+                aFile<int>.setBitDepth(bits);
+                aFile<int>.setSampleRate(rate);
             }
         }
 
-        void saveAndPrint(string fileName)
+        void saveAndPrintFile(string fileName)
         {
             if (bits == 32)
             {
-                aFileFloat.save(fileName, AudioFileFormat::Wave);
-                aFileFloat.printSummary();
+                aFile<float>.save(fileName, AudioFileFormat::Wave);
+                aFile<float>.printSummary();
             }
             else
             {
-                aFileInt.save(fileName, AudioFileFormat::Wave);
-                aFileInt.printSummary();
-            }
-        }
-
-        template <typename ST>
-        inline void pushSamp(ST samp, int c)
-        {
-            if (bits == 32)
-            {
-                aFileFloat.samples[c].push_back(samp);
-            }
-            else
-            {
-                aFileInt.samples[c].push_back(samp);
+                aFile<int>.save(fileName, AudioFileFormat::Wave);
+                aFile<int>.printSummary();
             }
         }
     };
+
+    template <typename T>
+    AudioFile<T> OutputContext::aFile = {};
+
+    template <typename ST>
+    inline void pushSamp(ST samp, int c)
+    {
+        OutputContext::aFile<ST>.samples[c].push_back(samp);
+    }
 
     // Initialize outputs/dither state
     inline void init_outputs()
@@ -535,15 +540,17 @@ int main(int argc, char *argv[])
     scaleFactor *= volScale;
     int outRate = DSD_64_RATE * dsdRate / decimation;
 
+    OutputContext outCtx(bits, channelsNum, outRate, output);
+
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
          << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
          << "\nDither type: " << ditherType
          << "\nFilter type: " << filtType
-         << "\nBit depth: " << bits
-         << "\nOutput Rate: " << outRate
+         << "\nBit depth: " << outCtx.bits
+         << "\nOutput Rate: " << outCtx.rate
          << "\nDecimation: " << decimation
          << "\nPeak level: " << peakLevel
-         << "\nChannels: " << channelsNum << "\n\n";
+         << "\nChannels: " << outCtx.channelsNum << "\n\n";
 
     if (ditherType == 'N' || ditherType == 'n')
     {
@@ -560,19 +567,13 @@ int main(int argc, char *argv[])
     vector<unsigned char> pcmData(pcmBlockSize * channelsNum * bytespersample);
     char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
     char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
-    int dsdStride = interleaved ? channelsNum : 1;
+    int dsdStride = interleaved ? outCtx.channelsNum : 1;
     int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
-    int outBlockSize = pcmBlockSize * channelsNum * bytespersample;
-    OutputContext outCtx(bits, channelsNum, outRate);
+    int outBlockSize = pcmBlockSize * outCtx.channelsNum * bytespersample;
 
-    if (output != 'S' && output != 's')
+    while (cin.read(dsdIn, blockSize * outCtx.channelsNum))
     {
-        outCtx.setFileParams();
-    }
-
-    while (cin.read(dsdIn, blockSize * channelsNum))
-    {
-        for (int c = 0; c < channelsNum; ++c)
+        for (int c = 0; c < outCtx.channelsNum; ++c)
         {
             dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
                               &floatData[0], 1, decimation);
@@ -606,9 +607,9 @@ int main(int argc, char *argv[])
                 // Scale based on destination bit depth/vol adjustment
                 r *= scaleFactor;
 
-                if (output == 's' || output == 'S')
+                if (outCtx.output == 's' || outCtx.output == 'S')
                 {
-                    if (bits == 32)
+                    if (outCtx.bits == 32)
                     {
                         write_float(out, r);
                     }
@@ -622,19 +623,19 @@ int main(int argc, char *argv[])
                 }
                 else
                 {
-                    if (bits == 32)
+                    if (outCtx.bits == 32)
                     {
-                        outCtx.pushSamp(r, c);
+                        pushSamp(r, c);
                     }
                     else
                     {
-                        outCtx.pushSamp(clip(-peakLevel, myround(r), peakLevel - 1), c);
+                        pushSamp(clip(-peakLevel, myround(r), peakLevel - 1), c);
                     }
                 }
             }
         }
 
-        if (output == 'S' || output == 's')
+        if (outCtx.output == 'S' || outCtx.output == 's')
         {
             cout.write(pcmOut, outBlockSize);
         }
@@ -645,9 +646,9 @@ int main(int argc, char *argv[])
         cerr << "Clipped " << clips << " times.\n";
     }
 
-    if (output != 'S' && output != 's')
+    if (outCtx.output != 'S' && outCtx.output != 's')
     {
-        outCtx.saveAndPrint("outfile.wav");
+        outCtx.saveAndPrintFile("outfile.wav");
     }
 
     return 0;
