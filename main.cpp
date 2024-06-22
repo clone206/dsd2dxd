@@ -59,6 +59,73 @@ namespace
     double byn_r[13];       // Delay line R;
     uint32_t fpd;           // Floating-point dither
 
+    struct OutputContext
+    {
+        AudioFile<float> aFileFloat;
+        AudioFile<int> aFileInt;
+        int bits;
+        int channelsNum;
+        int rate;
+
+        OutputContext(int outBits, int outChansNum, int outRate)
+        {
+            bits = outBits;
+            channelsNum = outChansNum;
+            rate = outRate;
+            if (outBits == 32)
+            {
+                aFileFloat = AudioFile<float>();
+            }
+            else
+            {
+                aFileInt = AudioFile<int>();
+            }
+        }
+
+        void setFileParams()
+        {
+            if (bits == 32)
+            {
+                aFileFloat.setNumChannels(channelsNum);
+                aFileFloat.setBitDepth(bits);
+                aFileFloat.setSampleRate(rate);
+            }
+            else
+            {
+                aFileInt.setNumChannels(channelsNum);
+                aFileInt.setBitDepth(bits);
+                aFileInt.setSampleRate(rate);
+            }
+        }
+
+        void saveAndPrint(string fileName)
+        {
+            if (bits == 32)
+            {
+                aFileFloat.save(fileName, AudioFileFormat::Wave);
+                aFileFloat.printSummary();
+            }
+            else
+            {
+                aFileInt.save(fileName, AudioFileFormat::Wave);
+                aFileInt.printSummary();
+            }
+        }
+
+        template <typename ST>
+        inline void pushSamp(ST samp, int c)
+        {
+            if (bits == 32)
+            {
+                aFileFloat.samples[c].push_back(samp);
+            }
+            else
+            {
+                aFileInt.samples[c].push_back(samp);
+            }
+        }
+    };
+
     // Initialize outputs/dither state
     inline void init_outputs()
     {
@@ -88,22 +155,29 @@ namespace
         byn_r[10] = 1000;
     }
 
-    inline void init_rand() {
-        fpd = 1.0; while (fpd < 16386) fpd = rand()*UINT32_MAX;
+    inline void init_rand()
+    {
+        fpd = 1.0;
+        while (fpd < 16386)
+            fpd = rand() * UINT32_MAX;
     }
 
     // Floating point dither for going from double to float
     // Part of Airwindows plugin suite
-    inline void fpdither(double &sample) {
+    inline void fpdither(double &sample)
+    {
         double inputSample = sample;
 
-        //begin stereo 32 bit floating point dither
-		int expon; frexpf((float)inputSample, &expon);
-		fpd ^= fpd<<13; fpd ^= fpd>>17; fpd ^= fpd<<5;
-		inputSample += (fpd*3.4e-36l*pow(2,expon+62));	//remove 'blend' for real use, it's for the demo;	
-		//end stereo 32 bit floating point dither
+        // begin stereo 32 bit floating point dither
+        int expon;
+        frexpf((float)inputSample, &expon);
+        fpd ^= fpd << 13;
+        fpd ^= fpd >> 17;
+        fpd ^= fpd << 5;
+        inputSample += (fpd * 3.4e-36l * pow(2, expon + 62)); // remove 'blend' for real use, it's for the demo;
+        // end stereo 32 bit floating point dither
 
-        inputSample = (float)inputSample; //equivalent of 'floor' for 32 bit floating point
+        inputSample = (float)inputSample; // equivalent of 'floor' for 32 bit floating point
 
         sample = inputSample;
     }
@@ -381,7 +455,7 @@ int main(int argc, char *argv[])
 
     int channelsNum = args["channels"].as<int>(2);
     char fmt = args["format"].as<string>("I").c_str()[0];
-    int bits = args["bitdepth"].as<int>(24);
+    const int bits = args["bitdepth"].as<int>(24);
     char endianness = args["endianness"].as<string>("M").c_str()[0];
     int blockSize = args["blocksize"].as<int>(4096);
     char ditherType = args["dithertype"].as<string>(bits == 32 ? "F" : "T").c_str()[0];
@@ -450,7 +524,7 @@ int main(int argc, char *argv[])
     vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation, dsdRate));
     int bytespersample = bits == 20 ? 3 : bits / 8;
     double scaleFactor = 1.0;
-    double volScale = pow(10.0,volAdj/20);
+    double volScale = pow(10.0, volAdj / 20);
 
     if (bits != 32)
     {
@@ -489,22 +563,11 @@ int main(int argc, char *argv[])
     int dsdStride = interleaved ? channelsNum : 1;
     int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
     int outBlockSize = pcmBlockSize * channelsNum * bytespersample;
-    AudioFile<float> aFileFloat;
-    AudioFile<int> aFileInt;
+    OutputContext outCtx(bits, channelsNum, outRate);
 
-    if (output != 'S' && output != 's') {
-        if (bits == 32)
-        {
-            aFileFloat.setNumChannels(channelsNum);
-            aFileFloat.setBitDepth(bits);
-            aFileFloat.setSampleRate(outRate);
-        }
-        else
-        {
-            aFileInt.setNumChannels(channelsNum);
-            aFileInt.setBitDepth(bits);
-            aFileInt.setSampleRate(outRate);
-        }
+    if (output != 'S' && output != 's')
+    {
+        outCtx.setFileParams();
     }
 
     while (cin.read(dsdIn, blockSize * channelsNum))
@@ -561,12 +624,11 @@ int main(int argc, char *argv[])
                 {
                     if (bits == 32)
                     {
-                        aFileFloat.samples[c].push_back(r);
+                        outCtx.pushSamp(r, c);
                     }
                     else
                     {
-                        aFileInt.samples[c]
-                            .push_back(clip(-peakLevel, myround(r), peakLevel - 1));
+                        outCtx.pushSamp(clip(-peakLevel, myround(r), peakLevel - 1), c);
                     }
                 }
             }
@@ -585,15 +647,7 @@ int main(int argc, char *argv[])
 
     if (output != 'S' && output != 's')
     {
-        if (bits == 32) {
-            aFileFloat.save("outfile.wav", AudioFileFormat::Wave);
-            aFileFloat.printSummary();
-        }
-        else
-        {
-            aFileInt.save("outfile.wav", AudioFileFormat::Wave);
-            aFileInt.printSummary();
-        }
+        outCtx.saveAndPrint("outfile.wav");
     }
 
     return 0;
