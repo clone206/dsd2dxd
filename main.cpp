@@ -37,6 +37,8 @@ or implied, of Sebastian Gesemann.
 #include <cstring>
 #include <string>
 #include <math.h>
+#include <ctype.h>
+#include <typeinfo>
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
@@ -48,9 +50,11 @@ using namespace std;
 
 namespace
 {
+
     int clips = 0;
     int lastSampsClippedLow = 0;
     int lastSampsClippedHigh = 0;
+    bool loudMode = false;
 
     // Output/dither vars
     double noise_shaping_l; // Noise shape state L
@@ -58,6 +62,11 @@ namespace
     double byn_l[13];       // Delay line L
     double byn_r[13];       // Delay line R;
     uint32_t fpd;           // Floating-point dither
+
+    inline bool lowercmp(char a, char b)
+    {
+        return tolower(a) == b;
+    }
 
     struct OutputContext
     {
@@ -76,25 +85,37 @@ namespace
             rate = outRate;
             output = outType;
 
-            if (output != 'S' && output != 's')
+            if (!lowercmp(outType, 's'))
             {
                 if (outBits == 32)
                 {
                     aFile<float> = AudioFile<float>();
                     setFileParams<float>();
+                    if (loudMode)
+                    {
+                        cerr << "Finished setting file params for float type\n";
+                    }
                 }
                 else
                 {
                     aFile<int> = AudioFile<int>();
                     setFileParams<int>();
+                    if (loudMode)
+                    {
+                        cerr << "Finished setting file params for int type\n";
+                    }
                 }
-
             }
         }
 
         template <typename ST>
         void setFileParams()
         {
+            if (loudMode) {
+                cerr << "About to set params for file type " 
+                    << typeid(OutputContext::aFile<ST>).name() << "\n";
+            }
+
             aFile<ST>.setNumChannels(channelsNum);
             aFile<ST>.setBitDepth(bits);
             aFile<ST>.setSampleRate(rate);
@@ -104,11 +125,19 @@ namespace
         {
             if (bits == 32)
             {
+                if (loudMode)
+                {
+                    cerr << "About to write 32b file\n";
+                }
                 aFile<float>.save(fileName, AudioFileFormat::Wave);
                 aFile<float>.printSummary();
             }
             else
             {
+                if (loudMode)
+                {
+                    cerr << "About to write int file\n";
+                }
                 aFile<int>.save(fileName, AudioFileFormat::Wave);
                 aFile<int>.printSummary();
             }
@@ -411,7 +440,6 @@ namespace
 
         memcpy(ptr, &word, sizeof(float));
     }
-
 } // anonymous namespace
 
 int main(int argc, char *argv[])
@@ -430,7 +458,8 @@ int main(int argc, char *argv[])
                               {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                               {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
                               {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)", 1},
-                              {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).", 1}}};
+                              {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).", 1},
+                              {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
 
     argagg::parser_results args;
     try
@@ -463,14 +492,19 @@ int main(int argc, char *argv[])
     char output = args["output"].as<string>("S").c_str()[0];
     double volAdj = args["volume"].as<double>(0.0);
 
+    if (args["loudmode"])
+    {
+        loudMode = true;
+    }
+
     int lsbitfirst;
     int interleaved;
 
-    if (endianness == 'L' || endianness == 'l')
+    if (lowercmp(endianness, 'l'))
     {
         lsbitfirst = 1;
     }
-    else if (endianness == 'M' || endianness == 'm')
+    else if (lowercmp(endianness, 'm'))
     {
         lsbitfirst = 0;
     }
@@ -480,11 +514,11 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (fmt == 'P' || fmt == 'p')
+    if (lowercmp(fmt, 'p'))
     {
         interleaved = 0;
     }
-    else if (fmt == 'I' || fmt == 'i')
+    else if (lowercmp(fmt, 'i'))
     {
         interleaved = 1;
     }
@@ -535,6 +569,20 @@ int main(int argc, char *argv[])
 
     OutputContext outCtx(bits, channelsNum, outRate, output);
 
+    if (loudMode && !lowercmp(outCtx.output, 's'))
+    {
+        if (outCtx.bits == 32) {
+            cerr << "File type " << typeid(OutputContext::aFile<float>).name() << "\n";
+        } else {
+            cerr << "File type " << typeid(OutputContext::aFile<int>).name() << "\n";
+        }
+
+        cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
+            << outCtx.channelsNum << "\n";
+
+        OutputContext::aFile<float>.printSummary();
+    }
+
     cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
          << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
          << "\nDither type: " << ditherType
@@ -545,11 +593,11 @@ int main(int argc, char *argv[])
          << "\nPeak level: " << peakLevel
          << "\nChannels: " << outCtx.channelsNum << "\n\n";
 
-    if (ditherType == 'N' || ditherType == 'n')
+    if (lowercmp(ditherType, 'n'))
     {
         init_outputs();
     }
-    else if (ditherType == 'F' || ditherType == 'f')
+    else if (lowercmp(ditherType, 'f'))
     {
         init_rand();
     }
@@ -564,8 +612,17 @@ int main(int argc, char *argv[])
     int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
     int outBlockSize = pcmBlockSize * outCtx.channelsNum * bytespersample;
 
+    if (loudMode)
+    {
+        cerr << "About to start main conversion loop\n";
+    }
+
     while (cin.read(dsdIn, blockSize * outCtx.channelsNum))
     {
+        if (loudMode) {
+            cerr << "-";
+        }
+
         for (int c = 0; c < outCtx.channelsNum; ++c)
         {
             dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
@@ -578,20 +635,20 @@ int main(int argc, char *argv[])
                 double r = floatData[s];
 
                 // Dither (scaled up and down within functions)
-                if (ditherType == 'N' || ditherType == 'n')
+                if (lowercmp(ditherType, 'n'))
                 {
                     if (njad(r, c, scaleFactor))
                         return 1;
                 }
-                else if (ditherType == 'T' || ditherType == 't')
+                else if (lowercmp(ditherType, 't'))
                 {
                     tpdf(r, scaleFactor);
                 }
-                else if (ditherType == 'F' || ditherType == 'f')
+                else if (lowercmp(ditherType, 'f'))
                 {
                     fpdither(r);
                 }
-                else if (ditherType != 'X' && ditherType != 'x')
+                else if (!lowercmp(ditherType, 'x'))
                 {
                     cerr << "\nInvalid dither type!\n\n";
                     return 1;
@@ -600,7 +657,7 @@ int main(int argc, char *argv[])
                 // Scale based on destination bit depth/vol adjustment
                 r *= scaleFactor;
 
-                if (outCtx.output == 's' || outCtx.output == 'S')
+                if (lowercmp(outCtx.output, 's'))
                 {
                     if (outCtx.bits == 32)
                     {
@@ -618,7 +675,7 @@ int main(int argc, char *argv[])
                 {
                     if (outCtx.bits == 32)
                     {
-                        pushSamp(r, c);
+                        pushSamp((float)r, c);
                     }
                     else
                     {
@@ -628,10 +685,14 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (outCtx.output == 'S' || outCtx.output == 's')
+        if (lowercmp(outCtx.output, 's'))
         {
             cout.write(pcmOut, outBlockSize);
         }
+    }
+
+    if (loudMode) {
+        cerr << "\n";
     }
 
     if (clips)
@@ -639,7 +700,7 @@ int main(int argc, char *argv[])
         cerr << "Clipped " << clips << " times.\n";
     }
 
-    if (outCtx.output != 'S' && outCtx.output != 's')
+    if (!lowercmp(outCtx.output, 's'))
     {
         outCtx.saveAndPrintFile("outfile.wav");
     }
