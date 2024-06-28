@@ -696,10 +696,12 @@ int main(int argc, char *argv[])
 
     vector<unsigned char> dsdData(inCtx.blockSize * inCtx.channelsNum);
     vector<double> floatData(outCtx.pcmBlockSize);
-    vector<unsigned char> pcmData(outCtx.pcmBlockSize * outCtx.channelsNum * outCtx.bytespersample);
+    vector<unsigned char>
+        pcmData(outCtx.pcmBlockSize * outCtx.channelsNum * outCtx.bytespersample);
     char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
     char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
-    vector<dxd> dxds(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst, outCtx.decimRatio, inCtx.dsdRate));
+    vector<dxd> dxds(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst,
+                                             outCtx.decimRatio, inCtx.dsdRate));
 
     loud("About to start main conversion loop");
 
