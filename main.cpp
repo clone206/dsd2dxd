@@ -68,22 +68,46 @@ namespace
         return tolower(a) == b;
     }
 
+    inline void loud(string say)
+    {
+        if (loudMode)
+        {
+            cerr << say << "\n";
+        }
+    }
+
     struct OutputContext
     {
         int bits;
         int channelsNum;
         int rate;
         char output;
+        int decimRatio;
+
+        double volAdj;
+        char filtType;
+        char ditherType;
+        int peakLevel;
+        double scaleFactor;
 
         template <typename T>
         static AudioFile<T> aFile;
 
-        OutputContext(int outBits, int outChansNum, int outRate, char outType)
+        OutputContext() {}
+
+        OutputContext(int outBits, int outChansNum, int outRate, char outType,
+                      int decimation)
         {
+            if (outBits != 16 && outBits != 20 && outBits != 24 && outBits != 32)
+            {
+                throw "Unsupported bit depth";
+            }
+
             bits = outBits;
             channelsNum = outChansNum;
             rate = outRate;
             output = outType;
+            decimRatio = decimation;
 
             if (!lowercmp(outType, 's'))
             {
@@ -91,30 +115,37 @@ namespace
                 {
                     aFile<float> = AudioFile<float>();
                     setFileParams<float>();
-                    if (loudMode)
-                    {
-                        cerr << "Finished setting file params for float type\n";
-                    }
+                    loud("Finished setting file params for float type");
                 }
                 else
                 {
                     aFile<int> = AudioFile<int>();
                     setFileParams<int>();
-                    if (loudMode)
-                    {
-                        cerr << "Finished setting file params for int type\n";
-                    }
+                    loud("Finished setting file params for int type");
                 }
             }
+        }
+
+        void setScaling(double volume)
+        {
+            volAdj = volume;
+            scaleFactor = 1.0;
+            double volScale = pow(10.0, volAdj / 20);
+
+            if (bits != 32)
+            {
+                scaleFactor = pow(2.0, (bits - 1));
+            }
+
+            peakLevel = (int)floor(scaleFactor);
+            scaleFactor *= volScale;
         }
 
         template <typename ST>
         void setFileParams()
         {
-            if (loudMode) {
-                cerr << "About to set params for file type " 
-                    << typeid(OutputContext::aFile<ST>).name() << "\n";
-            }
+            loud("About to set params for file type:");
+            loud(typeid(OutputContext::aFile<ST>).name());
 
             aFile<ST>.setNumChannels(channelsNum);
             aFile<ST>.setBitDepth(bits);
@@ -125,19 +156,13 @@ namespace
         {
             if (bits == 32)
             {
-                if (loudMode)
-                {
-                    cerr << "About to write 32b file\n";
-                }
+                loud("About to write 32b file");
                 aFile<float>.save(fileName, AudioFileFormat::Wave);
                 aFile<float>.printSummary();
             }
             else
             {
-                if (loudMode)
-                {
-                    cerr << "About to write int file\n";
-                }
+                loud("About to write int file");
                 aFile<int>.save(fileName, AudioFileFormat::Wave);
                 aFile<int>.printSummary();
             }
@@ -442,7 +467,7 @@ namespace
     }
 } // anonymous namespace
 
-int main(int argc, char *argv[])
+argagg::parser_results parseArgs(int argc, char *argv[])
 {
     argagg::parser argparser{{{"help", {"-h", "--help"}, "shows this help message", 0},
                               {"channels", {"-c", "--channels"}, "Number of channels (default: 2)", 1},
@@ -461,10 +486,114 @@ int main(int argc, char *argv[])
                               {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).", 1},
                               {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
 
+    argagg::parser_results args = argparser.parse(argc, argv);
+
+    if (args["help"])
+    {
+        cerr << "\ndsd2dxd filter (raw DSD --> raw PCM).\n"
+                "Reads from stdin and writes to stdout in a *nix environment.\n"
+             << argparser;
+        throw 0;
+    }
+
+    if (args["loudmode"])
+    {
+        loudMode = true;
+    }
+
+    return args;
+}
+
+struct InputContext
+{
+    int lsbitfirst;
+    int interleaved;
+    int dsdRate;
+
+    InputContext() {}
+
+    InputContext(char fmt, char endianness, int inRate)
+    {
+        if (lowercmp(endianness, 'l'))
+        {
+            lsbitfirst = 1;
+        }
+        else if (lowercmp(endianness, 'm'))
+        {
+            lsbitfirst = 0;
+        }
+        else
+        {
+            throw "No endianness detected!";
+        }
+
+        if (lowercmp(fmt, 'p'))
+        {
+            interleaved = 0;
+        }
+        else if (lowercmp(fmt, 'i'))
+        {
+            interleaved = 1;
+        }
+        else
+        {
+            throw "No fmt detected!";
+        }
+
+        if (inRate != 1 && inRate != 2)
+        {
+            throw "Unsupported DSD input rate.";
+        }
+
+        dsdRate = inRate;
+    }
+};
+
+int checkConv(InputContext inCtx, OutputContext outCtx)
+{
+    if (inCtx.dsdRate == 2 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32 && outCtx.decimRatio != 64)
+    {
+        cerr << "\nOnly decimation value of 16, 32, or 64 allowed with dsd128 input.\n";
+        cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
+        return 1;
+    }
+    else if (inCtx.dsdRate == 1 && outCtx.decimRatio != 8 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32)
+    {
+        cerr << "\nOnly decimation value of 8, 16, or 32 allowed with dsd64 input.\n";
+        cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
+        return 1;
+    }
+
+    if (loudMode && !lowercmp(outCtx.output, 's'))
+    {
+        cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
+             << outCtx.channelsNum << "\n";
+    }
+
+    cerr << "\nInterleaved: " << (inCtx.interleaved ? "yes" : "no")
+         << "\nLs bit first: " << (inCtx.lsbitfirst ? "yes" : "no")
+         << "\nDither type: " << outCtx.ditherType
+         << "\nFilter type: " << outCtx.filtType
+         << "\nBit depth: " << outCtx.bits
+         << "\nOutput Rate: " << outCtx.rate
+         << "\nDecimation: " << outCtx.decimRatio
+         << "\nPeak level: " << outCtx.peakLevel
+         << "\nChannels: " << outCtx.channelsNum << "\n\n";
+
+    return 0;
+}
+
+int main(int argc, char *argv[])
+{
     argagg::parser_results args;
+
     try
     {
-        args = argparser.parse(argc, argv);
+        args = parseArgs(argc, argv);
+    }
+    catch (int r)
+    {
+        return r;
     }
     catch (const std::exception &e)
     {
@@ -472,161 +601,81 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    if (args["help"])
+    InputContext inCtx;
+
+    try
     {
-        cerr << "\ndsd2dxd filter (raw DSD --> raw PCM).\n"
-                "Reads from stdin and writes to stdout in a *nix environment.\n"
-             << argparser;
-        return 0;
+        inCtx = InputContext(args["format"].as<string>("I").c_str()[0],
+                             args["endianness"].as<string>("M").c_str()[0],
+                             args["inputrate"].as<int>(1));
+    }
+    catch (const char *str)
+    {
+        cerr << str << "\n";
+        return 1;
     }
 
-    int channelsNum = args["channels"].as<int>(2);
-    char fmt = args["format"].as<string>("I").c_str()[0];
-    const int bits = args["bitdepth"].as<int>(24);
-    char endianness = args["endianness"].as<string>("M").c_str()[0];
+    OutputContext outCtx;
+
+    try
+    {
+        int decimation = args["decimation"].as<int>(8);
+        int outRate = DSD_64_RATE * inCtx.dsdRate / decimation;
+        outCtx = OutputContext(args["bitdepth"].as<int>(24),
+                               args["channels"].as<int>(2), outRate,
+                               args["output"].as<string>("S").c_str()[0], decimation);
+    }
+    catch (const char *str)
+    {
+        cerr << str << "\n";
+        return 1;
+    }
+
     int blockSize = args["blocksize"].as<int>(4096);
-    char ditherType = args["dithertype"].as<string>(bits == 32 ? "F" : "T").c_str()[0];
-    int decimation = args["decimation"].as<int>(8);
-    int dsdRate = args["inputrate"].as<int>(1);
-    char filtType = args["filtertype"].as<string>(dsdRate == 2 ? "C" : "X").c_str()[0];
-    char output = args["output"].as<string>("S").c_str()[0];
-    double volAdj = args["volume"].as<double>(0.0);
 
-    if (args["loudmode"])
-    {
-        loudMode = true;
-    }
+    outCtx.filtType = args["filtertype"].as<string>(inCtx.dsdRate == 2 ? "C" : "X").c_str()[0];
+    outCtx.ditherType = args["dithertype"].as<string>(outCtx.bits == 32 ? "F" : "T").c_str()[0];
 
-    int lsbitfirst;
-    int interleaved;
+    outCtx.setScaling(args["volume"].as<double>(0.0));
 
-    if (lowercmp(endianness, 'l'))
+    // Make sure conversion is valid, print info
+    if (checkConv(inCtx, outCtx))
     {
-        lsbitfirst = 1;
-    }
-    else if (lowercmp(endianness, 'm'))
-    {
-        lsbitfirst = 0;
-    }
-    else
-    {
-        cerr << "\nNo endianness detected!\n";
-        return 1;
-    }
-
-    if (lowercmp(fmt, 'p'))
-    {
-        interleaved = 0;
-    }
-    else if (lowercmp(fmt, 'i'))
-    {
-        interleaved = 1;
-    }
-    else
-    {
-        cerr << "\nNo fmt detected!\n";
-        return 1;
-    }
-
-    if (bits != 16 && bits != 20 && bits != 24 && bits != 32)
-    {
-        cerr << "\nUnsupported bit depth\n";
-        return 1;
-    }
-
-    if (dsdRate != 1 && dsdRate != 2)
-    {
-        cerr << "Unsupported DSD input rate.\n";
-        return 1;
-    }
-    else if (dsdRate == 2 && decimation != 16 && decimation != 32 && decimation != 64)
-    {
-        cerr << "\nOnly decimation value of 16, 32, or 64 allowed with dsd128 input.\n";
-        return 1;
-    }
-    else if (dsdRate == 1 && decimation != 8 && decimation != 16 && decimation != 32)
-    {
-        cerr << "\nOnly decimation value of 8, 16, or 32 allowed with dsd64 input.\n";
         return 1;
     }
 
     // Seed rng
     srand(static_cast<unsigned>(time(0)));
 
-    vector<dxd> dxds(channelsNum, dxd(filtType, lsbitfirst, decimation, dsdRate));
-    int bytespersample = bits == 20 ? 3 : bits / 8;
-    double scaleFactor = 1.0;
-    double volScale = pow(10.0, volAdj / 20);
-
-    if (bits != 32)
-    {
-        scaleFactor = pow(2.0, (bits - 1));
-    }
-
-    int peakLevel = (int)floor(scaleFactor);
-    scaleFactor *= volScale;
-    int outRate = DSD_64_RATE * dsdRate / decimation;
-
-    OutputContext outCtx(bits, channelsNum, outRate, output);
-
-    if (loudMode && !lowercmp(outCtx.output, 's'))
-    {
-        if (outCtx.bits == 32) {
-            cerr << "File type " << typeid(OutputContext::aFile<float>).name() << "\n";
-        } else {
-            cerr << "File type " << typeid(OutputContext::aFile<int>).name() << "\n";
-        }
-
-        cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
-            << outCtx.channelsNum << "\n";
-
-        OutputContext::aFile<float>.printSummary();
-    }
-
-    cerr << "\nInterleaved: " << (interleaved ? "yes" : "no")
-         << "\nLs bit first: " << (lsbitfirst ? "yes" : "no")
-         << "\nDither type: " << ditherType
-         << "\nFilter type: " << filtType
-         << "\nBit depth: " << outCtx.bits
-         << "\nOutput Rate: " << outCtx.rate
-         << "\nDecimation: " << decimation
-         << "\nPeak level: " << peakLevel
-         << "\nChannels: " << outCtx.channelsNum << "\n\n";
-
-    if (lowercmp(ditherType, 'n'))
+    if (lowercmp(outCtx.ditherType, 'n'))
     {
         init_outputs();
     }
-    else if (lowercmp(ditherType, 'f'))
+    else if (lowercmp(outCtx.ditherType, 'f'))
     {
         init_rand();
     }
 
-    int pcmBlockSize = blockSize / (decimation / 8);
-    vector<unsigned char> dsdData(blockSize * channelsNum);
+    int bytespersample = outCtx.bits == 20 ? 3 : outCtx.bits / 8;
+    int pcmBlockSize = blockSize / (outCtx.decimRatio / 8);
+    vector<unsigned char> dsdData(blockSize * outCtx.channelsNum);
     vector<double> floatData(pcmBlockSize);
-    vector<unsigned char> pcmData(pcmBlockSize * channelsNum * bytespersample);
+    vector<unsigned char> pcmData(pcmBlockSize * outCtx.channelsNum * bytespersample);
     char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
     char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
-    int dsdStride = interleaved ? outCtx.channelsNum : 1;
-    int dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
+    int dsdStride = inCtx.interleaved ? outCtx.channelsNum : 1;
+    int dsdChanOffset = inCtx.interleaved ? 1 : blockSize; // Default to one byte for interleaved
     int outBlockSize = pcmBlockSize * outCtx.channelsNum * bytespersample;
+    vector<dxd> dxds(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst, outCtx.decimRatio, inCtx.dsdRate));
 
-    if (loudMode)
-    {
-        cerr << "About to start main conversion loop\n";
-    }
+    loud("About to start main conversion loop");
 
     while (cin.read(dsdIn, blockSize * outCtx.channelsNum))
     {
-        if (loudMode) {
-            cerr << "-";
-        }
-
         for (int c = 0; c < outCtx.channelsNum; ++c)
         {
             dxds[c].translate(blockSize, &dsdData[0] + c * dsdChanOffset, dsdStride,
-                              &floatData[0], 1, decimation);
+                              &floatData[0], 1, outCtx.decimRatio);
 
             unsigned char *out = &pcmData[0] + c * bytespersample;
 
@@ -635,27 +684,27 @@ int main(int argc, char *argv[])
                 double r = floatData[s];
 
                 // Dither (scaled up and down within functions)
-                if (lowercmp(ditherType, 'n'))
+                if (lowercmp(outCtx.ditherType, 'n'))
                 {
-                    if (njad(r, c, scaleFactor))
+                    if (njad(r, c, outCtx.scaleFactor))
                         return 1;
                 }
-                else if (lowercmp(ditherType, 't'))
+                else if (lowercmp(outCtx.ditherType, 't'))
                 {
-                    tpdf(r, scaleFactor);
+                    tpdf(r, outCtx.scaleFactor);
                 }
-                else if (lowercmp(ditherType, 'f'))
+                else if (lowercmp(outCtx.ditherType, 'f'))
                 {
                     fpdither(r);
                 }
-                else if (!lowercmp(ditherType, 'x'))
+                else if (!lowercmp(outCtx.ditherType, 'x'))
                 {
                     cerr << "\nInvalid dither type!\n\n";
                     return 1;
                 }
 
                 // Scale based on destination bit depth/vol adjustment
-                r *= scaleFactor;
+                r *= outCtx.scaleFactor;
 
                 if (lowercmp(outCtx.output, 's'))
                 {
@@ -665,11 +714,11 @@ int main(int argc, char *argv[])
                     }
                     else
                     {
-                        int smp = clip(-peakLevel, myround(r), peakLevel - 1);
-                        write_intel(out, smp, bits);
+                        int smp = clip(-outCtx.peakLevel, myround(r), outCtx.peakLevel - 1);
+                        write_intel(out, smp, outCtx.bits);
                     }
 
-                    out += channelsNum * bytespersample;
+                    out += outCtx.channelsNum * bytespersample;
                 }
                 else
                 {
@@ -679,7 +728,7 @@ int main(int argc, char *argv[])
                     }
                     else
                     {
-                        pushSamp(clip(-peakLevel, myround(r), peakLevel - 1), c);
+                        pushSamp(clip(-outCtx.peakLevel, myround(r), outCtx.peakLevel - 1), c);
                     }
                 }
             }
@@ -691,9 +740,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (loudMode) {
-        cerr << "\n";
-    }
+    loud("");
 
     if (clips)
     {
