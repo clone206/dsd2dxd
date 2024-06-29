@@ -210,6 +210,20 @@ namespace
             }
 
             setScaling(outVol);
+
+            if (!lowercmp(ditherType, 'x')) {
+                // Seed rng
+                srand(static_cast<unsigned>(time(0)));
+            }
+
+            if (lowercmp(ditherType, 'n'))
+            {
+                init_outputs();
+            }
+            else if (lowercmp(ditherType, 'f'))
+            {
+                init_rand();
+            }
         }
 
         void setScaling(double volume)
@@ -682,18 +696,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    // Seed rng
-    srand(static_cast<unsigned>(time(0)));
-
-    if (lowercmp(outCtx.ditherType, 'n'))
-    {
-        outCtx.init_outputs();
-    }
-    else if (lowercmp(outCtx.ditherType, 'f'))
-    {
-        outCtx.init_rand();
-    }
-
+    // Loop vars
     vector<unsigned char> dsdData(inCtx.blockSize * inCtx.channelsNum);
     vector<double> floatData(outCtx.pcmBlockSize);
     vector<unsigned char>
