@@ -23,14 +23,14 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 ### Compling
 
-`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd`
+`g++ *.c *.cpp -std=c++17 -O2 -o dsd2dxd`
 
 ### Running
 
 ## Examples
 
 ```bash
-# See all options
+# See options and usage
 ./dsd2dxd -h|--help
 # Example of using with an input and output file
 ./dsd2dxd [options] < infile.dsd > outfile.pcm
@@ -62,9 +62,11 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
 
 `dsdunpack` needs to be compiled separately and its binary can then be copied into your current working directory.
 
-## Options
+## Full Usage and Options
 
 ```
+Usage: ./dsd2dxd [options] [infile|-], where - means read from stdin
+If neither a filename or - is provided, stdin is assumed.
     -h, --help
         shows this help message
     -c, --channels
@@ -72,17 +74,17 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
     -f, --fmt
         I (interleaved) or P (planar) (DSD stream option) (default: I)
     -b, --bitdepth
-        16, 20, 24 (fixed), or 32 (float) (intel byte order, output option) (default: 24)
+        16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
     -t, --filttype
-        X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio),
-        E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
-        (default: X [single rate] or C [double rate])
+        X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), 
+	E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
+	(default: X [single rate] or C [double rate])
     -e, --endianness
         Byte order of input. M (MSB first) or L (LSB first) (default: M)
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F if 32 bit, T otherwise)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)
     -r, --ratio
         Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
     -i, --inrate
@@ -90,17 +92,18 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
     -o, --output
         Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)
     -v, --volume
-        Volume adjustment in dB. If a negative number is needed (volume cut),
-        use the --volume= format. (default: 0).
+        Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).
+    -l, --loud
+        Print diagnostic messages to stderr
 ```
 
 ## Modified original info.txt
 
 ```
 You downloaded the source code for "dsd2pcm" which is a simple little
-"filter" program, that takes a DSD data stream on stdin and converts
+"filter" program, that takes a DSD data stream and converts
 it to a PCM stream (either 16, 20 or 24 bits) and writes it to
-stdout. The code is split into two modules:
+stdout or a file. The code is split into two modules:
 
   (1) dsd2pcm
 
@@ -125,7 +128,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd
+  g++ *.c *.cpp -std=c++17 -O2 -o dsd2dxd
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p

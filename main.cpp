@@ -32,10 +32,7 @@ or implied, of Sebastian Gesemann.
  *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
  * ======================================== */
 
-#include <iostream>
-#include <vector>
 #include <cstring>
-#include <string>
 #include <math.h>
 #include <ctype.h>
 #include <typeinfo>
@@ -313,6 +310,7 @@ namespace
                 loud("About to write int file");
                 aFile<int>.save(fileName, AudioFileFormat::Wave);
                 aFile<int>.printSummary();
+                loud("Wrote to file");
             }
         }
     };
@@ -594,7 +592,9 @@ namespace
         if (args["help"])
         {
             cerr << "\ndsd2dxd filter (raw DSD --> raw PCM).\n"
-                    "Reads from stdin and writes to stdout in a *nix environment.\n"
+                    "Reads from stdin or file and writes to stdout or file in a *nix environment.\n"
+                    "Usage: ./dsd2dxd [options] [infile|-], where - means read from stdin\n"
+                    "If neither a filename or - is provided, stdin is assumed.\n"
                  << argparser;
             throw 0;
         }
@@ -735,9 +735,20 @@ int main(int argc, char *argv[])
     vector<dxd> dxds(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst,
                                              outCtx.decimRatio, inCtx.dsdRate));
 
+    ifstream fp;
+    istream &in = (!inCtx.stdIn)
+        ? [&fp](string filename) -> istream &
+    {
+        fp.open(filename);
+        if (!fp)
+            abort();
+        return fp;
+    }(inCtx.input)
+        : std::cin;
+
     loud("About to start main conversion loop");
 
-    while (cin.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
+    while (in.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
     {
         // loud("-");
         for (int c = 0; c < inCtx.channelsNum; ++c)
@@ -821,6 +832,11 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (fp && fp.is_open())
+    {
+        fp.close();
+    }
+
     loud("");
 
     if (outCtx.clips)
@@ -833,5 +849,6 @@ int main(int argc, char *argv[])
         outCtx.saveAndPrintFile("outfile.wav");
     }
 
+    loud("About to exit.");
     return 0;
 }

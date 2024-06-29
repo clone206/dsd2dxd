@@ -61,7 +61,8 @@ static const unsigned char bitreverse[] =
  */
 static void precalc(dsd2pcm_ctx *ctx, const double *htaps, int numCoeffs)
 {
-    int t, dsdSeq, bit, k;
+    int dsdSeq, bit, k;
+    unsigned int t;
     double acc;
     int lsbf = ctx->lsbfirst;
     unsigned int tableIdx;
@@ -216,7 +217,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
         ptr->lsbfirst = lsbf;
         ptr->ctables = (double **)malloc(sizeof(double *) * ptr->numTables);
 
-        for (int i = 0; i < ptr->numTables; ++i)
+        for (unsigned int i = 0; i < ptr->numTables; ++i)
         {
             ptr->ctables[i] = (double *)malloc(sizeof(double) * 256);
         }
@@ -264,7 +265,8 @@ extern void dsd2pcm_translate(
     const unsigned char *dsdData, ptrdiff_t dsdStride, double *floatData,
     ptrdiff_t floatStride, int decimation)
 {
-    unsigned fifoPos, i, bite1, bite2;
+    unsigned fifoPos, bite1, bite2;
+    int i;
     unsigned char *p;
     double acc;
     unsigned int out = decimation / 8;
