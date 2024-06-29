@@ -49,17 +49,17 @@ namespace
 {
     bool loudMode = false;
 
-    inline bool lowercmp(char a, char b)
-    {
-        return tolower(a) == b;
-    }
-
     inline void loud(string say)
     {
         if (loudMode)
         {
             cerr << say << "\n";
         }
+    }
+
+    inline bool lowercmp(char a, char b)
+    {
+        return tolower(a) == b;
     }
 
     struct InputContext
@@ -165,10 +165,7 @@ namespace
         inline void fpdither(double &sample);
         inline void njad(double &sample, int chanNum, double scaleFactor);
         template <typename T>
-        inline T clip(
-            T min,
-            T v,
-            T max);
+        inline T clip(T min, T v, T max);
 
         OutputContext() {}
 
@@ -495,27 +492,8 @@ namespace
         sample = outputSample / scaleFactor;
     }
 
-    // TPDF dither
-    inline void tpdf(double &sample, double scaleFactor)
-    {
-        sample *= scaleFactor;
-        double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-        double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-        sample += (rand1 - rand2);
-        sample /= scaleFactor;
-    }
-
-    inline int myround(double x)
-    {
-        // x += x >= 0 ? 0.5 : -0.5;
-        return static_cast<int>(round(x));
-    }
-
     template <typename T>
-    inline T OutputContext::clip(
-        T min,
-        T v,
-        T max)
+    inline T OutputContext::clip(T min, T v, T max)
     {
         if (v < min)
         {
@@ -536,6 +514,22 @@ namespace
         lastSampsClippedHigh = 0;
 
         return v;
+    }
+
+    // TPDF dither
+    inline void tpdf(double &sample, double scaleFactor)
+    {
+        sample *= scaleFactor;
+        double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
+        double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
+        sample += (rand1 - rand2);
+        sample /= scaleFactor;
+    }
+
+    inline int myround(double x)
+    {
+        // x += x >= 0 ? 0.5 : -0.5;
+        return static_cast<int>(round(x));
     }
 
     inline void write_intel(unsigned char *ptr, unsigned long word,
