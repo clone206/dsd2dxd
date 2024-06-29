@@ -74,8 +74,10 @@ namespace
     struct InputContext
     {
         int lsbitfirst;
-        int interleaved;
+        bool interleaved;
+        bool stdIn;
         int dsdRate;
+        string input;
 
         int dsdStride;
         int dsdChanOffset;
@@ -84,7 +86,7 @@ namespace
 
         InputContext() {}
 
-        InputContext(char fmt, char endianness, int inRate, int blockSizeIn, int channels)
+        InputContext(string inFile, char fmt, char endianness, int inRate, int blockSizeIn, int channels)
         {
             if (lowercmp(endianness, 'l'))
             {
@@ -101,11 +103,11 @@ namespace
 
             if (lowercmp(fmt, 'p'))
             {
-                interleaved = 0;
+                interleaved = false;
             }
             else if (lowercmp(fmt, 'i'))
             {
-                interleaved = 1;
+                interleaved = true;
             }
             else
             {
@@ -117,11 +119,21 @@ namespace
                 throw "Unsupported DSD input rate.";
             }
 
+            input = inFile; // "-" == stdin
             blockSize = blockSizeIn;
             channelsNum = channels;
             dsdRate = inRate;
             dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
             dsdStride = interleaved ? channelsNum : 1;
+
+            if (input == "-")
+            {
+                stdIn = true;
+            }
+            else
+            {
+                stdIn = false;
+            }
         }
     };
 
@@ -136,12 +148,12 @@ namespace
         int bits;
         int channelsNum;
         int rate;
-        char output;
         int decimRatio;
         int bytespersample;
         int blockSize;
         int pcmBlockSize;
         int outBlockSize;
+        char output;
         char filtType;
         char ditherType;
 
@@ -160,7 +172,7 @@ namespace
         static AudioFile<T> aFile;
 
         inline void fpdither(double &sample);
-        inline int njad(double &sample, int chanNum, double scaleFactor);
+        inline void njad(double &sample, int chanNum, double scaleFactor);
         template <typename T>
         inline T clip(
             typename id<T>::type min,
@@ -181,7 +193,7 @@ namespace
             bits = outBits;
             channelsNum = outChansNum;
             rate = outRate;
-            output = outType;
+            output = tolower(outType);
             decimRatio = decimation;
             clips = 0;
             lastSampsClippedHigh = 0;
@@ -190,10 +202,10 @@ namespace
             blockSize = blockSizeOut;
             pcmBlockSize = blockSize / (decimRatio / 8);
             outBlockSize = pcmBlockSize * channelsNum * bytespersample;
-            ditherType = ditherTypeOut;
-            filtType = filtTypeOut;
+            ditherType = tolower(ditherTypeOut);
+            filtType = tolower(filtTypeOut);
 
-            if (!lowercmp(outType, 's'))
+            if (output != 's')
             {
                 if (outBits == 32)
                 {
@@ -211,16 +223,17 @@ namespace
 
             setScaling(outVol);
 
-            if (!lowercmp(ditherType, 'x')) {
+            if (ditherType != 'x')
+            {
                 // Seed rng
                 srand(static_cast<unsigned>(time(0)));
             }
 
-            if (lowercmp(ditherType, 'n'))
+            if (ditherType == 'n')
             {
                 init_outputs();
             }
-            else if (lowercmp(ditherType, 'f'))
+            else if (ditherType == 'f')
             {
                 init_rand();
             }
@@ -336,7 +349,7 @@ namespace
     // Not Just Another Dither
     // Not truly random. Uses Benford Real Numbers for the dither values
     // Part of Airwindows plugin suite
-    inline int OutputContext::njad(double &sample, int chanNum, double scaleFactor)
+    inline void OutputContext::njad(double &sample, int chanNum, double scaleFactor)
     {
         double inputSample = sample;
         double *noiseShaping;
@@ -355,7 +368,7 @@ namespace
         else
         {
             cerr << "njad only supports a maximum of 2 channels!";
-            return 1;
+            throw 1;
         }
 
         // Scale up so 0-1 is one bit of output format
@@ -488,8 +501,6 @@ namespace
             *noiseShaping = -fabs(inputSample);
 
         sample = outputSample / scaleFactor;
-
-        return 0;
     }
 
     // TPDF dither
@@ -596,22 +607,22 @@ namespace
         return args;
     }
 
-    int checkConv(InputContext inCtx, OutputContext outCtx)
+    void checkConv(InputContext inCtx, OutputContext outCtx)
     {
         if (inCtx.dsdRate == 2 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32 && outCtx.decimRatio != 64)
         {
             cerr << "\nOnly decimation value of 16, 32, or 64 allowed with dsd128 input.\n";
             cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
-            return 1;
+            throw 1;
         }
         else if (inCtx.dsdRate == 1 && outCtx.decimRatio != 8 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32)
         {
             cerr << "\nOnly decimation value of 8, 16, or 32 allowed with dsd64 input.\n";
             cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
-            return 1;
+            throw 1;
         }
 
-        if (loudMode && !lowercmp(outCtx.output, 's'))
+        if (loudMode && outCtx.output != 's')
         {
             cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
                  << outCtx.channelsNum << "\n";
@@ -627,8 +638,6 @@ namespace
              << "\nPeak level: " << outCtx.peakLevel
              << "\nBlock Size: " << inCtx.blockSize
              << "\nChannels: " << outCtx.channelsNum << "\n\n";
-
-        return 0;
     }
 } // anonymous namespace
 
@@ -649,13 +658,29 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    int blockSize = args["blocksize"].as<int>(4096);
-    int channels = args["channels"].as<int>(2);
+    string input;
+    if (args.pos.size() > 0)
+    {
+        // 1st positional param
+        input = args.as<string>(0);
+    }
+    else
+    {
+        input = "-";
+    }
+
+    if (loudMode)
+    {
+        cerr << "Input: " << input << "\n";
+    }
+
+    auto blockSize = args["blocksize"].as<int>(4096);
+    auto channels = args["channels"].as<int>(2);
 
     InputContext inCtx;
     try
     {
-        inCtx = InputContext(args["format"].as<string>("I").c_str()[0],
+        inCtx = InputContext(input, args["format"].as<string>("I").c_str()[0],
                              args["endianness"].as<string>("M").c_str()[0],
                              args["inputrate"].as<int>(1), blockSize, channels);
     }
@@ -691,9 +716,13 @@ int main(int argc, char *argv[])
     }
 
     // Make sure conversion is valid, print info
-    if (checkConv(inCtx, outCtx))
+    try
     {
-        return 1;
+        checkConv(inCtx, outCtx);
+    }
+    catch (int r)
+    {
+        return r;
     }
 
     // Loop vars
@@ -727,20 +756,26 @@ int main(int argc, char *argv[])
                 double r = floatData[s];
 
                 // Dither (scaled up and down within functions)
-                if (lowercmp(outCtx.ditherType, 'n'))
+                if (outCtx.ditherType == 'n')
                 {
-                    if (outCtx.njad(r, c, outCtx.scaleFactor))
-                        return 1;
+                    try
+                    {
+                        outCtx.njad(r, c, outCtx.scaleFactor);
+                    }
+                    catch (int r)
+                    {
+                        return r;
+                    }
                 }
-                else if (lowercmp(outCtx.ditherType, 't'))
+                else if (outCtx.ditherType == 't')
                 {
                     tpdf(r, outCtx.scaleFactor);
                 }
-                else if (lowercmp(outCtx.ditherType, 'f'))
+                else if (outCtx.ditherType == 'f')
                 {
                     outCtx.fpdither(r);
                 }
-                else if (!lowercmp(outCtx.ditherType, 'x'))
+                else if (outCtx.ditherType != 'x')
                 {
                     cerr << "\nInvalid dither type!\n\n";
                     return 1;
@@ -749,7 +784,7 @@ int main(int argc, char *argv[])
                 // Scale based on destination bit depth/vol adjustment
                 r *= outCtx.scaleFactor;
 
-                if (lowercmp(outCtx.output, 's'))
+                if (outCtx.output == 's')
                 {
                     if (outCtx.bits == 32)
                     {
@@ -780,7 +815,7 @@ int main(int argc, char *argv[])
             }
         }
 
-        if (lowercmp(outCtx.output, 's'))
+        if (outCtx.output == 's')
         {
             cout.write(pcmOut, outCtx.outBlockSize);
         }
@@ -793,7 +828,7 @@ int main(int argc, char *argv[])
         cerr << "Clipped " << outCtx.clips << " times.\n";
     }
 
-    if (!lowercmp(outCtx.output, 's'))
+    if (outCtx.output != 's')
     {
         outCtx.saveAndPrintFile("outfile.wav");
     }
