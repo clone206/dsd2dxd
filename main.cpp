@@ -49,12 +49,6 @@ namespace
 {
     bool loudMode = false;
 
-    template <typename T>
-    struct id
-    {
-        typedef T type;
-    };
-
     inline bool lowercmp(char a, char b)
     {
         return tolower(a) == b;
@@ -172,9 +166,9 @@ namespace
         inline void njad(double &sample, int chanNum, double scaleFactor);
         template <typename T>
         inline T clip(
-            typename id<T>::type min,
+            T min,
             T v,
-            typename id<T>::type max);
+            T max);
 
         OutputContext() {}
 
@@ -519,9 +513,9 @@ namespace
 
     template <typename T>
     inline T OutputContext::clip(
-        typename id<T>::type min,
+        T min,
         T v,
-        typename id<T>::type max)
+        T max)
     {
         if (v < min)
         {
@@ -735,6 +729,8 @@ int main(int argc, char *argv[])
     vector<dxd> dxds(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst,
                                              outCtx.decimRatio, inCtx.dsdRate));
 
+    // Set up input stream depending on whether we're working
+    // with a file or stdin
     ifstream fp;
     istream &in = (!inCtx.stdIn)
         ? [&fp](string filename) -> istream &
