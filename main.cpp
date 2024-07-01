@@ -49,11 +49,11 @@ namespace
 {
     bool loudMode = false;
 
-    inline void loud(string say)
+    inline void loud(string say, bool newLine = true)
     {
         if (loudMode)
         {
-            cerr << say << "\n";
+            cerr << say << (newLine ? "\n" : "");
         }
     }
 
@@ -740,7 +740,7 @@ int main(int argc, char *argv[])
 
     while (in.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
     {
-        // loud("-");
+        loud("-", false);
         for (int c = 0; c < inCtx.channelsNum; ++c)
         {
             // loud("~");
@@ -822,12 +822,13 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (fp && fp.is_open())
+    loud("\nDone with main conversion loop.");
+
+    if (fp.is_open())
     {
+        loud("About to close input file.");
         fp.close();
     }
-
-    loud("");
 
     if (outCtx.clips)
     {

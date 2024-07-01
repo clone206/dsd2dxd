@@ -30,6 +30,7 @@ or implied, of Sebastian Gesemann.
 
 #include <stdlib.h>
 #include <string.h>
+//#include<stdio.h>
 
 #include "dsd2pcm.h"
 
@@ -102,7 +103,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
 
     if (ptr)
     {
-        int numCoeffs;
+        int numCoeffs = 0;
         const double *htaps;
         int err = 0;
 
@@ -231,7 +232,12 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
 
 extern void dsd2pcm_destroy(dsd2pcm_ctx *ptr)
 {
+    for (unsigned int i = 0; i < ptr->numTables; ++i) {
+        free(ptr->ctables[i]);
+    }
+    free(ptr->ctables);
     free(ptr);
+    //fprintf(stderr, "dsd2pcm: Done freeing memory.\n");
 }
 
 extern dsd2pcm_ctx *dsd2pcm_clone(dsd2pcm_ctx *ptr)
@@ -242,7 +248,15 @@ extern dsd2pcm_ctx *dsd2pcm_clone(dsd2pcm_ctx *ptr)
     if (p2)
     {
         memcpy(p2, ptr, sizeof(dsd2pcm_ctx));
+        p2->ctables = (double **)malloc(sizeof(double *) * ptr->numTables);
+
+        for (unsigned int i = 0; i < ptr->numTables; ++i)
+        {
+            p2->ctables[i] = (double *)malloc(sizeof(double) * 256);
+            memcpy(p2->ctables[i], ptr->ctables[i], sizeof(double) * 256);
+        }
     }
+    //fprintf(stderr, "dsd2pcm: Done cloning.\n");
     return p2;
 }
 

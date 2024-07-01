@@ -25,7 +25,7 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 ### Compling
 
-`g++ *.c *.cpp -std=c++17 -O2 -o dsd2dxd`
+`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd`
 
 ### Running
 
@@ -130,7 +130,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -std=c++17 -O2 -o dsd2dxd
+  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p

@@ -33,6 +33,7 @@ or implied, of Sebastian Gesemann.
 
 #include <algorithm>
 #include <stdexcept>
+//#include <iostream>
 #include "dsd2pcm.h"
 
 /**
@@ -49,6 +50,7 @@ public:
     {
         if (!handle)
             throw std::runtime_error("Couldn't init. Check inputs.");
+        //std::cerr << "dsd2pcm.hpp: Done init'ing\n";
     }
 
     dxd(dxd const &x) : handle(dsd2pcm_clone(x.handle))
