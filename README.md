@@ -48,6 +48,8 @@ dsd2dxd -f P -e L < infile.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
 # Using dsdunpack with a dsf test file as input, outputting to wav file with all other options set to default (see below explanation of dsdunpack)
 dsdunpack -o -v 1kHz_stereo_p.dsf | dsd2dxd -o W
+# Now we can play the file like so:
+ffplay 1kHz_stereo_p.wav
 # Same as above but piping directly to ffplay instead of wav file output
 dsdunpack -o -v 1kHz_stereo_p.dsf | dsd2dxd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 ```
