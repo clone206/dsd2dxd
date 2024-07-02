@@ -130,8 +130,8 @@ namespace
                 filePath = fs::path(input);
                 loud("Input file basename: ", false);
                 loud(filePath.stem());
-                loud("Full path: ", false);
-                loud(fs::absolute(filePath));
+                loud("Parent path: ", false);
+                loud(fs::absolute(filePath).parent_path());
             }
         }
     };
