@@ -16,10 +16,9 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 ## Dependencies
 
-- ffmpeg
-- ffplay
-- g++
+- `g++`
 - \*nix environment
+- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd` to e.g. flac)
 
 ## C++ program usage
 
@@ -27,23 +26,35 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 `g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd`
 
+### Installing
+
+`sudo install dsd2dxd /usr/local/bin/`
+
+You can specify any directory you like as the last argument in the above install command. For example, instead of `/usr/local/bin/` you could use `/usr/bin/`;
+
 ### Running
 
 ## Examples
 
 ```bash
 # See options and usage
-./dsd2dxd -h|--help
+dsd2dxd -h|--help
 # Example of using with an input and output file
-./dsd2dxd [options] < infile.dsd > outfile.pcm
+dsd2dxd [options] < infile.dsd > outfile.pcm
 # Example of piping output to ffplay (planar format, lsb first)
-./dsd2dxd -f P -e L < infile.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
-# Example of piping output to ffmpeg to save to file
+dsd2dxd -f P -e L < infile.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
+# Example of piping output to ffmpeg to save to a flac file
 # (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
-./dsd2dxd -f P -e L -d N -r 16 -b 20 < infile.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a pcm_s24le outfile.wav
-# Using dsdunpack with a dff file as input, outputting to wav file with all other options set to default (see below explanation of dsdunpack)
-./dsdunpack -o -v input.dff | ./dsd2dxd -o W
+dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
+# Using dsdunpack with a dsf test file as input, outputting to wav file with all other options set to default (see below explanation of dsdunpack)
+dsdunpack -o -v 1kHz_stereo_p.dsf | dsd2dxd -o W
+# Same as above but piping directly to ffplay instead of wav file output
+dsdunpack -o -v 1kHz_stereo_p.dsf | dsd2dxd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 ```
+
+See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can read .dff or .dsf audio data to stdout as used in above usage example, for piping to dsd2dxd. `dsdunpack` always outputs interleaved, msbf format DSD. This works out nicely since `dsd2dxd` defaults to these options when processing DSD input. 
+
+`dsdunpack` needs to be compiled separately and its binary can then be copied into your `$PATH`.
 
 ## Testing Examples
 
@@ -60,14 +71,10 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
 
-See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can read .dff autio data to stdout as used in above usage example, for piping to dsd2dxd. That tool can also be used with .dsf files but there is currently an issue with pops at the end of the audio on certain unpacked dsf files, which can be easily removed if you're loading the resulting PCM audio into an editor or DAW. This may be related to metadata appearing after the audio that is unhandled by dsdunpack.
-
-`dsdunpack` needs to be compiled separately and its binary can then be copied into your current working directory.
-
 ## Full Usage and Options
 
 ```
-Usage: ./dsd2dxd [options] [infile|-], where - means read from stdin
+Usage: dsd2dxd [options] [infile|-], where - means read from stdin
 If neither a filename or - is provided, stdin is assumed.
     -h, --help
         shows this help message
