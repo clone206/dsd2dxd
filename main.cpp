@@ -36,12 +36,14 @@ or implied, of Sebastian Gesemann.
 #include <math.h>
 #include <ctype.h>
 #include <typeinfo>
+#include <filesystem>
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
 #include "AudioFile.h"
 
 using namespace std;
+namespace fs = std::filesystem;
 
 #define DSD_64_RATE 2822400
 
@@ -69,6 +71,7 @@ namespace
         bool stdIn;
         int dsdRate;
         string input;
+        fs::path filePath;
 
         int dsdStride;
         int dsdChanOffset;
@@ -124,6 +127,11 @@ namespace
             else
             {
                 stdIn = false;
+                filePath = fs::path(input);
+                loud("Input file basename: ", false);
+                loud(filePath.stem());
+                loud("Full path: ", false);
+                loud(fs::absolute(filePath));
             }
         }
     };
@@ -571,7 +579,7 @@ namespace
                                   {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)", 1},
                                   {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                                   {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
-                                  {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)", 1},
+                                  {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to <basename>.wav in current directory, where basename is the input filename without the extension.)", 1},
                                   {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).", 1},
                                   {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
 
@@ -837,7 +845,8 @@ int main(int argc, char *argv[])
 
     if (outCtx.output != 's')
     {
-        outCtx.saveAndPrintFile("outfile.wav");
+        string outName = inCtx.filePath.stem().string() + ".wav";
+        outCtx.saveAndPrintFile(outName);
     }
 
     loud("About to exit.");

@@ -99,7 +99,7 @@ If neither a filename or - is provided, stdin is assumed.
     -i, --inrate
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)
     -o, --output
-        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to outfile.wav in current directory)
+        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to <basename>.wav in current directory, where basename is the input filename without the extension.)
     -v, --volume
         Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).
     -l, --loud
