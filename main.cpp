@@ -680,7 +680,6 @@ namespace
                 loud("-", false);
                 for (int c = 0; c < inCtx.channelsNum; ++c)
                 {
-                    // loud("~");
                     dxds[c].translate(inCtx.blockSize,
                                       &dsdData[0] + c * inCtx.dsdChanOffset,
                                       inCtx.dsdStride, &floatData[0], 1,
@@ -690,10 +689,8 @@ namespace
 
                     for (int s = 0; s < outCtx.pcmBlockSize; ++s)
                     {
-                        // loud("+");
                         double r = floatData[s];
 
-                        // Dither (scaled up and down in functions)
                         outCtx.ditherAndScale(r, c);
 
                         outCtx.writeToBuffer(out, r, c);
@@ -765,6 +762,7 @@ namespace
                  << "\nChannels: " << outCtx.channelsNum << "\n\n";
         }
     };
+
     argagg::parser_results parseArgs(int argc, char *argv[])
     {
         argagg::parser argparser{{{"help", {"-h", "--help"}, "shows this help message", 0},
@@ -880,7 +878,6 @@ int main(int argc, char *argv[])
     }
 
     ConversionContext convCtx;
-    // Make sure conversion is valid, print info
     try
     {
         convCtx = ConversionContext(inCtx, outCtx);

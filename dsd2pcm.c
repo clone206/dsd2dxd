@@ -237,7 +237,6 @@ extern void dsd2pcm_destroy(dsd2pcm_ctx *ptr)
     }
     free(ptr->ctables);
     free(ptr);
-    //fprintf(stderr, "dsd2pcm: Done freeing memory.\n");
 }
 
 extern dsd2pcm_ctx *dsd2pcm_clone(dsd2pcm_ctx *ptr)
@@ -256,7 +255,6 @@ extern dsd2pcm_ctx *dsd2pcm_clone(dsd2pcm_ctx *ptr)
             memcpy(p2->ctables[i], ptr->ctables[i], sizeof(double) * 256);
         }
     }
-    //fprintf(stderr, "dsd2pcm: Done cloning.\n");
     return p2;
 }
 
