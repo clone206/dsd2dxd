@@ -30,7 +30,7 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 
 `sudo install dsd2dxd /usr/local/bin/`
 
-You can specify any directory you like as the last argument in the above install command. For example, instead of `/usr/local/bin/` you could use `/usr/bin/`;
+You can specify any directory you like as the last argument in the above install command. For example, instead of `/usr/local/bin/` you could use `/usr/bin/`. As long as the directory is in your `$PATH` it will work.
 
 ### Running
 
@@ -101,7 +101,7 @@ If neither a filename or - is provided, stdin is assumed.
     -i, --inrate
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)
     -o, --output
-        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to <basename>.wav in current directory, where basename is the input filename without the extension.)
+        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to either <basename>.wav in current directory, where <basename> is the input filename without the extension, or outfile.wav if reading from stdin.)
     -v, --volume
         Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).
     -l, --loud

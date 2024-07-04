@@ -203,18 +203,7 @@ namespace
 
             if (output != 's')
             {
-                if (outBits == 32)
-                {
-                    aFile<float> = AudioFile<float>();
-                    setFileParams<float>();
-                    loud("Finished setting file params for float type");
-                }
-                else
-                {
-                    aFile<int> = AudioFile<int>();
-                    setFileParams<int>();
-                    loud("Finished setting file params for int type");
-                }
+                initFile();
             }
 
             setScaling(outVol);
@@ -227,11 +216,27 @@ namespace
 
             if (ditherType == 'n')
             {
-                init_outputs();
+                initOutputs();
             }
             else if (ditherType == 'f')
             {
-                init_rand();
+                initRand();
+            }
+        }
+
+        void initFile()
+        {
+            if (bits == 32)
+            {
+                aFile<float> = AudioFile<float>();
+                setFileParams<float>();
+                loud("Finished setting file params for float type");
+            }
+            else
+            {
+                aFile<int> = AudioFile<int>();
+                setFileParams<int>();
+                loud("Finished setting file params for int type");
             }
         }
 
@@ -261,7 +266,7 @@ namespace
         }
 
         // Initialize outputs/dither state
-        void init_outputs()
+        void initOutputs()
         {
             // Weights based on Benford's law. Smaller leading digits more likely.
             byn_l[0] = 1000;
@@ -289,7 +294,7 @@ namespace
             byn_r[10] = 1000;
         }
 
-        void init_rand()
+        void initRand()
         {
             fpd = 1.0;
             while (fpd < 16386)
@@ -303,6 +308,7 @@ namespace
                 loud("About to write 32b file");
                 aFile<float>.save(fileName, AudioFileFormat::Wave);
                 aFile<float>.printSummary();
+                loud("Wrote to file");
             }
             else
             {
@@ -540,7 +546,7 @@ namespace
         return static_cast<int>(round(x));
     }
 
-    inline void write_intel(unsigned char *ptr, unsigned long word,
+    inline void writeLSBF(unsigned char *ptr, unsigned long word,
                             unsigned char bitsNum)
     {
         if (bitsNum == 20)
@@ -557,7 +563,7 @@ namespace
         }
     }
 
-    inline void write_float(unsigned char *ptr, double sample)
+    inline void writeFloat(unsigned char *ptr, double sample)
     {
         float word = (float)sample;
 
@@ -579,7 +585,7 @@ namespace
                                   {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)", 1},
                                   {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)", 1},
                                   {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)", 1},
-                                  {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to <basename>.wav in current directory, where basename is the input filename without the extension.)", 1},
+                                  {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to either <basename>.wav in current directory, where <basename> is the input filename without the extension, or outfile.wav if reading from stdin.)", 1},
                                   {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).", 1},
                                   {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
 
@@ -797,13 +803,13 @@ int main(int argc, char *argv[])
                 {
                     if (outCtx.bits == 32)
                     {
-                        write_float(out, r);
+                        writeFloat(out, r);
                     }
                     else
                     {
                         int smp = outCtx.clip(-outCtx.peakLevel,
                                               myround(r), outCtx.peakLevel - 1);
-                        write_intel(out, smp, outCtx.bits);
+                        writeLSBF(out, smp, outCtx.bits);
                     }
 
                     out += outCtx.channelsNum * outCtx.bytespersample;
@@ -845,7 +851,12 @@ int main(int argc, char *argv[])
 
     if (outCtx.output != 's')
     {
-        string outName = inCtx.filePath.stem().string() + ".wav";
+        string outName = "outfile.wav";
+
+        if (!inCtx.stdIn) {
+            outName = inCtx.filePath.stem().string() + ".wav";
+        }
+
         outCtx.saveAndPrintFile(outName);
     }
 
