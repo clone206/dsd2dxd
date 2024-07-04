@@ -171,7 +171,16 @@ namespace
         static AudioFile<T> aFile;
 
         inline void fpdither(double &sample);
-        inline void njad(double &sample, int chanNum, double scaleFactor);
+        inline void njad(double &sample, int chanNum);
+        inline void tpdf(double &sample);
+        inline void writeLSBF(unsigned char *&ptr, unsigned long word);
+        static inline void writeFloat(unsigned char *ptr, double sample);
+        static inline int myround(double x);
+        template <typename ST>
+        static inline void pushSamp(ST samp, int c);
+        inline void ditherAndScale(double &sample, int chanNum);
+        inline void writeToBuffer(unsigned char *&out, double &sample, int chanNum);
+
         template <typename T>
         inline T clip(T min, T v, T max);
 
@@ -207,6 +216,11 @@ namespace
             }
 
             setScaling(outVol);
+
+            if (ditherType != 'n' && ditherType != 't' && ditherType != 'f' && ditherType != 'x')
+            {
+                throw "Invalid dither type!";
+            }
 
             if (ditherType != 'x')
             {
@@ -308,25 +322,73 @@ namespace
                 loud("About to write 32b file");
                 aFile<float>.save(fileName, AudioFileFormat::Wave);
                 aFile<float>.printSummary();
-                loud("Wrote to file");
             }
             else
             {
                 loud("About to write int file");
                 aFile<int>.save(fileName, AudioFileFormat::Wave);
                 aFile<int>.printSummary();
-                loud("Wrote to file");
             }
+            cerr << "Wrote to file: " << fileName << "\n";
         }
     };
 
     template <typename T>
     AudioFile<T> OutputContext::aFile = {};
 
-    template <typename ST>
-    inline void pushSamp(ST samp, int c)
+    inline void OutputContext::writeToBuffer(unsigned char *&out, double &sample, int chanNum)
     {
-        OutputContext::aFile<ST>.samples[c].push_back(samp);
+        if (output == 's')
+        {
+            if (bits == 32)
+            {
+                writeFloat(out, sample);
+            }
+            else
+            {
+                writeLSBF(out, clip(-peakLevel,
+                                myround(sample), peakLevel - 1));
+            }
+
+            out += channelsNum * bytespersample;
+        }
+        else
+        {
+            if (bits == 32)
+            {
+                pushSamp((float)sample, chanNum);
+            }
+            else
+            {
+                pushSamp(clip(-peakLevel, myround(sample),
+                              peakLevel - 1),
+                         chanNum);
+            }
+        }
+    }
+
+    inline void OutputContext::ditherAndScale(double &sample, int chanNum)
+    {
+        if (ditherType == 'n')
+        {
+            njad(sample, chanNum);
+        }
+        else if (ditherType == 't')
+        {
+            tpdf(sample);
+        }
+        else if (ditherType == 'f')
+        {
+            fpdither(sample);
+        }
+
+        sample *= scaleFactor;
+    }
+
+    template <typename ST>
+    inline void OutputContext::pushSamp(ST samp, int c)
+    {
+        aFile<ST>.samples[c].push_back(samp);
     }
 
     // Floating point dither for going from double to float
@@ -352,7 +414,7 @@ namespace
     // Not Just Another Dither
     // Not truly random. Uses Benford Real Numbers for the dither values
     // Part of Airwindows plugin suite
-    inline void OutputContext::njad(double &sample, int chanNum, double scaleFactor)
+    inline void OutputContext::njad(double &sample, int chanNum)
     {
         double inputSample = sample;
         double *noiseShaping;
@@ -531,7 +593,7 @@ namespace
     }
 
     // TPDF dither
-    inline void tpdf(double &sample, double scaleFactor)
+    inline void OutputContext::tpdf(double &sample)
     {
         sample *= scaleFactor;
         double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
@@ -540,16 +602,15 @@ namespace
         sample /= scaleFactor;
     }
 
-    inline int myround(double x)
+    inline int OutputContext::myround(double x)
     {
         // x += x >= 0 ? 0.5 : -0.5;
         return static_cast<int>(round(x));
     }
 
-    inline void writeLSBF(unsigned char *ptr, unsigned long word,
-                            unsigned char bitsNum)
+    inline void OutputContext::writeLSBF(unsigned char *&ptr, unsigned long word)
     {
-        if (bitsNum == 20)
+        if (bits == 20)
         {
             word <<= 4;
         }
@@ -557,19 +618,153 @@ namespace
         ptr[0] = word & 0xFF;
         ptr[1] = (word >> 8) & 0xFF;
 
-        if (bitsNum == 24 || bitsNum == 20)
+        if (bits == 24 || bits == 20)
         {
             ptr[2] = (word >> 16) & 0xFF;
         }
     }
 
-    inline void writeFloat(unsigned char *ptr, double sample)
+    inline void OutputContext::writeFloat(unsigned char *ptr, double sample)
     {
         float word = (float)sample;
 
         memcpy(ptr, &word, sizeof(float));
     }
 
+    struct ConversionContext
+    {
+        InputContext inCtx;
+        OutputContext outCtx;
+
+        vector<unsigned char> dsdData;
+        vector<double> floatData;
+        vector<unsigned char> pcmData;
+        vector<dxd> dxds;
+
+        ConversionContext() {}
+
+        ConversionContext(InputContext &inCtxParam, OutputContext &outCtxParam)
+        {
+            inCtx = inCtxParam;
+            outCtx = outCtxParam;
+            dsdData.resize(inCtx.blockSize * inCtx.channelsNum);
+            floatData.resize(outCtx.pcmBlockSize);
+            pcmData.resize(outCtx.pcmBlockSize * outCtx.channelsNum * outCtx.bytespersample);
+            dxds = vector<dxd>(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst,
+                                                       outCtx.decimRatio, inCtx.dsdRate));
+
+            checkConv();
+        }
+
+        void doConversion()
+        {
+            char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
+            char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
+            // Set up input stream depending on whether we're working
+            // with a file or stdin
+            ifstream fp;
+            istream &in = (!inCtx.stdIn)
+                ? [&fp](string filename) -> istream &
+            {
+                fp.open(filename);
+                if (!fp)
+                    abort();
+                return fp;
+            }(inCtx.input)
+                : std::cin;
+
+            loud("About to start main conversion loop");
+
+            while (in.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
+            {
+                loud("-", false);
+                for (int c = 0; c < inCtx.channelsNum; ++c)
+                {
+                    // loud("~");
+                    dxds[c].translate(inCtx.blockSize,
+                                      &dsdData[0] + c * inCtx.dsdChanOffset,
+                                      inCtx.dsdStride, &floatData[0], 1,
+                                      outCtx.decimRatio);
+
+                    unsigned char *out = &pcmData[0] + c * outCtx.bytespersample;
+
+                    for (int s = 0; s < outCtx.pcmBlockSize; ++s)
+                    {
+                        // loud("+");
+                        double r = floatData[s];
+
+                        // Dither (scaled up and down in functions)
+                        outCtx.ditherAndScale(r, c);
+
+                        outCtx.writeToBuffer(out, r, c);
+                    }
+                }
+
+                if (outCtx.output == 's')
+                {
+                    cout.write(pcmOut, outCtx.outBlockSize);
+                }
+            }
+
+            loud("\nDone with main conversion loop.");
+
+            if (fp.is_open())
+            {
+                loud("About to close input file.");
+                fp.close();
+            }
+
+            if (outCtx.clips)
+            {
+                cerr << "Clipped " << outCtx.clips << " times.\n";
+            }
+
+            if (outCtx.output != 's')
+            {
+                string outName = "outfile.wav";
+
+                if (!inCtx.stdIn)
+                {
+                    outName = inCtx.filePath.stem().string() + ".wav";
+                }
+
+                outCtx.saveAndPrintFile(outName);
+            }
+        }
+
+        void checkConv()
+        {
+            if (inCtx.dsdRate == 2 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32 && outCtx.decimRatio != 64)
+            {
+                cerr << "\nOnly decimation value of 16, 32, or 64 allowed with dsd128 input.\n";
+                cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
+                throw 1;
+            }
+            else if (inCtx.dsdRate == 1 && outCtx.decimRatio != 8 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32)
+            {
+                cerr << "\nOnly decimation value of 8, 16, or 32 allowed with dsd64 input.\n";
+                cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
+                throw 1;
+            }
+
+            if (loudMode && outCtx.output != 's')
+            {
+                cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
+                     << outCtx.channelsNum << "\n";
+            }
+
+            cerr << "\nInterleaved: " << (inCtx.interleaved ? "yes" : "no")
+                 << "\nLs bit first: " << (inCtx.lsbitfirst ? "yes" : "no")
+                 << "\nDither type: " << outCtx.ditherType
+                 << "\nFilter type: " << outCtx.filtType
+                 << "\nBit depth: " << outCtx.bits
+                 << "\nOutput Rate: " << outCtx.rate
+                 << "\nDecimation: " << outCtx.decimRatio
+                 << "\nPeak level: " << outCtx.peakLevel
+                 << "\nBlock Size: " << inCtx.blockSize
+                 << "\nChannels: " << outCtx.channelsNum << "\n\n";
+        }
+    };
     argagg::parser_results parseArgs(int argc, char *argv[])
     {
         argagg::parser argparser{{{"help", {"-h", "--help"}, "shows this help message", 0},
@@ -607,39 +802,6 @@ namespace
         }
 
         return args;
-    }
-
-    void checkConv(InputContext inCtx, OutputContext outCtx)
-    {
-        if (inCtx.dsdRate == 2 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32 && outCtx.decimRatio != 64)
-        {
-            cerr << "\nOnly decimation value of 16, 32, or 64 allowed with dsd128 input.\n";
-            cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
-            throw 1;
-        }
-        else if (inCtx.dsdRate == 1 && outCtx.decimRatio != 8 && outCtx.decimRatio != 16 && outCtx.decimRatio != 32)
-        {
-            cerr << "\nOnly decimation value of 8, 16, or 32 allowed with dsd64 input.\n";
-            cerr << "dec: " << outCtx.decimRatio << ".\nrate: " << inCtx.dsdRate;
-            throw 1;
-        }
-
-        if (loudMode && outCtx.output != 's')
-        {
-            cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
-                 << outCtx.channelsNum << "\n";
-        }
-
-        cerr << "\nInterleaved: " << (inCtx.interleaved ? "yes" : "no")
-             << "\nLs bit first: " << (inCtx.lsbitfirst ? "yes" : "no")
-             << "\nDither type: " << outCtx.ditherType
-             << "\nFilter type: " << outCtx.filtType
-             << "\nBit depth: " << outCtx.bits
-             << "\nOutput Rate: " << outCtx.rate
-             << "\nDecimation: " << outCtx.decimRatio
-             << "\nPeak level: " << outCtx.peakLevel
-             << "\nBlock Size: " << inCtx.blockSize
-             << "\nChannels: " << outCtx.channelsNum << "\n\n";
     }
 } // anonymous namespace
 
@@ -717,147 +879,24 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    ConversionContext convCtx;
     // Make sure conversion is valid, print info
     try
     {
-        checkConv(inCtx, outCtx);
+        convCtx = ConversionContext(inCtx, outCtx);
     }
     catch (int r)
     {
         return r;
     }
 
-    // Loop vars
-    vector<unsigned char> dsdData(inCtx.blockSize * inCtx.channelsNum);
-    vector<double> floatData(outCtx.pcmBlockSize);
-    vector<unsigned char>
-        pcmData(outCtx.pcmBlockSize * outCtx.channelsNum * outCtx.bytespersample);
-    char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
-    char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
-    vector<dxd> dxds(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst,
-                                             outCtx.decimRatio, inCtx.dsdRate));
-
-    // Set up input stream depending on whether we're working
-    // with a file or stdin
-    ifstream fp;
-    istream &in = (!inCtx.stdIn)
-        ? [&fp](string filename) -> istream &
+    try
     {
-        fp.open(filename);
-        if (!fp)
-            abort();
-        return fp;
-    }(inCtx.input)
-        : std::cin;
-
-    loud("About to start main conversion loop");
-
-    while (in.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
-    {
-        loud("-", false);
-        for (int c = 0; c < inCtx.channelsNum; ++c)
-        {
-            // loud("~");
-            dxds[c].translate(inCtx.blockSize,
-                              &dsdData[0] + c * inCtx.dsdChanOffset,
-                              inCtx.dsdStride, &floatData[0], 1,
-                              outCtx.decimRatio);
-
-            unsigned char *out = &pcmData[0] + c * outCtx.bytespersample;
-
-            for (int s = 0; s < outCtx.pcmBlockSize; ++s)
-            {
-                // loud("+");
-                double r = floatData[s];
-
-                // Dither (scaled up and down within functions)
-                if (outCtx.ditherType == 'n')
-                {
-                    try
-                    {
-                        outCtx.njad(r, c, outCtx.scaleFactor);
-                    }
-                    catch (int r)
-                    {
-                        return r;
-                    }
-                }
-                else if (outCtx.ditherType == 't')
-                {
-                    tpdf(r, outCtx.scaleFactor);
-                }
-                else if (outCtx.ditherType == 'f')
-                {
-                    outCtx.fpdither(r);
-                }
-                else if (outCtx.ditherType != 'x')
-                {
-                    cerr << "\nInvalid dither type!\n\n";
-                    return 1;
-                }
-
-                // Scale based on destination bit depth/vol adjustment
-                r *= outCtx.scaleFactor;
-
-                if (outCtx.output == 's')
-                {
-                    if (outCtx.bits == 32)
-                    {
-                        writeFloat(out, r);
-                    }
-                    else
-                    {
-                        int smp = outCtx.clip(-outCtx.peakLevel,
-                                              myround(r), outCtx.peakLevel - 1);
-                        writeLSBF(out, smp, outCtx.bits);
-                    }
-
-                    out += outCtx.channelsNum * outCtx.bytespersample;
-                }
-                else
-                {
-                    if (outCtx.bits == 32)
-                    {
-                        pushSamp((float)r, c);
-                    }
-                    else
-                    {
-                        pushSamp(outCtx.clip(-outCtx.peakLevel, myround(r),
-                                             outCtx.peakLevel - 1),
-                                 c);
-                    }
-                }
-            }
-        }
-
-        if (outCtx.output == 's')
-        {
-            cout.write(pcmOut, outCtx.outBlockSize);
-        }
+        convCtx.doConversion();
     }
-
-    loud("\nDone with main conversion loop.");
-
-    if (fp.is_open())
+    catch (int r)
     {
-        loud("About to close input file.");
-        fp.close();
-    }
-
-    if (outCtx.clips)
-    {
-        cerr << "Clipped " << outCtx.clips << " times.\n";
-    }
-
-    if (outCtx.output != 's')
-    {
-        string outName = "outfile.wav";
-
-        if (!inCtx.stdIn) {
-            outName = inCtx.filePath.stem().string() + ".wav";
-        }
-
-        outCtx.saveAndPrintFile(outName);
+        return r;
     }
 
     loud("About to exit.");
