@@ -178,7 +178,7 @@ namespace
         static inline int myround(double x);
         template <typename ST>
         static inline void pushSamp(ST samp, int c);
-        inline void ditherAndScale(double &sample, int chanNum);
+        inline void scaleAndDither(double &sample, int chanNum);
         inline void writeToBuffer(unsigned char *&out, double &sample, int chanNum);
 
         template <typename T>
@@ -367,8 +367,11 @@ namespace
         }
     }
 
-    inline void OutputContext::ditherAndScale(double &sample, int chanNum)
+    inline void OutputContext::scaleAndDither(double &sample, int chanNum)
     {
+        // Scale up so 0-1 is one bit of output format
+        sample *= scaleFactor;
+
         if (ditherType == 'n')
         {
             njad(sample, chanNum);
@@ -381,8 +384,6 @@ namespace
         {
             fpdither(sample);
         }
-
-        sample *= scaleFactor;
     }
 
     template <typename ST>
@@ -393,30 +394,25 @@ namespace
 
     // Floating point dither for going from double to float
     // Part of Airwindows plugin suite
-    inline void OutputContext::fpdither(double &sample)
+    inline void OutputContext::fpdither(double &inputSample)
     {
-        double inputSample = sample;
-
         // begin stereo 32 bit floating point dither
         int expon;
         frexpf((float)inputSample, &expon);
         fpd ^= fpd << 13;
         fpd ^= fpd >> 17;
         fpd ^= fpd << 5;
-        inputSample += (fpd * 3.4e-36l * pow(2, expon + 62)); // remove 'blend' for real use, it's for the demo;
+        inputSample += (fpd * 3.4e-36l * pow(2, expon + 62)); // removed 'blend' for real use, it's for the demo;
         // end stereo 32 bit floating point dither
 
         inputSample = (float)inputSample; // equivalent of 'floor' for 32 bit floating point
-
-        sample = inputSample;
     }
 
     // Not Just Another Dither
     // Not truly random. Uses Benford Real Numbers for the dither values
     // Part of Airwindows plugin suite
-    inline void OutputContext::njad(double &sample, int chanNum)
+    inline void OutputContext::njad(double &inputSample, int chanNum)
     {
-        double inputSample = sample;
         double *noiseShaping;
         double(*byn)[13];
 
@@ -435,9 +431,6 @@ namespace
             cerr << "njad only supports a maximum of 2 channels!";
             throw 1;
         }
-
-        // Scale up so 0-1 is one bit of output format
-        inputSample *= scaleFactor;
 
         bool cutbins = false;
         double drySample = inputSample;
@@ -564,8 +557,6 @@ namespace
             *noiseShaping = fabs(inputSample);
         if (*noiseShaping < -fabs(inputSample))
             *noiseShaping = -fabs(inputSample);
-
-        sample = outputSample / scaleFactor;
     }
 
     template <typename T>
@@ -595,11 +586,9 @@ namespace
     // TPDF dither
     inline void OutputContext::tpdf(double &sample)
     {
-        sample *= scaleFactor;
         double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
         double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
         sample += (rand1 - rand2);
-        sample /= scaleFactor;
     }
 
     inline int OutputContext::myround(double x)
@@ -691,7 +680,7 @@ namespace
                     {
                         double r = floatData[s];
 
-                        outCtx.ditherAndScale(r, c);
+                        outCtx.scaleAndDither(r, c);
 
                         outCtx.writeToBuffer(out, r, c);
                     }
