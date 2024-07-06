@@ -210,10 +210,7 @@ namespace
             ditherType = tolower(ditherTypeOut);
             filtType = tolower(filtTypeOut);
 
-            if (output != 's')
-            {
-                initFile();
-            }
+            initFile();
 
             setScaling(outVol);
 
@@ -222,6 +219,11 @@ namespace
                 throw "Invalid dither type!";
             }
 
+            initDither();
+        }
+
+        void initDither()
+        {
             if (ditherType != 'x')
             {
                 // Seed rng
@@ -240,6 +242,11 @@ namespace
 
         void initFile()
         {
+            if (output == 's')
+            {
+                return;
+            }
+
             if (bits == 32)
             {
                 aFile<float> = AudioFile<float>();
@@ -347,7 +354,7 @@ namespace
             else
             {
                 writeLSBF(out, clip(-peakLevel,
-                                myround(sample), peakLevel - 1));
+                                    myround(sample), peakLevel - 1));
             }
 
             out += channelsNum * bytespersample;
@@ -775,10 +782,11 @@ namespace
 
         if (args["help"])
         {
-            cerr << "\ndsd2dxd filter (raw DSD --> raw PCM).\n"
+            cerr << "\ndsd2dxd filter (raw DSD --> PCM).\n"
                     "Reads from stdin or file and writes to stdout or file in a *nix environment.\n"
-                    "Usage: ./dsd2dxd [options] [infile|-], where - means read from stdin\n"
-                    "If neither a filename or - is provided, stdin is assumed.\n"
+                    "Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin\n"
+                    "If neither filename(s) or - is provided, stdin is assumed.\n"
+                    "Multiple filenames can be provided and the input-related options specified will be applied to each.\n"
                  << argparser;
             throw 0;
         }
@@ -809,52 +817,39 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    string input;
-    if (args.pos.size() > 0)
+    auto inputsNum = args.pos.size();
+    vector<string> inputs;
+
+    if (inputsNum == 0)
     {
-        // 1st positional param
-        input = args.as<string>(0);
-    }
-    else
-    {
-        input = "-";
+        inputs.push_back("-");
     }
 
-    if (loudMode)
+    for (int i = 0; i < inputsNum; ++i)
     {
-        cerr << "Input: " << input << "\n";
+        inputs.push_back(args.as<string>(i));
     }
 
     auto blockSize = args["blocksize"].as<int>(4096);
     auto channels = args["channels"].as<int>(2);
-
-    InputContext inCtx;
-    try
-    {
-        inCtx = InputContext(input, args["format"].as<string>("I").c_str()[0],
-                             args["endianness"].as<string>("M").c_str()[0],
-                             args["inputrate"].as<int>(1), blockSize, channels);
-    }
-    catch (const char *str)
-    {
-        cerr << str << "\n";
-        return 1;
-    }
+    auto inputRate = args["inputrate"].as<int>(1);
+    auto decimation = args["decimation"].as<int>(8);
+    auto outRate = DSD_64_RATE * inputRate / decimation;
+    auto bitDepth = args["bitdepth"].as<int>(24);
+    auto format = args["format"].as<string>("I").c_str()[0];
+    auto endianness = args["endianness"].as<string>("M").c_str()[0];
+    auto ditherType = args["dithertype"].as<string>(bitDepth == 32
+                                                        ? "F"
+                                                        : "T")
+                          .c_str()[0];
 
     OutputContext outCtx;
     try
     {
-        int decimation = args["decimation"].as<int>(8);
-        int outRate = DSD_64_RATE * inCtx.dsdRate / decimation;
-        int bitDepth = args["bitdepth"].as<int>(24);
         outCtx = OutputContext(bitDepth, channels, outRate,
                                args["output"].as<string>("S").c_str()[0],
-                               decimation, blockSize,
-                               args["dithertype"].as<string>(bitDepth == 32
-                                                                 ? "F"
-                                                                 : "T")
-                                   .c_str()[0],
-                               args["filtertype"].as<string>(inCtx.dsdRate == 2
+                               decimation, blockSize, ditherType,
+                               args["filtertype"].as<string>(inputRate == 2
                                                                  ? "C"
                                                                  : "X")
                                    .c_str()[0],
@@ -866,23 +861,46 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    ConversionContext convCtx;
-    try
+    for (const string &input : inputs)
     {
-        convCtx = ConversionContext(inCtx, outCtx);
-    }
-    catch (int r)
-    {
-        return r;
-    }
+        if (loudMode)
+        {
+            cerr << "Input: " << input << "\n";
+        }
 
-    try
-    {
-        convCtx.doConversion();
-    }
-    catch (int r)
-    {
-        return r;
+        outCtx.initFile();
+        outCtx.initDither();
+
+        InputContext inCtx;
+        try
+        {
+            inCtx = InputContext(input, format, endianness, inputRate, blockSize,
+                                 channels);
+        }
+        catch (const char *str)
+        {
+            cerr << str << "\n";
+            return 1;
+        }
+
+        ConversionContext convCtx;
+        try
+        {
+            convCtx = ConversionContext(inCtx, outCtx);
+        }
+        catch (int r)
+        {
+            return r;
+        }
+
+        try
+        {
+            convCtx.doConversion();
+        }
+        catch (int r)
+        {
+            return r;
+        }
     }
 
     loud("About to exit.");

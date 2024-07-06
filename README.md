@@ -42,7 +42,7 @@ dsd2dxd -h|--help
 # Example of using with an input and output file
 dsd2dxd [options] < infile.dsd > outfile.pcm
 # Example of piping output to ffplay (planar format, lsb first)
-dsd2dxd -f P -e L < infile.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
+dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 # Example of piping output to ffmpeg to save to a flac file
 # (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
 dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
@@ -76,8 +76,9 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
 ## Full Usage and Options
 
 ```
-Usage: dsd2dxd [options] [infile|-], where - means read from stdin
-If neither a filename or - is provided, stdin is assumed.
+Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
+If neither filename(s) or - is provided, stdin is assumed.
+Multiple filenames can be provided and the input-related options specified will be applied to each.
     -h, --help
         shows this help message
     -c, --channels
