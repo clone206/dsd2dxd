@@ -33,7 +33,6 @@ or implied, of Sebastian Gesemann.
 
 #include <algorithm>
 #include <stdexcept>
-//#include <iostream>
 #include "dsd2pcm.h"
 
 /**

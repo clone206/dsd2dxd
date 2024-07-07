@@ -883,18 +883,9 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        ConversionContext convCtx;
         try
         {
-            convCtx = ConversionContext(inCtx, outCtx);
-        }
-        catch (int r)
-        {
-            return r;
-        }
-
-        try
-        {
+            ConversionContext convCtx(inCtx, outCtx);
             convCtx.doConversion();
         }
         catch (int r)
