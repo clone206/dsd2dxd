@@ -183,6 +183,26 @@ static void dsf_read_close(dsd_reader_t *reader)
     }
 }
 
+static void dsf_read_clone(dsd_reader_t *reader, dsd_reader_t *reader2) {
+    reader2->prvt = (dsf_read_context_t *)malloc(sizeof(dsf_read_context_t));
+
+    if (reader2->prvt) {
+        memcpy(reader2->prvt, reader->prvt, sizeof(dsf_read_context_t));
+        
+        if (((dsf_read_context_t*)reader->prvt)->block_size) {
+            int i;
+            for (i = 0; i < reader->channel_count; i++) {
+                ((dsf_read_context_t*)reader2->prvt)->buffer[i] 
+                    = (uint8_t*)malloc(((dsf_read_context_t*)reader->prvt)
+                        ->block_size);
+                memcpy(((dsf_read_context_t*)reader2->prvt)->buffer[i],
+                    ((dsf_read_context_t*)reader->prvt)->buffer[i],
+                    ((dsf_read_context_t*)reader->prvt)->block_size);
+            }
+        }
+    }
+}
+
 static uint32_t dsf_read_next_chunk(dsd_reader_t *reader)
 {
     dsf_read_context_t *context = (dsf_read_context_t*) reader->prvt;
@@ -204,16 +224,8 @@ dsd_reader_funcs_t *dsf_reader_funcs()
         dsf_read_open,
         dsf_read_samples,
         dsf_read_next_chunk,
-        dsf_read_close
+        dsf_read_close,
+        dsf_read_clone
     };
     return &funcs;
 }
-
-typedef struct dsf_write_context_t {
-    uint8_t  buffer[6][SACD_BLOCK_SIZE_PER_CHANNEL];
-    uint8_t *buffer_ptr[6];
-    int      current_channel;
-    uint64_t sample_count;
-    uint64_t data_length;
-    off_t    id3_start;
-} dsf_write_context_t;

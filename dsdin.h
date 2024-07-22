@@ -45,6 +45,7 @@ typedef struct dsd_reader_funcs_t {
     size_t   (*read)      (char *buf, size_t len, struct dsd_reader_t *reader);
     uint32_t (*next_chunk)(struct dsd_reader_t *reader);
     void     (*close)     (struct dsd_reader_t *reader);
+    void     (*clone)     (struct dsd_reader_t *reader, struct dsd_reader_t *reader2);
 } dsd_reader_funcs_t;
 
 typedef struct dsd_reader_t {
@@ -64,6 +65,7 @@ extern int      dsd_reader_open(FILE *fp, dsd_reader_t *reader);
 extern size_t   dsd_reader_read(char *buf, size_t len, dsd_reader_t *reader);
 extern uint32_t dsd_reader_next_chunk(dsd_reader_t *reader);
 extern void     dsd_reader_close(dsd_reader_t *reader);
+extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader);
 
 #ifdef __cplusplus
 } /* extern "C" */

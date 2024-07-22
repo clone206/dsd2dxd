@@ -9,15 +9,21 @@ class dsd
     dsd_reader_t *reader;
 
 public:
-    dsd(FILE *in_file, FILE *out_file, uint32_t format, uint32_t sample_rate,
-        uint8_t channel_count)
+    dsd(FILE *in_file) : reader(new dsd_reader_t)
     {
-        dsd_reader_open(in_file, reader);
+        if (!reader || dsd_reader_open(in_file, reader) != 1)
+            throw std::runtime_error("Couldn't init. Check inputs.");
+    }
+
+    dsd(dsd const &x) : reader(dsd_reader_clone(x.reader)) {
+        if (!reader)
+            throw std::runtime_error("Couldn't clone. Check inputs.");
     }
 
     ~dsd()
     {
         dsd_reader_close(reader);
+        delete reader;
     }
 
     friend void swap(dsd &a, dsd &b)

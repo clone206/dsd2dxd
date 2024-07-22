@@ -286,13 +286,29 @@ static void dsdiff_read_close(dsd_reader_t *reader)
     }
 }
 
+static void dsdiff_read_clone(dsd_reader_t *reader, dsd_reader_t *reader2) {
+    reader2->prvt = (dsdiff_read_context_t *)malloc(sizeof(dsdiff_read_context_t));
+
+    if (reader2->prvt) {
+        memcpy(reader2->prvt, reader->prvt, sizeof(dsdiff_read_context_t));
+        
+        if (((dsdiff_read_context_t *)reader->prvt)->fake_id3) {
+            ((dsdiff_read_context_t *)reader2->prvt)->fake_id3
+                = (uint8_t *)malloc(sizeof(uint8_t));
+            memcpy(((dsdiff_read_context_t *)reader2->prvt)->fake_id3, 
+                ((dsdiff_read_context_t *)reader->prvt)->fake_id3, sizeof(uint8_t)); 
+        }
+    }
+}
+
 dsd_reader_funcs_t *dsdiff_reader_funcs()
 {
     static dsd_reader_funcs_t funcs = {
         dsdiff_read_open,
         dsdiff_read_samples,
         dsdiff_read_next_chunk,
-        dsdiff_read_close
+        dsdiff_read_close,
+        dsdiff_read_clone
     };
     return &funcs;
 }

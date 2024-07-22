@@ -41,6 +41,7 @@ or implied, of Sebastian Gesemann.
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
 #include "AudioFile.h"
+#include "dsdin.hpp"
 
 using namespace std;
 namespace fs = std::filesystem;
@@ -656,20 +657,29 @@ namespace
         {
             char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
             char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
+            off_t audioPos; // Position of beginning of audio in input file
             // Set up input stream depending on whether we're working
             // with a file or stdin
             ifstream fp;
             istream &in = (!inCtx.stdIn)
-                ? [&fp](string filename) -> istream &
+                ? [&fp, &audioPos](string filename) -> istream &
             {
+                FILE *inFile;
+                if ((inFile = fopen(filename.c_str(), "rb")) != NULL) {
+                    auto myDsd = dsd(inFile);
+                    audioPos = ftello(inFile);
+                }
                 fp.open(filename);
                 if (!fp)
                     abort();
+                fp.seekg(audioPos);
                 return fp;
             }(inCtx.input)
                 : std::cin;
 
-            loud("About to start main conversion loop");
+            loud("About to start main conversion loop.");
+            loud("Seekpos: ", false);
+            loud(std::to_string(audioPos));
 
             while (in.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
             {

@@ -58,6 +58,17 @@ extern int dsd_reader_open(FILE *fp, dsd_reader_t *reader)
     return result;
 }
 
+extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader) {
+    dsd_reader_t *reader2;
+    reader2 = (dsd_reader_t *)malloc(sizeof(dsd_reader_t));
+
+    if (reader2) {
+        memcpy(reader2, reader, sizeof(dsd_reader_t));
+
+        //if
+    }
+}
+
 extern size_t dsd_reader_read(char *buf, size_t len, dsd_reader_t *reader)
 {
     return reader->impl->read(buf, len, reader);
