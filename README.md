@@ -117,7 +117,7 @@ except where overridden by each file's metadata.
 ```
 You downloaded the source code for "dsd2pcm" which is a simple little
 "filter" program, that takes a DSD data stream and converts
-it to a PCM stream (either 16, 20, 24, or 32 [float] bits) and writes it to
+it to a PCM stream (either 16, 20, or 24 fixed bits; or 32 float bits) and writes it to
 stdout or a file. The code is split into two modules:
 
   (1) dsd2pcm
