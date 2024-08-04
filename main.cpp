@@ -354,18 +354,18 @@ namespace
                 fpd = rand() * UINT32_MAX;
         }
 
-        void saveAndPrintFile(string fileName)
+        void saveAndPrintFile(string fileName, AudioFileFormat fmt)
         {
             if (bits == 32)
             {
                 loud("About to write 32b file");
-                aFile<float>.save(fileName, AudioFileFormat::Wave);
+                aFile<float>.save(fileName, fmt);
                 aFile<float>.printSummary();
             }
             else
             {
                 loud("About to write int file");
-                aFile<int>.save(fileName, AudioFileFormat::Wave);
+                aFile<int>.save(fileName, fmt);
                 aFile<int>.printSummary();
             }
             cerr << "Wrote to file: " << fileName << "\n";
@@ -764,14 +764,32 @@ namespace
 
             if (outCtx.output != 's')
             {
-                string outName = "outfile.wav";
+                string outBaseName = "outfile";
+                string outExt = "";
+                AudioFileFormat fmt;
+
+                switch (outCtx.output)
+                {
+                case 'w':
+                    outExt = ".wav";
+                    fmt = AudioFileFormat::Wave;
+                    break;
+                case 'a':
+                    outExt = ".aif";
+                    fmt = AudioFileFormat::Aiff;
+                    break;
+                default:
+                    break;
+                }
+
+                string outName = outBaseName + outExt;
 
                 if (!inCtx.stdIn)
                 {
-                    outName = inCtx.filePath.stem().string() + ".wav";
+                    outName = inCtx.filePath.stem().string() + outExt;
                 }
 
-                outCtx.saveAndPrintFile(outName);
+                outCtx.saveAndPrintFile(outName, fmt);
             }
         }
 
@@ -827,7 +845,7 @@ namespace
                                   {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating \n\tpoint dither), or X (no dither) (default: F for 32 bit, T otherwise)", 1},
                                   {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with \n\tdouble rate DSD, Chebyshev filter)", 1},
                                   {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with \n\tDecimation ratio of 16, 32, or 64)", 1},
-                                  {"output", {"-o", "--output"}, "Output type. S (stdout), or W (wave) (default: S. Note that W outputs to either \n\t<basename>.wav in current directory, where <basename> is the input filename \n\twithout the extension, or outfile.wav if reading from stdin.)", 1},
+                                  {"output", {"-o", "--output"}, "Output type. S (stdout), A (aif), or W (wave) (default: S. Note that W or A outputs to either \n\t<basename>.[wav|aif] in current directory, where <basename> is the input filename \n\twithout the extension, or outfile.[wav|aif] if reading from stdin.)", 1},
                                   {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= \n\tformat. (default: 0).", 1},
                                   {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
 

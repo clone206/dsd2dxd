@@ -36,8 +36,8 @@ dsd2dxd -h|--help
 # Read from dsf file, printing extra info to stderr (-l for "loud mode"). 
 # Outputs to 1kHz_stereo_p.wav
 dsd2dxd -o w -l 1kHz_stereo_p.dsf
-# Process all .dsf files in current directory, saving to wav files
-dsd2dxd -o w *.dsf
+# Process all .dsf files in current directory, saving to aiff files
+dsd2dxd -o a *.dsf
 # Quick and dirty way to process all dff and dsf files in current
 # directory, saving to wav files
 dsd2dxd -o w *.d?f
