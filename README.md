@@ -68,9 +68,9 @@ dsd2dxd [options] < infile.dsd > outfile.pcm
 
 ## More Info
 
-The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
+The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
 
-For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128. For a more "correct" sound when using dsd128, try the equiripple filters, especially if going to 176.4 kHz. If you like the sound of XLD then feel free to use those filters here via the below commandline options, but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. Better to go to 176.4 when using the XLD filter.
+For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128. For a more "correct" sound (with respect to the frequency domain) when using dsd128, try the equiripple filters, especially if going to 176.4 kHz. If you like the sound of XLD then feel free to use those filters here via the below commandline options, but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. Better to go to 176.4 when using the XLD filter.
 
 There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
