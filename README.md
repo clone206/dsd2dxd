@@ -4,13 +4,7 @@ Converts DSD to PCM on the command line.
 
 Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
 
-Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to a wav file.
-
-The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
-
-For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128. For a more "correct" sound when using dsd128, try the equiripple filters, especially if going to 176.4 kHz. If you like the sound of XLD then feel free to use those filters here via the below commandline options, but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. Better to go to 176.4 when using the XLD filter.
-
-There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
+Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to a wav file.
 
 `dsd2dxd` handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
@@ -41,23 +35,16 @@ You can specify any directory you like as the last argument in the above install
 dsd2dxd -h|--help
 # Example of using with an input and output file
 dsd2dxd [options] < infile.dsd > outfile.pcm
-# Example of piping output to ffplay (planar format, lsb first)
+# Read from dsf file, printing extra info to stderr. 
+# Outputs to 1kHz_stereo_p.wav
+dsd2dxd -o w -l 1kHz_stereo_p.dsf
+# Example of reading raw dsd (planar format, lsb first) into stdin, 
+# piping output to ffplay
 dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 # Example of piping output to ffmpeg to save to a flac file
 # (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
 dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
-# Using dsdunpack with a dsf test file as input, outputting to wav file with all other options set to default (see below explanation of dsdunpack)
-dsdunpack -o -v 1kHz_stereo_p.dsf | dsd2dxd -o W
-# Now we can play the file like so:
-ffplay 1kHz_stereo_p.wav
-# Same as above but piping directly to ffplay instead of wav file output
-dsdunpack -o -v 1kHz_stereo_p.dsf | dsd2dxd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 ```
-
-See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can read .dff or .dsf audio data to stdout as used in above usage example, for piping to dsd2dxd. `dsdunpack` always outputs interleaved, msbf format DSD. This works out nicely since `dsd2dxd` defaults to these options when processing DSD input. 
-
-`dsdunpack` needs to be compiled separately and its binary can then be copied into your `$PATH`.
-
 ## Testing Examples
 
 ```bash
@@ -72,6 +59,14 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
 ```
 
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
+
+## More Info
+
+The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
+
+For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128. For a more "correct" sound when using dsd128, try the equiripple filters, especially if going to 176.4 kHz. If you like the sound of XLD then feel free to use those filters here via the below commandline options, but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. Better to go to 176.4 when using the XLD filter.
+
+There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
 ## Full Usage and Options
 
