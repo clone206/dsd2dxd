@@ -114,6 +114,9 @@ static int dsf_read_open(FILE *fp, dsd_reader_t *reader)
     }
 
     reader->prvt = context;
+    reader->audio_pos = ftello(fp);
+    reader->is_lsb = context->is_lsb;
+    reader->block_size = context->block_size;
     return 1;
 }
 

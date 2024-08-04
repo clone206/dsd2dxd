@@ -64,8 +64,7 @@ extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader) {
 
     if (reader2) {
         memcpy(reader2, reader, sizeof(dsd_reader_t));
-
-        //if
+        reader->impl->clone(reader, reader2);
     }
 }
 

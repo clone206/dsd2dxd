@@ -190,6 +190,8 @@ static int dsdiff_read_open(FILE *fp, dsd_reader_t *reader)
         context->fake_id3 = fake_id3;
         context->fake_id3_len = fake_id3_len;
         reader->prvt = context;
+        reader->audio_pos = ftello(fp);
+        reader->is_lsb = 0;
     }
 
     return 1;

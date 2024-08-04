@@ -36,6 +36,7 @@ extern "C"
 #define DSD_FORMAT_DSDIFF MAKE_MARKER('F', 'R', 'M', '8')
 #define DSD_FORMAT_DSF    MAKE_MARKER('D', 'S', 'D', ' ')
 
+#define off_t int64_t
 
 /* Reading */
 struct dsd_reader_t;
@@ -55,16 +56,19 @@ typedef struct dsd_reader_t {
     uint32_t            sample_rate;
     uint64_t            data_length;
     uint8_t             compressed;
+    off_t               audio_pos;
+    int                 is_lsb;
+    uint32_t            block_size;
 
     uint32_t            container_format;
     void               *prvt;
     dsd_reader_funcs_t *impl;
 } dsd_reader_t;
 
-extern int      dsd_reader_open(FILE *fp, dsd_reader_t *reader);
-extern size_t   dsd_reader_read(char *buf, size_t len, dsd_reader_t *reader);
-extern uint32_t dsd_reader_next_chunk(dsd_reader_t *reader);
-extern void     dsd_reader_close(dsd_reader_t *reader);
+extern int           dsd_reader_open(FILE *fp, dsd_reader_t *reader);
+extern size_t        dsd_reader_read(char *buf, size_t len, dsd_reader_t *reader);
+extern uint32_t      dsd_reader_next_chunk(dsd_reader_t *reader);
+extern void          dsd_reader_close(dsd_reader_t *reader);
 extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader);
 
 #ifdef __cplusplus

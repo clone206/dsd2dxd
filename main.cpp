@@ -115,11 +115,9 @@ namespace
             }
 
             input = inFile; // "-" == stdin
-            blockSize = blockSizeIn;
             channelsNum = channels;
             dsdRate = inRate;
-            dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
-            dsdStride = interleaved ? channelsNum : 1;
+            setBlockSize(blockSizeIn);
 
             if (input == "-")
             {
@@ -134,6 +132,12 @@ namespace
                 loud("Parent path: ", false);
                 loud(fs::absolute(filePath).parent_path());
             }
+        }
+
+        void setBlockSize(int blockSizeIn) {
+            blockSize = blockSizeIn;
+            dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
+            dsdStride = interleaved ? channelsNum : 1;
         }
     };
 
@@ -205,13 +209,10 @@ namespace
             lastSampsClippedHigh = 0;
             lastSampsClippedLow = 0;
             bytespersample = bits == 20 ? 3 : bits / 8;
-            blockSize = blockSizeOut;
-            pcmBlockSize = blockSize / (decimRatio / 8);
-            outBlockSize = pcmBlockSize * channelsNum * bytespersample;
             ditherType = tolower(ditherTypeOut);
             filtType = tolower(filtTypeOut);
 
-            initFile();
+            setBlockSize(blockSizeOut);
 
             setScaling(outVol);
 
@@ -219,8 +220,14 @@ namespace
             {
                 throw "Invalid dither type!";
             }
+        }
 
-            initDither();
+        void setBlockSize(int blockSizeOut) {
+            loud("Got block size of ", false);
+            loud(std::to_string(blockSizeOut));
+            blockSize = blockSizeOut;
+            pcmBlockSize = blockSize / (decimRatio / 8);
+            outBlockSize = pcmBlockSize * channelsNum * bytespersample;
         }
 
         void initDither()
@@ -644,49 +651,80 @@ namespace
         {
             inCtx = inCtxParam;
             outCtx = outCtxParam;
+        }
+
+        void doConversion()
+        {
+            long audioLength = 0; // Length of audio data
+
+            // Set up input stream depending on whether we're working
+            // with a file or stdin
+            ifstream fp;
+            istream &in = (!inCtx.stdIn)
+                ? [&]() -> istream &
+            {
+                off_t audioPos = 0;   // Position of beginning of audio in input file
+                FILE *inFile;
+                if ((inFile = fopen(inCtx.input.c_str(), "rb")) != NULL)
+                {
+                    auto myDsd = dsd(inFile);
+                    audioPos = myDsd.audioPos;
+                    audioLength = myDsd.audioLength;
+                    inCtx.channelsNum = myDsd.channelCount;
+                    outCtx.channelsNum = myDsd.channelCount;
+                    inCtx.dsdRate = myDsd.dsdRate;
+                    inCtx.interleaved = myDsd.interleaved;
+                    inCtx.lsbitfirst = myDsd.isLsb;
+
+                    if (myDsd.blockSize) {
+                        loud("Setting block size from file");
+                        inCtx.setBlockSize(myDsd.blockSize);
+                        outCtx.setBlockSize(myDsd.blockSize);
+                    }
+                    loud("Audio length in bytes: ", false);
+                    loud(std::to_string(audioLength));
+                }
+
+                fp.open(inCtx.input);
+                if (!fp)
+                    abort();
+                fp.seekg(audioPos);
+                return fp;
+            }()
+                : std::cin;
+
+            checkConv();
+
             dsdData.resize(inCtx.blockSize * inCtx.channelsNum);
             floatData.resize(outCtx.pcmBlockSize);
             pcmData.resize(outCtx.pcmBlockSize * outCtx.channelsNum * outCtx.bytespersample);
             dxds = vector<dxd>(outCtx.channelsNum, dxd(outCtx.filtType, inCtx.lsbitfirst,
                                                        outCtx.decimRatio, inCtx.dsdRate));
-
-            checkConv();
-        }
-
-        void doConversion()
-        {
             char *const dsdIn = reinterpret_cast<char *>(&dsdData[0]);
             char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
-            off_t audioPos; // Position of beginning of audio in input file
-            // Set up input stream depending on whether we're working
-            // with a file or stdin
-            ifstream fp;
-            istream &in = (!inCtx.stdIn)
-                ? [&fp, &audioPos](string filename) -> istream &
-            {
-                FILE *inFile;
-                if ((inFile = fopen(filename.c_str(), "rb")) != NULL) {
-                    auto myDsd = dsd(inFile);
-                    audioPos = ftello(inFile);
-                }
-                fp.open(filename);
-                if (!fp)
-                    abort();
-                fp.seekg(audioPos);
-                return fp;
-            }(inCtx.input)
-                : std::cin;
+
+            int frameSize = inCtx.blockSize * inCtx.channelsNum;
+            long bytesRemaining = audioLength > 0 ? audioLength : frameSize;
+            int blockRemaining = inCtx.blockSize;
 
             loud("About to start main conversion loop.");
-            loud("Seekpos: ", false);
-            loud(std::to_string(audioPos));
 
-            while (in.read(dsdIn, inCtx.blockSize * inCtx.channelsNum))
+            while ((inCtx.stdIn ? true : (bytesRemaining > 0)) && in.read(dsdIn, bytesRemaining > frameSize ? frameSize : bytesRemaining))
             {
+                if (!inCtx.stdIn)
+                {
+                    blockRemaining = (bytesRemaining > frameSize
+                                          ? frameSize
+                                          : bytesRemaining) /
+                                     inCtx.channelsNum;
+                    bytesRemaining -= frameSize;
+                    //loud(std::to_string(bytesRemaining), false);
+                }
                 loud("-", false);
+
                 for (int c = 0; c < inCtx.channelsNum; ++c)
                 {
-                    dxds[c].translate(inCtx.blockSize,
+                    dxds[c].translate(blockRemaining,
                                       &dsdData[0] + c * inCtx.dsdChanOffset,
                                       inCtx.dsdStride, &floatData[0], 1,
                                       outCtx.decimRatio);
@@ -764,7 +802,10 @@ namespace
                  << "\nOutput Rate: " << outCtx.rate
                  << "\nDecimation: " << outCtx.decimRatio
                  << "\nPeak level: " << outCtx.peakLevel
-                 << "\nBlock Size: " << inCtx.blockSize
+                 << "\nIn Block Size: " << inCtx.blockSize
+                 << "\nOut Block Size: " << outCtx.blockSize
+                 << "\nPcm Block Size: " << outCtx.pcmBlockSize
+                 << "\nOutput Block Size: " << outCtx.outBlockSize
                  << "\nChannels: " << outCtx.channelsNum << "\n\n";
         }
     };
@@ -793,10 +834,13 @@ namespace
         if (args["help"])
         {
             cerr << "\ndsd2dxd filter (raw DSD --> PCM).\n"
-                    "Reads from stdin or file and writes to stdout or file in a *nix environment.\n"
-                    "Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin\n"
+                    "Reads from stdin or file and writes to stdout or file in a *nix environment.\n\n"
+                    "Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin\n\n"
+                    "If reading from a file, certain command line options you provide (e.g. block size) may be overridden \n"
+                    "using the metadata found in that file (either a dsf or dff file).\n"
                     "If neither filename(s) or - is provided, stdin is assumed.\n"
-                    "Multiple filenames can be provided and the input-related options specified will be applied to each.\n"
+                    "Multiple filenames can be provided and the input-related options specified will be applied to each, \n"
+                    "except where overridden by each file's metadata.\n"
                  << argparser;
             throw 0;
         }

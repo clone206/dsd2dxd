@@ -76,9 +76,16 @@ See [dsdunpack](https://github.com/clone206/dsdunpack) repo for a tool that can 
 ## Full Usage and Options
 
 ```
+dsd2dxd filter (raw DSD --> PCM).
+Reads from stdin or file and writes to stdout or file in a *nix environment.
+
 Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
+
+If reading from a file, certain command line options you provide (e.g. block size) may be overridden 
+using the metadata found in that file (either a dsf or dff file).
 If neither filename(s) or - is provided, stdin is assumed.
-Multiple filenames can be provided and the input-related options specified will be applied to each.
+Multiple filenames can be provided and the input-related options specified will be applied to each, 
+except where overridden by each file's metadata.
     -h, --help
         shows this help message
     -c, --channels
@@ -89,8 +96,8 @@ Multiple filenames can be provided and the input-related options specified will 
         16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
     -t, --filttype
         X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), 
-	E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
-	(default: X [single rate] or C [double rate])
+        E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
+        (default: X [single rate] or C [double rate])
     -e, --endianness
         Byte order of input. M (MSB first) or L (LSB first) (default: M)
     -s, --bs
@@ -106,7 +113,7 @@ Multiple filenames can be provided and the input-related options specified will 
     -v, --volume
         Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).
     -l, --loud
-        Print diagnostic messages to stderr
+        Print diagnostic messages to stderr        
 ```
 
 ## Modified original info.txt
