@@ -78,6 +78,8 @@ namespace
         int dsdChanOffset;
         int channelsNum;
         int blockSize;
+        long audioLength;
+        off_t audioPos;
 
         InputContext() {}
 
@@ -122,6 +124,8 @@ namespace
             if (input == "-")
             {
                 stdIn = true;
+                audioLength = 0;
+                audioPos = 0;
             }
             else
             {
@@ -131,10 +135,31 @@ namespace
                 loud(filePath.stem());
                 loud("Parent path: ", false);
                 loud(fs::absolute(filePath).parent_path());
+
+                FILE *inFile;
+                if ((inFile = fopen(input.c_str(), "rb")) != NULL)
+                {
+                    auto myDsd = dsd(inFile);
+                    audioPos = myDsd.audioPos;
+                    audioLength = myDsd.audioLength;
+                    channelsNum = myDsd.channelCount;
+                    dsdRate = myDsd.dsdRate;
+                    interleaved = myDsd.interleaved;
+                    lsbitfirst = myDsd.isLsb;
+
+                    if (myDsd.blockSize)
+                    {
+                        loud("Setting block size from file");
+                        setBlockSize(myDsd.blockSize);
+                    }
+                    loud("Audio length in bytes: ", false);
+                    loud(std::to_string(audioLength));
+                }
             }
         }
 
-        void setBlockSize(int blockSizeIn) {
+        void setBlockSize(int blockSizeIn)
+        {
             blockSize = blockSizeIn;
             dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
             dsdStride = interleaved ? channelsNum : 1;
@@ -191,8 +216,8 @@ namespace
 
         OutputContext() {}
 
-        OutputContext(int outBits, int outChansNum, int outRate, char outType,
-                      int decimation, int blockSizeOut, char ditherTypeOut, char filtTypeOut,
+        OutputContext(int outBits, int outRate, char outType,
+                      int decimation, char ditherTypeOut, char filtTypeOut,
                       double outVol)
         {
             if (outBits != 16 && outBits != 20 && outBits != 24 && outBits != 32)
@@ -201,7 +226,6 @@ namespace
             }
 
             bits = outBits;
-            channelsNum = outChansNum;
             rate = outRate;
             output = tolower(outType);
             decimRatio = decimation;
@@ -212,8 +236,6 @@ namespace
             ditherType = tolower(ditherTypeOut);
             filtType = tolower(filtTypeOut);
 
-            setBlockSize(blockSizeOut);
-
             setScaling(outVol);
 
             if (ditherType != 'n' && ditherType != 't' && ditherType != 'f' && ditherType != 'x')
@@ -222,9 +244,11 @@ namespace
             }
         }
 
-        void setBlockSize(int blockSizeOut) {
+        void setBlockSize(int blockSizeOut, int chanNumOut)
+        {
             loud("Got block size of ", false);
             loud(std::to_string(blockSizeOut));
+            channelsNum = chanNumOut;
             blockSize = blockSizeOut;
             pcmBlockSize = blockSize / (decimRatio / 8);
             outBlockSize = pcmBlockSize * channelsNum * bytespersample;
@@ -651,46 +675,25 @@ namespace
         {
             inCtx = inCtxParam;
             outCtx = outCtxParam;
+            outCtx.setBlockSize(inCtx.blockSize, inCtx.channelsNum);
+            outCtx.initFile();
+            outCtx.initDither();
         }
 
         void doConversion()
         {
-            long audioLength = 0; // Length of audio data
-
             // Set up input stream depending on whether we're working
             // with a file or stdin
             ifstream fp;
             istream &in = (!inCtx.stdIn)
-                ? [&]() -> istream &
+                ? [&fp](string input, int64_t audioPos) -> istream &
             {
-                off_t audioPos = 0;   // Position of beginning of audio in input file
-                FILE *inFile;
-                if ((inFile = fopen(inCtx.input.c_str(), "rb")) != NULL)
-                {
-                    auto myDsd = dsd(inFile);
-                    audioPos = myDsd.audioPos;
-                    audioLength = myDsd.audioLength;
-                    inCtx.channelsNum = myDsd.channelCount;
-                    outCtx.channelsNum = myDsd.channelCount;
-                    inCtx.dsdRate = myDsd.dsdRate;
-                    inCtx.interleaved = myDsd.interleaved;
-                    inCtx.lsbitfirst = myDsd.isLsb;
-
-                    if (myDsd.blockSize) {
-                        loud("Setting block size from file");
-                        inCtx.setBlockSize(myDsd.blockSize);
-                        outCtx.setBlockSize(myDsd.blockSize);
-                    }
-                    loud("Audio length in bytes: ", false);
-                    loud(std::to_string(audioLength));
-                }
-
-                fp.open(inCtx.input);
+                fp.open(input);
                 if (!fp)
                     abort();
                 fp.seekg(audioPos);
                 return fp;
-            }()
+            }(inCtx.input, inCtx.audioPos)
                 : std::cin;
 
             checkConv();
@@ -704,7 +707,7 @@ namespace
             char *const pcmOut = reinterpret_cast<char *>(&pcmData[0]);
 
             int frameSize = inCtx.blockSize * inCtx.channelsNum;
-            long bytesRemaining = audioLength > 0 ? audioLength : frameSize;
+            long bytesRemaining = inCtx.audioLength > 0 ? inCtx.audioLength : frameSize;
             int blockRemaining = inCtx.blockSize;
 
             loud("About to start main conversion loop.");
@@ -718,7 +721,7 @@ namespace
                                           : bytesRemaining) /
                                      inCtx.channelsNum;
                     bytesRemaining -= frameSize;
-                    //loud(std::to_string(bytesRemaining), false);
+                    // loud(std::to_string(bytesRemaining), false);
                 }
                 loud("-", false);
 
@@ -736,7 +739,6 @@ namespace
                         double r = floatData[s];
 
                         outCtx.scaleAndDither(r, c);
-
                         outCtx.writeToBuffer(out, r, c);
                     }
                 }
@@ -900,9 +902,9 @@ int main(int argc, char *argv[])
     OutputContext outCtx;
     try
     {
-        outCtx = OutputContext(bitDepth, channels, outRate,
+        outCtx = OutputContext(bitDepth, outRate,
                                args["output"].as<string>("S").c_str()[0],
-                               decimation, blockSize, ditherType,
+                               decimation, ditherType,
                                args["filtertype"].as<string>(inputRate == 2
                                                                  ? "C"
                                                                  : "X")
@@ -921,9 +923,6 @@ int main(int argc, char *argv[])
         {
             cerr << "Input: " << input << "\n";
         }
-
-        outCtx.initFile();
-        outCtx.initDither();
 
         InputContext inCtx;
         try

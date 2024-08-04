@@ -33,7 +33,8 @@ You can specify any directory you like as the last argument in the above install
 ```bash
 # See options and usage
 dsd2dxd -h|--help
-# Example of using with an input and output file
+# Example of using with an input and output file,
+# via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
 # Read from dsf file, printing extra info to stderr. 
 # Outputs to 1kHz_stereo_p.wav
