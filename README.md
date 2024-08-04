@@ -33,9 +33,6 @@ You can specify any directory you like as the last argument in the above install
 ```bash
 # See options and usage
 dsd2dxd -h|--help
-# Example of using with an input and output file,
-# via stdin/stdout
-dsd2dxd [options] < infile.dsd > outfile.pcm
 # Read from dsf file, printing extra info to stderr. 
 # Outputs to 1kHz_stereo_p.wav
 dsd2dxd -o w -l 1kHz_stereo_p.dsf
@@ -45,6 +42,9 @@ dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 # Example of piping output to ffmpeg to save to a flac file
 # (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
 dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
+# Generalized example of using with an input and output file,
+# via stdin/stdout
+dsd2dxd [options] < infile.dsd > outfile.pcm
 ```
 ## Testing Examples
 
@@ -117,7 +117,7 @@ except where overridden by each file's metadata.
 ```
 You downloaded the source code for "dsd2pcm" which is a simple little
 "filter" program, that takes a DSD data stream and converts
-it to a PCM stream (either 16, 20 or 24 bits) and writes it to
+it to a PCM stream (either 16, 20, 24, or 32 [float] bits) and writes it to
 stdout or a file. The code is split into two modules:
 
   (1) dsd2pcm
