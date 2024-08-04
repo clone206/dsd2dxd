@@ -91,23 +91,31 @@ except where overridden by each file's metadata.
     -b, --bitdepth
         16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
     -t, --filttype
-        X (XLD filter), D (Original dsd2pcm filter. Only available with 8:1 decimation ratio), 
-        E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
+        X (XLD filter), D (Original dsd2pcm filter. Only 
+        available with 8:1 decimation ratio), 
+        E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only 
+        available with double rate DSD input)
         (default: X [single rate] or C [double rate])
     -e, --endianness
         Byte order of input. M (MSB first) or L (LSB first) (default: M)
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating 
+        point dither), or X (no dither) (default: F for 32 bit, T otherwise)
     -r, --ratio
-        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with double rate DSD, Chebyshev filter)
+        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with 
+        double rate DSD, Chebyshev filter)
     -i, --inrate
-        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with Decimation ratio of 16, 32, or 64)
+        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with 
+        Decimation ratio of 16, 32, or 64)
     -o, --output
-        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to either <basename>.wav in current directory, where <basename> is the input filename without the extension, or outfile.wav if reading from stdin.)
+        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to either 
+        <basename>.wav in current directory, where <basename> is the input filename 
+        without the extension, or outfile.wav if reading from stdin.)
     -v, --volume
-        Volume adjustment in dB. If a negative number is needed use the --volume= format. (default: 0).
+        Volume adjustment in dB. If a negative number is needed use the --volume= 
+        format. (default: 0).
     -l, --loud
         Print diagnostic messages to stderr        
 ```
