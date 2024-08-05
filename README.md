@@ -12,8 +12,7 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 
 - \*nix environment
 - `g++`
-- `taglib 2.0.1`
-  - [https://github.com/taglib/taglib](https://github.com/taglib/taglib)
+- [taglib 2.0.1](https://github.com/taglib/taglib)
   - Note that many distros have dated versions of the taglib dev package, so you may need to follow the install instructions at the above repo and use cmake/make to build and install taglib 2.0.1 from source.
 - `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd` to e.g. flac)
 
