@@ -4,7 +4,7 @@ Converts DSD to PCM on the command line.
 
 Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
 
-Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to a wav file.
+Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to an aiff or wav file. Where possible, ID3v2 tags are copied to the destination files.
 
 `dsd2dxd` handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
