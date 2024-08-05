@@ -10,15 +10,18 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 
 ## Dependencies
 
-- `g++`
 - \*nix environment
+- `g++`
+- `taglib 2.0.1`
+  - [https://github.com/taglib/taglib](https://github.com/taglib/taglib)
+  - Note that many distros have dated versions of the taglib dev package, so you may need to follow the install instructions at the above repo and use cmake/make to build and install taglib 2.0.1 from source.
 - `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd` to e.g. flac)
 
 ## C++ program usage
 
 ### Compling
 
-`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd`
+`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib)`
 
 ### Installing
 
@@ -156,7 +159,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd
+  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib)
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p

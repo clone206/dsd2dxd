@@ -37,6 +37,9 @@ or implied, of Sebastian Gesemann.
 #include <ctype.h>
 #include <typeinfo>
 #include <filesystem>
+#include <taglib/tag.h>
+#include <taglib/fileref.h>
+#include <taglib/tpropertymap.h>
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
@@ -80,6 +83,7 @@ namespace
         int blockSize;
         long audioLength;
         off_t audioPos;
+        TagLib::PropertyMap props;
 
         InputContext() {}
 
@@ -120,6 +124,7 @@ namespace
             channelsNum = channels;
             dsdRate = inRate;
             setBlockSize(blockSizeIn);
+            props = TagLib::PropertyMap();
 
             if (input == "-")
             {
@@ -154,6 +159,16 @@ namespace
                     }
                     loud("Audio length in bytes: ", false);
                     loud(std::to_string(audioLength));
+                }
+
+                TagLib::FileRef f(input.c_str());
+
+                if (!f.isNull() && f.tag())
+                {
+                    TagLib::Tag *tag = f.tag();
+                    loud("Artist: ", false);
+                    loud(tag->artist().to8Bit());
+                    props = f.properties();
                 }
             }
         }
@@ -790,6 +805,12 @@ namespace
                 }
 
                 outCtx.saveAndPrintFile(outName, fmt);
+
+                if (inCtx.props.size() > 0) {
+                    TagLib::FileRef f(outName.c_str());
+                    f.setProperties(inCtx.props);
+                    f.save();
+                }
             }
         }
 
