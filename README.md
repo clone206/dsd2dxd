@@ -14,7 +14,8 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 - `g++`
 - [taglib 2.0.1](https://github.com/taglib/taglib)
   - Note that many distros have dated versions of the taglib dev package, so you may need to follow the install instructions at the above repo and use cmake/make to build and install taglib 2.0.1 from source.
-- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd` to e.g. flac)
+    - If using homebrew, such as on MacOS, it may be as simple as running `brew install taglib --HEAD`. It is also possible to run homebrew in linux.
+- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd`, e.g. to flac)
 
 ## C++ program usage
 
@@ -35,7 +36,7 @@ You can specify any directory you like as the last argument in the above install
 ```bash
 # See options and usage
 dsd2dxd -h|--help
-# Read from dsf file, printing extra info to stderr (-l for "loud mode"). 
+# Read from dsf file, printing extra info to stderr (-l for "loud mode").
 # Outputs to 1kHz_stereo_p.wav
 dsd2dxd -o w -l 1kHz_stereo_p.dsf
 # Process all .dsf files in current directory, saving to aiff files
@@ -43,7 +44,7 @@ dsd2dxd -o a *.dsf
 # Quick and dirty way to process all dff and dsf files in current
 # directory, saving to wav files
 dsd2dxd -o w *.d?f
-# Example of reading raw dsd (planar format, lsb first) into stdin, 
+# Example of reading raw dsd (planar format, lsb first) into stdin,
 # piping output to ffplay
 dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
 # Example of piping output to ffmpeg to save to a flac file
@@ -53,6 +54,7 @@ dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 
 # via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
 ```
+
 ## Testing Examples
 
 ```bash
@@ -84,10 +86,10 @@ Reads from stdin or file and writes to stdout or file in a *nix environment.
 
 Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
 
-If reading from a file, certain command line options you provide (e.g. block size) may be overridden 
+If reading from a file, certain command line options you provide (e.g. block size) may be overridden
 using the metadata found in that file (either a dsf or dff file).
 If neither filename(s) or - is provided, stdin is assumed.
-Multiple filenames can be provided and the input-related options specified will be applied to each, 
+Multiple filenames can be provided and the input-related options specified will be applied to each,
 except where overridden by each file's metadata.
     -h, --help
         shows this help message
@@ -98,33 +100,33 @@ except where overridden by each file's metadata.
     -b, --bitdepth
         16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
     -t, --filttype
-        X (XLD filter), D (Original dsd2pcm filter. Only 
-        available with 8:1 decimation ratio), 
-        E (Equiripple. Only available with double rate DSD input), C (Chebyshev. Only 
-        available with double rate DSD input)
+        X (XLD filter), D (Original dsd2pcm filter. Only
+        available with 8:1 decimation ratio),
+        E (Equiripple. Only
+        available with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)
         (default: X [single rate] or C [double rate])
     -e, --endianness
         Byte order of input. M (MSB first) or L (LSB first) (default: M)
     -s, --bs
         Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
     -d, --dither
-        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating 
+        Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating
         point dither), or X (no dither) (default: F for 32 bit, T otherwise)
     -r, --ratio
-        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with 
+        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with
         double rate DSD, Chebyshev filter)
     -i, --inrate
-        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with 
+        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with
         Decimation ratio of 16, 32, or 64)
     -o, --output
-        Output type. S (stdout), or W (wave) (default: S. Note that W outputs to either 
-        <basename>.wav in current directory, where <basename> is the input filename 
-        without the extension, or outfile.wav if reading from stdin.)
+        Output type. S (stdout), A (aif), or W (wave) (default: S. Note that W or A outputs to either
+        <basename>.[wav|aif] in current directory, where <basename> is the input filename
+        without the extension, or outfile.[wav|aif] if reading from stdin.)
     -v, --volume
-        Volume adjustment in dB. If a negative number is needed use the --volume= 
+        Volume adjustment in dB. If a negative number is needed use the --volume=
         format. (default: 0).
     -l, --loud
-        Print diagnostic messages to stderr        
+        Print diagnostic messages to stderr
 ```
 
 ## Modified original info.txt
