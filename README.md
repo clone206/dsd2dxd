@@ -68,13 +68,15 @@ dsd2dxd [options] < infile.dsd > outfile.pcm
 ./build_test_stereo_flt.sh P L 0 1kHz_stereo_p.dsd
 ```
 
-.dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off.
+.dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off. This means they have a block size of `4096` and are planar format.
 
 ## More Info
 
 The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
 
-For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128. For a more "correct" sound (with respect to the frequency domain) when using dsd128, try the equiripple filters, especially if going to 176.4 kHz. If you like the sound of XLD then feel free to use those filters here via the below commandline options, but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. Better to go to 176.4 when using the XLD filter.
+For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128 (this is the default). For a more "correct" sound (with respect to the frequency domain) when using dsd128, try the equiripple filters, especially if going to 176.4 kHz (32:1 decimation).
+
+For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output (32:1 decimation) is not great and should possibly be avoided depending on the source material. Better to go to 176.4 kHz (16:1 decimation) when using the XLD filter.
 
 There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
