@@ -32,6 +32,16 @@ or implied, of Sebastian Gesemann.
  *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
  * ======================================== */
 
+/*
+ Modifications and additions Copyright (c) 2023 clone206
+
+ This file is part of dsd2dxd
+
+ dsd2dxd is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+ dsd2dxd is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ You should have received a copy of the GNU General Public License along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
+*/
+
 #include <cstring>
 #include <math.h>
 #include <ctype.h>
@@ -736,7 +746,6 @@ namespace
                                           : bytesRemaining) /
                                      inCtx.channelsNum;
                     bytesRemaining -= frameSize;
-                    // loud(std::to_string(bytesRemaining), false);
                 }
                 loud("-", false);
 
@@ -806,7 +815,8 @@ namespace
 
                 outCtx.saveAndPrintFile(outName, fmt);
 
-                if (inCtx.props.size() > 0) {
+                if (inCtx.props.size() > 0)
+                {
                     TagLib::FileRef f(outName.c_str());
                     f.setProperties(inCtx.props);
                     f.save();
