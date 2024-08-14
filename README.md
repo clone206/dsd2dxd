@@ -173,7 +173,7 @@ See LICENSE for details.
 
 Under Linux this program is easily compiled by typing
 
-  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib)
+  g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib flac++)
 
 provided you have GCC installed. That's why I didn't bother writing
 any makefiles. :-p
