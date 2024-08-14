@@ -126,9 +126,11 @@ dsd2dxd includes shell scripts to compile and test with 1kHz test tone files.
 
 ## More Info
 
-Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
+Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Added many enhancements over the original dsd2pcm as detailed above.
 
-Added many enhancements over the original dsd2pcm as detailed above.
+Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
+
+Commandline options parsing uses [argagg](https://github.com/vietjtnguyen/argagg). Wav and aiff output uses [AudioFile](https://github.com/adamstark/AudioFile).
 
 The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
 
