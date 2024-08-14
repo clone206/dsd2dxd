@@ -50,6 +50,7 @@ or implied, of Sebastian Gesemann.
 #include <taglib/tag.h>
 #include <taglib/fileref.h>
 #include <taglib/tpropertymap.h>
+#include <FLAC++/encoder.h>
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
@@ -253,6 +254,17 @@ namespace
             bits = outBits;
             rate = outRate;
             output = tolower(outType);
+
+            if (output != 's' && output != 'w' && output != 'a' && output != 'f')
+            {
+                throw "Unrecognized output type";
+            }
+
+            if (output == 'f' && outBits == 32)
+            {
+                throw "32 bit float not allowed with flac output";
+            }
+
             decimRatio = decimation;
             clips = 0;
             lastSampsClippedHigh = 0;
@@ -394,6 +406,73 @@ namespace
                 aFile<int>.printSummary();
             }
             cerr << "Wrote to file: " << fileName << "\n";
+        }
+
+        void saveFlacFile(string fileName)
+        {
+            // flac vars
+            bool ok = true;
+            FLAC::Encoder::File encoder;
+            FLAC__StreamEncoderInitStatus init_status;
+
+            if (!encoder)
+            {
+                cerr << "Couldn't init flac encoder\n";
+                throw 1;
+            }
+
+            int samplesNum = aFile<int>.getNumSamplesPerChannel();
+            FLAC__int32 *samples[channelsNum];
+
+            for (int c = 0; c < channelsNum; ++c)
+            {
+                samples[c] = &(aFile<int>.samples[c][0]);
+            }
+
+            ok &= encoder.set_verify(true);
+            ok &= encoder.set_compression_level(5);
+            ok &= encoder.set_channels(channelsNum);
+            ok &= encoder.set_bits_per_sample(bits);
+            ok &= encoder.set_sample_rate(rate);
+            ok &= encoder.set_total_samples_estimate(samplesNum * channelsNum);
+
+            if (ok)
+            {
+                init_status = encoder.init(fileName.c_str());
+
+                if (init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK)
+                {
+                    fprintf(stderr, "ERROR: initializing encoder: %s\n", FLAC__StreamEncoderInitStatusString[init_status]);
+                    ok = false;
+                }
+            }
+
+            if (!ok)
+            {
+                throw 1;
+            }
+
+            loud("About to write flac file");
+
+            if (!(ok = encoder.process(samples, samplesNum)))
+            {
+                fprintf(stderr, "   state: %s\n", encoder.get_state().resolved_as_cstring(encoder));
+                throw 1;
+            }
+
+            ok &= encoder.finish();
+
+            if (ok)
+            {
+                fprintf(stderr, "Conversion completed sucessfully.\n");
+            }
+            else
+            {
+                fprintf(stderr, "\nError during conversion.\n");
+                fprintf(stderr, "encoding: %s\n", ok ? "succeeded" : "FAILED");
+                fprintf(stderr, "   state: %s\n", encoder.get_state().resolved_as_cstring(encoder));
+                throw 1;
+            }
         }
     };
 
@@ -802,6 +881,9 @@ namespace
                     outExt = ".aif";
                     fmt = AudioFileFormat::Aiff;
                     break;
+                case 'f':
+                    outExt = ".flac";
+                    break;
                 default:
                     break;
                 }
@@ -813,7 +895,14 @@ namespace
                     outName = inCtx.filePath.stem().string() + outExt;
                 }
 
-                outCtx.saveAndPrintFile(outName, fmt);
+                if (outCtx.output == 'f')
+                {
+                    outCtx.saveFlacFile(outName);
+                }
+                else
+                {
+                    outCtx.saveAndPrintFile(outName, fmt);
+                }
 
                 if (inCtx.props.size() > 0)
                 {
@@ -876,7 +965,7 @@ namespace
                                   {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating \n\tpoint dither), or X (no dither) (default: F for 32 bit, T otherwise)", 1},
                                   {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with \n\tdouble rate DSD, Chebyshev filter)", 1},
                                   {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with \n\tDecimation ratio of 16, 32, or 64)", 1},
-                                  {"output", {"-o", "--output"}, "Output type. S (stdout), A (aif), or W (wave) (default: S. Note that W or A outputs to either \n\t<basename>.[wav|aif] in current directory, where <basename> is the input filename \n\twithout the extension, or outfile.[wav|aif] if reading from stdin.)", 1},
+                                  {"output", {"-o", "--output"}, "Output type. S (stdout), A (aif), W (wave), or F (flac) (default: S. Note that W or A outputs to either \n\t<basename>.[wav|aif] in current directory, where <basename> is the input filename \n\twithout the extension, or outfile.[wav|aif] if reading from stdin.)", 1},
                                   {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= \n\tformat. (default: 0).", 1},
                                   {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
 
@@ -884,7 +973,7 @@ namespace
 
         if (args["help"])
         {
-            cerr << "\ndsd2dxd filter (raw DSD --> PCM).\n"
+            cerr << "\ndsd2dxd filter (DSD --> PCM).\n"
                     "Reads from stdin or file and writes to stdout or file in a *nix environment.\n\n"
                     "Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin\n\n"
                     "If reading from a file, certain command line options you provide (e.g. block size) may be overridden \n"

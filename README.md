@@ -4,7 +4,7 @@ Converts DSD to PCM on the command line.
 
 Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
 
-Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to an aiff or wav file. Where possible, ID3v2 tags are copied to the destination files.
+Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to an aiff, wav, or flac file. Where possible, ID3v2 tags are copied to the destination files.
 
 `dsd2dxd` handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
 
@@ -15,13 +15,15 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 - [taglib 2.0.1](https://github.com/taglib/taglib)
   - Note that many distros have dated versions of the taglib dev package, so you may need to follow the install instructions at the above repo and use cmake/make to build and install taglib 2.0.1 from source.
     - If using homebrew, such as on MacOS, it may be as simple as running `brew install taglib --HEAD`. It is also possible to run homebrew in linux.
+- `flac`
+  - This can be installed with homebrew as well, e.g. `brew install flac`
 - `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd`, e.g. to flac)
 
 ## C++ program usage
 
 ### Compling
 
-`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib)`
+`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib flac++)`
 
 ### Installing
 
@@ -83,7 +85,7 @@ There are also a few dither options, including the Airwindows "Not Just Another 
 ## Full Usage and Options
 
 ```
-dsd2dxd filter (raw DSD --> PCM).
+dsd2dxd filter (DSD --> PCM).
 Reads from stdin or file and writes to stdout or file in a *nix environment.
 
 Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
@@ -121,7 +123,7 @@ except where overridden by each file's metadata.
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with
         Decimation ratio of 16, 32, or 64)
     -o, --output
-        Output type. S (stdout), A (aif), or W (wave) (default: S. Note that W or A outputs to either
+        Output type. S (stdout), A (aif), W (wave), or F (flac) (default: S. Note that W or A outputs to either
         <basename>.[wav|aif] in current directory, where <basename> is the input filename
         without the extension, or outfile.[wav|aif] if reading from stdin.)
     -v, --volume

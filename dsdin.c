@@ -1,23 +1,23 @@
 /**
-* DSD Unpack - https://github.com/michaelburton/dsdunpack
-*
-* Copyright (c) 2014 by Michael Burton.
-*
-* This program is free software; you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation; either version 2 of the License, or
-* (at your option) any later version.
-*
-* This program is distributed in the hope that it will be useful,
-* but WITHOUT ANY WARRANTY; without even the implied warranty of
-* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-* GNU General Public License for more details.
-*
-* You should have received a copy of the GNU General Public License
-* along with this program; if not, write to the Free Software
-* Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
-*
-*/
+ * DSD Unpack - https://github.com/michaelburton/dsdunpack
+ *
+ * Copyright (c) 2014 by Michael Burton.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
+ */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -36,21 +36,24 @@ extern int dsd_reader_open(FILE *fp, dsd_reader_t *reader)
     int result = 0;
 
     /* Find out the format of the input file by reading its 'magic number' */
-    if (fread(&reader->container_format, 4, 1, fp) == 1) {
+    if (fread(&reader->container_format, 4, 1, fp) == 1)
+    {
         rewind(fp);
 
-        switch (reader->container_format) {
+        switch (reader->container_format)
+        {
         case DSD_FORMAT_DSDIFF:
             reader->impl = dsdiff_reader_funcs();
             break;
         case DSD_FORMAT_DSF:
             reader->impl = dsf_reader_funcs();
             break;
-        default:         /* Unknown format */
+        default: /* Unknown format */
             reader->impl = NULL;
         }
 
-        if (reader->impl && (result = reader->impl->open(fp, reader)) == 1) {
+        if (reader->impl && (result = reader->impl->open(fp, reader)) == 1)
+        {
             reader->input = fp;
         }
     }
@@ -58,14 +61,18 @@ extern int dsd_reader_open(FILE *fp, dsd_reader_t *reader)
     return result;
 }
 
-extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader) {
+extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader)
+{
     dsd_reader_t *reader2;
     reader2 = (dsd_reader_t *)malloc(sizeof(dsd_reader_t));
 
-    if (reader2) {
+    if (reader2)
+    {
         memcpy(reader2, reader, sizeof(dsd_reader_t));
         reader->impl->clone(reader, reader2);
     }
+
+    return reader2;
 }
 
 extern size_t dsd_reader_read(char *buf, size_t len, dsd_reader_t *reader)
@@ -81,11 +88,13 @@ extern uint32_t dsd_reader_next_chunk(dsd_reader_t *reader)
 extern void dsd_reader_close(dsd_reader_t *reader)
 {
     reader->impl->close(reader);
-    if (reader->prvt) {
+    if (reader->prvt)
+    {
         free(reader->prvt);
         reader->prvt = NULL;
     }
-    if (reader->input) {
+    if (reader->input)
+    {
         fclose(reader->input);
         reader->input = NULL;
     }
