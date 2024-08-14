@@ -1,12 +1,16 @@
 # dsd2dxd
 
-Converts DSD to PCM on the command line.
-
-Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
-
-Added many enhancements over the original dsd2pcm, and shell scripts to build and test with 1kHz test tone files. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to an aiff, wav, or flac file. Where possible, ID3v2 tags are copied to the destination files.
-
-`dsd2dxd` handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved.
+Converts DSD to PCM on the command line with the following features:
+- Accepts single rate (dsd64), or double rate (dsd128) DSD as input.
+  - .dsf and .dff files can be read from, including metadata.
+- Can output to an aiff, wav, or flac file.
+  - Where possible, ID3v2 tags are copied to the destination files (when read from .dsf or .dff file).
+- Can also read raw DSD bitstreams from standard in (stdin) and output raw PCM to standard out (stdout), so you can use piping/shell redirection to combine with other audio utilities on the command line.
+  - Handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved, unless otherwise specified with the below command line options.
+- Allows you to specify the type of dither to use on output
+- Output bit depth can be either 16, 20, or 24 fixed integer PCM, or 32 bit float PCM.
+  - The dither will be optimized accordingly, including for 20 bit output.
+- Allows you to choose between different decimation filters.
 
 ## Dependencies
 
@@ -18,7 +22,7 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 - `flac`
   - With apt on linux: `sudo apt install libflac++-dev`
   - With homebrew: `brew install flac`
-- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd`, e.g. to flac)
+- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd`, e.g. to apple lossless)
 
 ## C++ program usage
 
@@ -32,63 +36,9 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 
 You can specify any directory you like as the last argument in the above install command. For example, instead of `/usr/local/bin/` you could use `/usr/bin/`. As long as the directory is in your `$PATH` it will work.
 
-### Running
-
-## Examples
-
-```bash
-# See options and usage
-dsd2dxd -h|--help
-# Read from dsf file, printing extra info to stderr (-l for "loud mode").
-# Outputs to 1kHz_stereo_p.wav
-dsd2dxd -o w -l 1kHz_stereo_p.dsf
-# Process all .dsf files in current directory, saving to aiff files
-dsd2dxd -o a *.dsf
-# Quick and dirty way to process all dff and dsf files in current
-# directory, saving to wav files
-dsd2dxd -o w *.d?f
-# Example of reading raw dsd (planar format, lsb first) into stdin,
-# piping output to ffplay
-dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
-# Example of piping output to ffmpeg to save to a flac file
-# (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
-dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
-# Generalized example of using with an input and output file,
-# via stdin/stdout
-dsd2dxd [options] < infile.dsd > outfile.pcm
-```
-
-## Testing Examples
-
-```bash
-# Compile code; convert and play mono, planar/LSB-first, 24bit, test file w 4dB boost
-./build_test_mono.sh P 24 L 4 1kHz_mono_p.dsd
-
-# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file w 4dB cut
-./build_test_stereo.sh P 16 L -4 1kHz_stereo_p.dsd
-
-# Compile code; convert and play stereo, planar/LSB-first, 32bit float, test file with no volume adj
-./build_test_stereo_flt.sh P L 0 1kHz_stereo_p.dsd
-```
-
-.dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off. This means they have a block size of `4096` and are planar format.
-
-## More Info
-
-The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
-
-For a natural sound with slight rolloff but good time-domain performance, try the chebyshev filters when using dsd128 (this is the default). For a more "correct" sound (with respect to the frequency domain) when using dsd128, try the equiripple filters, especially if going to 176.4 kHz (32:1 decimation).
-
-For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output (32:1 decimation) is not great and should possibly be avoided depending on the source material. Better to go to 176.4 kHz (16:1 decimation) when using the XLD filter.
-
-There are also a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. `dsd2dxd` uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
-
-## Full Usage and Options
+### Full Usage and Options
 
 ```
-dsd2dxd filter (DSD --> PCM).
-Reads from stdin or file and writes to stdout or file in a *nix environment.
-
 Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
 
 If reading from a file, certain command line options you provide (e.g. block size) may be overridden
@@ -133,6 +83,61 @@ except where overridden by each file's metadata.
     -l, --loud
         Print diagnostic messages to stderr
 ```
+
+## Examples
+
+```bash
+# See options and usage
+dsd2dxd -h|--help
+# Read from dsf file, printing extra info to stderr (-l for "loud mode").
+# Outputs to 1kHz_stereo_p.wav
+dsd2dxd -o w -l 1kHz_stereo_p.dsf
+# Process all .dsf files in current directory, saving to aiff files
+dsd2dxd -o a *.dsf
+# Quick and dirty way to process all dff and dsf files in current
+# directory, saving to wav files
+dsd2dxd -o w *.d?f
+# Example of reading raw dsd (planar format, lsb first) into stdin,
+# piping output to ffplay
+dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
+# Example of piping output to ffmpeg to save to a flac file
+# (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
+dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
+# Generalized example of using with an input and output file,
+# via stdin/stdout
+dsd2dxd [options] < infile.dsd > outfile.pcm
+```
+
+## Testing Examples
+
+dsd2dxd includes shell scripts to compile and test with 1kHz test tone files. 
+
+```bash
+# Compile code; convert and play mono, planar/LSB-first, 24bit, test file w 4dB boost
+./build_test_mono.sh P 24 L 4 1kHz_mono_p.dsd
+
+# Compile code; convert and play stereo, planar/LSB-first, 16bit, test file w 4dB cut
+./build_test_stereo.sh P 16 L -4 1kHz_stereo_p.dsd
+
+# Compile code; convert and play stereo, planar/LSB-first, 32bit float, test file with no volume adj
+./build_test_stereo_flt.sh P L 0 1kHz_stereo_p.dsd
+```
+
+.dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off. This means they have a block size of `4096` and are planar format.
+
+## More Info
+
+Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
+
+Added many enhancements over the original dsd2pcm. 32 bit float output is now also an option, as well as dsd128 input. And aside from outputting to standard out, you can also output to an aiff, wav, or flac file. Where possible, ID3v2 tags are copied to the destination files.
+
+The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
+
+For a natural sound with slight rolloff, try the chebyshev filters when using dsd128 (the default when inputting dsd128). For a slightly more "airy" sound when using dsd128, try the equiripple filters, especially if going to 176.4 kHz (32:1 decimation).
+
+For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output (32:1 decimation) is not great and should possibly be avoided depending on the source material. Better to go to 176.4 kHz (16:1 decimation) when using the XLD filter. Unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
+
+There are a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. dsd2dxd uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
 ## Modified original info.txt
 
