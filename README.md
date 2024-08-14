@@ -13,7 +13,7 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
 - \*nix environment
 - `g++`
 - [taglib 2.0.1](https://github.com/taglib/taglib)
-  - Note that many *nix distros have dated versions of the taglib dev package, so you may need to follow the [install instructions](https://github.com/taglib/taglib/blob/master/INSTALL.md) at the above repo and use cmake/make to build and install taglib 2.0.1 from source.
+  - Note that many *nix distros have dated versions of the taglib dev package, so you may need to follow the [install instructions](https://github.com/taglib/taglib/blob/master/INSTALL.md) from the above repo and use cmake/make to build and install taglib 2.0.1 from source.
   - If using homebrew, such as on MacOS, it should be as simple as running `brew install taglib --HEAD`. It is also possible to install homebrew on linux.
 - `flac`
   - With apt on linux: `sudo apt install libflac++-dev`
