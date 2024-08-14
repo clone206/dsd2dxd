@@ -16,7 +16,8 @@ Added many enhancements over the original dsd2pcm, and shell scripts to build an
   - Note that many distros have dated versions of the taglib dev package, so you may need to follow the install instructions at the above repo and use cmake/make to build and install taglib 2.0.1 from source.
     - If using homebrew, such as on MacOS, it may be as simple as running `brew install taglib --HEAD`. It is also possible to run homebrew in linux.
 - `flac`
-  - This can be installed with homebrew as well, e.g. `brew install flac`
+  - With apt on linux: `sudo apt install libflac++-dev`
+  - With homebrew as well, e.g. `brew install flac`
 - `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for compressing the output of `dsd2dxd`, e.g. to flac)
 
 ## C++ program usage
