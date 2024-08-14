@@ -21,7 +21,7 @@ Converts DSD to PCM on the command line with the following features:
 - `flac`
   - With apt on linux: `sudo apt install libflac++-dev`
   - With homebrew: `brew install flac`
-- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for converting/compressing the output of `dsd2dxd` [e.g. to an apple lossless file, a format thateadd2dxd doesn't yet support.])
+- `ffmpeg` (only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for converting/compressing the output of dsd2dxd [e.g. to an apple lossless file, a format that dsd2dxd doesn't yet support.])
 
 ## C++ program usage
 
