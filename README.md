@@ -137,7 +137,9 @@ For a natural sound with slight rolloff, try the chebyshev filters when using ds
 
 For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output (32:1 decimation) is not great and should possibly be avoided depending on the source material. Better to go to 176.4 kHz (16:1 decimation) when using the XLD filter. Unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
 
-There are a few dither options, including the Airwindows "Not Just Another Dither", and "Dither Float". The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. dsd2dxd uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
+There are a few dither options, including the Airwindows [Not Just Another Dither](https://www.airwindows.com/not-just-another-dither/), and [Dither Float](https://www.airwindows.com/ditherfloat/). The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. dsd2dxd uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
+
+You can also turn the dither off completely if that's your thing.
 
 ## Modified original info.txt
 
