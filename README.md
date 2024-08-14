@@ -14,8 +14,7 @@ Converts DSD to PCM on the command line with the following features:
 
 ## Dependencies
 
-- \*nix environment
-- `g++`
+- \*nix environment (linux, MacOS, etc.) with `g++` and `pkg-config` installed.
 - [taglib 2.0.1](https://github.com/taglib/taglib)
   - Note that many *nix distros have dated versions of the taglib dev package, so you may need to follow the [install instructions](https://github.com/taglib/taglib/blob/master/INSTALL.md) from the above repo and use cmake/make to build and install taglib 2.0.1 from source.
   - If using homebrew, such as on MacOS, it should be as simple as running `brew install taglib --HEAD`. It is also possible to install homebrew on linux.
