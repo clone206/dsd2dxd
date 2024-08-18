@@ -195,7 +195,7 @@ Contributions from experienced  developers welcome! Just keep the code clean and
 
 Make sure to do some testing, including with the included test scripts and test tone DSD files.
 
-If you'd like to create new filters for dsd2dxd, you'll need to make sure they're symmetric. The filter coefficients stored in the dsd2pcm C header only include the 2nd half of the taps. Thus far the approach taken in the filter design has been to prefer gradual rolloffs and to allow small amounts of aliasing. This author doesn't put much stock in the importance of ultrasonic frequencies for enjoyable sound reproduction.
+If you'd like to create new filters for dsd2dxd, you'll need to make sure they're symmetric. The filter coefficients stored in the dsd2pcm C header only include the 2nd half of the taps of each symmetric decimation filter. Thus far the approach taken in the filter design has been to prefer gradual rolloffs and to allow small amounts of aliasing. This author doesn't put much stock in the importance of ultrasonic frequencies for enjoyable sound reproduction.
 
 In summary, I've tried to keep things as flat as possible out to 20kHz, gradually rolling off after that, with the transition band edging slightly past the Nyquist frequency, and keeping the number of taps to a minimum.
 
