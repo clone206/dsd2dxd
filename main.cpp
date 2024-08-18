@@ -64,11 +64,11 @@ namespace fs = std::filesystem;
 
 namespace
 {
-    bool loudMode = false;
+    bool verboseMode = false;
 
-    inline void loud(string say, bool newLine = true)
+    inline void verbose(string say, bool newLine = true)
     {
-        if (loudMode)
+        if (verboseMode)
         {
             cerr << say << (newLine ? "\n" : "");
         }
@@ -147,10 +147,10 @@ namespace
             {
                 stdIn = false;
                 filePath = fs::path(input);
-                loud("Input file basename: ", false);
-                loud(filePath.stem());
-                loud("Parent path: ", false);
-                loud(fs::absolute(filePath).parent_path());
+                verbose("Input file basename: ", false);
+                verbose(filePath.stem());
+                verbose("Parent path: ", false);
+                verbose(fs::absolute(filePath).parent_path());
 
                 FILE *inFile;
                 if ((inFile = fopen(input.c_str(), "rb")) != NULL)
@@ -165,11 +165,11 @@ namespace
 
                     if (myDsd.blockSize)
                     {
-                        loud("Setting block size from file");
+                        verbose("Setting block size from file");
                         setBlockSize(myDsd.blockSize);
                     }
-                    loud("Audio length in bytes: ", false);
-                    loud(std::to_string(audioLength));
+                    verbose("Audio length in bytes: ", false);
+                    verbose(std::to_string(audioLength));
                 }
 
                 TagLib::FileRef f(input.c_str());
@@ -177,8 +177,8 @@ namespace
                 if (!f.isNull() && f.tag())
                 {
                     TagLib::Tag *tag = f.tag();
-                    loud("Artist: ", false);
-                    loud(tag->artist().to8Bit());
+                    verbose("Artist: ", false);
+                    verbose(tag->artist().to8Bit());
                     props = f.properties();
                 }
             }
@@ -283,8 +283,8 @@ namespace
 
         void setBlockSize(int blockSizeOut, int chanNumOut)
         {
-            loud("Got block size of ", false);
-            loud(std::to_string(blockSizeOut));
+            verbose("Got block size of ", false);
+            verbose(std::to_string(blockSizeOut));
             channelsNum = chanNumOut;
             blockSize = blockSizeOut;
             pcmBlockSize = blockSize / (decimRatio / 8);
@@ -320,13 +320,13 @@ namespace
             {
                 aFile<float> = AudioFile<float>();
                 setFileParams<float>();
-                loud("Finished setting file params for float type");
+                verbose("Finished setting file params for float type");
             }
             else
             {
                 aFile<int> = AudioFile<int>();
                 setFileParams<int>();
-                loud("Finished setting file params for int type");
+                verbose("Finished setting file params for int type");
             }
         }
 
@@ -347,8 +347,8 @@ namespace
         template <typename ST>
         void setFileParams()
         {
-            loud("About to set params for file type:");
-            loud(typeid(OutputContext::aFile<ST>).name());
+            verbose("About to set params for file type:");
+            verbose(typeid(OutputContext::aFile<ST>).name());
 
             aFile<ST>.setNumChannels(channelsNum);
             aFile<ST>.setBitDepth(bits);
@@ -395,13 +395,13 @@ namespace
         {
             if (bits == 32)
             {
-                loud("About to write 32b file");
+                verbose("About to write 32b file");
                 aFile<float>.save(fileName, fmt);
                 aFile<float>.printSummary();
             }
             else
             {
-                loud("About to write int file");
+                verbose("About to write int file");
                 aFile<int>.save(fileName, fmt);
                 aFile<int>.printSummary();
             }
@@ -430,7 +430,7 @@ namespace
             }
 
             ok &= encoder.set_verify(true);
-            ok &= encoder.set_compression_level(5);
+            ok &= encoder.set_compression_level(8);
             ok &= encoder.set_channels(channelsNum);
             ok &= encoder.set_bits_per_sample(bits);
             ok &= encoder.set_sample_rate(rate);
@@ -452,7 +452,7 @@ namespace
                 throw 1;
             }
 
-            loud("About to write flac file");
+            verbose("About to write flac file");
 
             if (!(ok = encoder.process(samples, samplesNum)))
             {
@@ -814,7 +814,7 @@ namespace
             long bytesRemaining = inCtx.audioLength > 0 ? inCtx.audioLength : frameSize;
             int blockRemaining = inCtx.blockSize;
 
-            loud("About to start main conversion loop.");
+            verbose("About to start main conversion loop.");
 
             while ((inCtx.stdIn ? true : (bytesRemaining > 0)) && in.read(dsdIn, bytesRemaining > frameSize ? frameSize : bytesRemaining))
             {
@@ -826,7 +826,7 @@ namespace
                                      inCtx.channelsNum;
                     bytesRemaining -= frameSize;
                 }
-                loud("-", false);
+                // loud("-", false);
 
                 for (int c = 0; c < inCtx.channelsNum; ++c)
                 {
@@ -852,11 +852,11 @@ namespace
                 }
             }
 
-            loud("\nDone with main conversion loop.");
+            verbose("\nDone with main conversion loop.");
 
             if (fp.is_open())
             {
-                loud("About to close input file.");
+                verbose("About to close input file.");
                 fp.close();
             }
 
@@ -928,7 +928,7 @@ namespace
                 throw 1;
             }
 
-            if (loudMode && outCtx.output != 's')
+            if (verboseMode && outCtx.output != 's')
             {
                 cerr << "Bits: " << outCtx.bits << " SR: " << outCtx.rate << " Chans: "
                      << outCtx.channelsNum << "\n";
@@ -959,15 +959,15 @@ namespace
                                    "I (interleaved) or P (planar) (DSD stream option) (default: I)",
                                    1},
                                   {"bitdepth", {"-b", "--bitdepth"}, "16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)", 1},
-                                  {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only \n\tavailable with 8:1 decimation ratio), \n\tE (Equiripple. Only \n\tavailable with double rate DSD input), C (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
+                                  {"filtertype", {"-t", "--filttype"}, "X (XLD filter), D (Original dsd2pcm filter. Only \n\tavailable with 8:1 decimation ratio), \n\tE (Equiripple. Only \n\tavailable with double rate DSD input),\n\tC (Chebyshev. Only available with double rate DSD input)\n\t(default: X [single rate] or C [double rate])", 1},
                                   {"endianness", {"-e", "--endianness"}, "Byte order of input. M (MSB first) or L (LSB first) (default: M)", 1},
                                   {"blocksize", {"-s", "--bs"}, "Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)", 1},
                                   {"dithertype", {"-d", "--dither"}, "Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating \n\tpoint dither), or X (no dither) (default: F for 32 bit, T otherwise)", 1},
                                   {"decimation", {"-r", "--ratio"}, "Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with \n\tdouble rate DSD, Chebyshev filter)", 1},
                                   {"inputrate", {"-i", "--inrate"}, "Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with \n\tDecimation ratio of 16, 32, or 64)", 1},
-                                  {"output", {"-o", "--output"}, "Output type. S (stdout), A (aif), W (wave), or F (flac) (default: S. Note that W or A outputs to either \n\t<basename>.[wav|aif] in current directory, where <basename> is the input filename \n\twithout the extension, or outfile.[wav|aif] if reading from stdin.)", 1},
-                                  {"volume", {"-v", "--volume"}, "Volume adjustment in dB. If a negative number is needed use the --volume= \n\tformat. (default: 0).", 1},
-                                  {"loudmode", {"-l", "--loud"}, "Print diagnostic messages to stderr", 0}}};
+                                  {"output", {"-o", "--output"}, "Output type. S (stdout), A (aif), W (wave), or F (flac)\n\t(default: S. Note that W, A, or F outputs to either \n\t<basename>.[wav|aif|flac] in current directory,\n\twhere <basename> is the input filename \n\twithout the extension, or outfile.[wav|aif|flac] if reading from stdin.)", 1},
+                                  {"level", {"-l", "--level"}, "Volume level adjustment in dB. If a negative number is needed use the --level= \n\tformat (with no space after the \"=\"). (default: 0).", 1},
+                                  {"verbose", {"-v", "--verbose"}, "Print diagnostic messages to standard error while converting.", 0}}};
 
         argagg::parser_results args = argparser.parse(argc, argv);
 
@@ -978,16 +978,16 @@ namespace
                     "Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin\n\n"
                     "If reading from a file, certain command line options you provide (e.g. block size) may be overridden \n"
                     "using the metadata found in that file (either a dsf or dff file).\n"
-                    "If neither filename(s) or - is provided, stdin is assumed.\n"
+                    "If neither filename(s) or - is provided, standard in is assumed.\n"
                     "Multiple filenames can be provided and the input-related options specified will be applied to each, \n"
                     "except where overridden by each file's metadata.\n"
                  << argparser;
             throw 0;
         }
 
-        if (args["loudmode"])
+        if (args["verbose"])
         {
-            loudMode = true;
+            verboseMode = true;
         }
 
         return args;
@@ -1047,7 +1047,7 @@ int main(int argc, char *argv[])
                                                                  ? "C"
                                                                  : "X")
                                    .c_str()[0],
-                               args["volume"].as<double>(0.0));
+                               args["level"].as<double>(0.0));
     }
     catch (const char *str)
     {
@@ -1057,7 +1057,7 @@ int main(int argc, char *argv[])
 
     for (const string &input : inputs)
     {
-        if (loudMode)
+        if (verboseMode)
         {
             cerr << "Input: " << input << "\n";
         }
@@ -1085,6 +1085,6 @@ int main(int argc, char *argv[])
         }
     }
 
-    loud("About to exit.");
+    verbose("About to exit.");
     return 0;
 }
