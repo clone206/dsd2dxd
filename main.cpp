@@ -490,11 +490,11 @@ namespace
         ConversionContext() {}
 
         ConversionContext(InputContext &inCtxParam, OutputContext &outCtxParam,
-                          Dither &dither)
+                          Dither &ditherParam)
         {
             inCtx = inCtxParam;
             outCtx = outCtxParam;
-            dither = dither;
+            dither = ditherParam;
             outCtx.setBlockSize(inCtx.blockSize, inCtx.channelsNum);
             outCtx.initFile();
             dither.init();
@@ -737,8 +737,8 @@ namespace
             else
             {
                 outCtx.pushSamp(clip(-outCtx.peakLevel, myround(sample),
-                              outCtx.peakLevel - 1),
-                         chanNum);
+                                     outCtx.peakLevel - 1),
+                                chanNum);
             }
         }
     }
@@ -853,8 +853,7 @@ int main(int argc, char *argv[])
                                                         : "T")
                           .c_str()[0];
 
-    verbose("Dither type: ", false);
-    verbose(""+ditherType);
+    //cerr << "Dither type: "<< ditherType << "\n";
 
     OutputContext outCtx;
     try
