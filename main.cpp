@@ -3,16 +3,16 @@
 
  This file is part of dsd2dxd
 
- dsd2dxd is free software: you can redistribute it and/or modify it 
- under the terms of the GNU General Public License as published by the 
- Free Software Foundation, either version 3 of the License, or 
+ dsd2dxd is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation, either version 3 of the License, or
  (at your option) any later version.
 
- dsd2dxd is distributed in the hope that it will be useful, but 
- WITHOUT ANY WARRANTY; without even the implied warranty of 
- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the 
+ dsd2dxd is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  GNU General Public License for more details.
- You should have received a copy of the GNU General Public License 
+ You should have received a copy of the GNU General Public License
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
@@ -34,18 +34,18 @@ using namespace std;
 
 #define DSD_64_RATE 2822400
 
-bool verboseMode = false;
-
-inline void verbose(string say, bool newLine = true)
-{
-    if (verboseMode)
-    {
-        cerr << say << (newLine ? "\n" : "");
-    }
-}
-
 namespace
 {
+    bool verboseMode = false;
+
+    inline void verbose(string say, bool newLine = true)
+    {
+        if (verboseMode)
+        {
+            cerr << say << (newLine ? "\n" : "");
+        }
+    }
+
     struct ConversionContext
     {
         InputContext inCtx;
@@ -305,7 +305,7 @@ namespace
             else
             {
                 writeLSBF(out, clamp(-outCtx.peakLevel,
-                                    myRound(sample), outCtx.peakLevel - 1));
+                                     myRound(sample), outCtx.peakLevel - 1));
             }
 
             out += outCtx.channelsNum * outCtx.bytespersample;
@@ -319,7 +319,7 @@ namespace
             else
             {
                 outCtx.pushSamp(clamp(-outCtx.peakLevel, myRound(sample),
-                                     outCtx.peakLevel - 1),
+                                      outCtx.peakLevel - 1),
                                 chanNum);
             }
         }
@@ -435,7 +435,7 @@ int main(int argc, char *argv[])
                                                         : "T")
                           .c_str()[0];
 
-    //cerr << "Dither type: "<< ditherType << "\n";
+    // cerr << "Dither type: "<< ditherType << "\n";
 
     OutputContext outCtx;
     try
