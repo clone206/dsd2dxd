@@ -3,20 +3,24 @@
 
  This file is part of dsd2dxd
 
- dsd2dxd is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
- dsd2dxd is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
- You should have received a copy of the GNU General Public License along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
+ dsd2dxd is free software: you can redistribute it and/or modify it 
+ under the terms of the GNU General Public License as published by the 
+ Free Software Foundation, either version 3 of the License, or 
+ (at your option) any later version.
+
+ dsd2dxd is distributed in the hope that it will be useful, but 
+ WITHOUT ANY WARRANTY; without even the implied warranty of 
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the 
+ GNU General Public License for more details.
+ You should have received a copy of the GNU General Public License 
+ along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <cstring>
 #include <math.h>
 #include <ctype.h>
 #include <typeinfo>
-#include <filesystem>
-#include <taglib/tag.h>
 #include <taglib/fileref.h>
-#include <taglib/tpropertymap.h>
-#include <FLAC++/encoder.h>
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
@@ -27,7 +31,6 @@
 #include "Input.hpp"
 
 using namespace std;
-namespace fs = std::filesystem;
 
 #define DSD_64_RATE 2822400
 
@@ -39,11 +42,6 @@ inline void verbose(string say, bool newLine = true)
     {
         cerr << say << (newLine ? "\n" : "");
     }
-}
-
-inline bool lowercmp(char a, char b)
-{
-    return tolower(a) == b;
 }
 
 namespace
@@ -131,7 +129,6 @@ namespace
                                      inCtx.channelsNum;
                     bytesRemaining -= frameSize;
                 }
-                // loud("-", false);
 
                 for (int c = 0; c < inCtx.channelsNum; ++c)
                 {
@@ -460,10 +457,7 @@ int main(int argc, char *argv[])
 
     for (const string &input : inputs)
     {
-        if (verboseMode)
-        {
-            cerr << "Input: " << input << "\n";
-        }
+        verbose("Input: " + input);
 
         InputContext inCtx;
         try
