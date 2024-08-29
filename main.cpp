@@ -1,64 +1,36 @@
 /*
-
-Copyright 2009, 2011 Sebastian Gesemann. All rights reserved.
-
-Redistribution and use in source and binary forms, with or without modification, are
-permitted provided that the following conditions are met:
-
-   1. Redistributions of source code must retain the above copyright notice, this list of
-      conditions and the following disclaimer.
-
-   2. Redistributions in binary form must reproduce the above copyright notice, this list
-      of conditions and the following disclaimer in the documentation and/or other materials
-      provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY SEBASTIAN GESEMANN ''AS IS'' AND ANY EXPRESS OR IMPLIED
-WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
-FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL SEBASTIAN GESEMANN OR
-CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-The views and conclusions contained in the software and documentation are those of the
-authors and should not be interpreted as representing official policies, either expressed
-or implied, of Sebastian Gesemann.
-
- */
-/* ========================================
- *  NotJustAnotherDither - NotJustAnotherDither.h
- *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
- * ======================================== */
-
-/*
- Modifications and additions Copyright (c) 2023 clone206
+ Copyright (c) 2023 clone206
 
  This file is part of dsd2dxd
 
- dsd2dxd is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
- dsd2dxd is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
- You should have received a copy of the GNU General Public License along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
+ dsd2dxd is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ dsd2dxd is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU General Public License for more details.
+ You should have received a copy of the GNU General Public License
+ along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
 #include <cstring>
 #include <math.h>
 #include <ctype.h>
 #include <typeinfo>
-#include <filesystem>
-#include <taglib/tag.h>
 #include <taglib/fileref.h>
-#include <taglib/tpropertymap.h>
-#include <FLAC++/encoder.h>
 
 #include "dsd2pcm.hpp"
 #include "argagg.hpp"
 #include "AudioFile.h"
 #include "dsdin.hpp"
+#include "Output.hpp"
+#include "Dither.hpp"
+#include "Input.hpp"
 
 using namespace std;
-namespace fs = std::filesystem;
 
 #define DSD_64_RATE 2822400
 
@@ -74,714 +46,45 @@ namespace
         }
     }
 
-    inline bool lowercmp(char a, char b)
-    {
-        return tolower(a) == b;
-    }
-
-    struct InputContext
-    {
-        int lsbitfirst;
-        bool interleaved;
-        bool stdIn;
-        int dsdRate;
-        string input;
-        fs::path filePath;
-
-        int dsdStride;
-        int dsdChanOffset;
-        int channelsNum;
-        int blockSize;
-        long audioLength;
-        off_t audioPos;
-        TagLib::PropertyMap props;
-
-        InputContext() {}
-
-        InputContext(string inFile, char fmt, char endianness, int inRate, int blockSizeIn, int channels)
-        {
-            if (lowercmp(endianness, 'l'))
-            {
-                lsbitfirst = 1;
-            }
-            else if (lowercmp(endianness, 'm'))
-            {
-                lsbitfirst = 0;
-            }
-            else
-            {
-                throw "No endianness detected!";
-            }
-
-            if (lowercmp(fmt, 'p'))
-            {
-                interleaved = false;
-            }
-            else if (lowercmp(fmt, 'i'))
-            {
-                interleaved = true;
-            }
-            else
-            {
-                throw "No fmt detected!";
-            }
-
-            if (inRate != 1 && inRate != 2)
-            {
-                throw "Unsupported DSD input rate.";
-            }
-
-            input = inFile; // "-" == stdin
-            channelsNum = channels;
-            dsdRate = inRate;
-            setBlockSize(blockSizeIn);
-            props = TagLib::PropertyMap();
-
-            if (input == "-")
-            {
-                stdIn = true;
-                audioLength = 0;
-                audioPos = 0;
-            }
-            else
-            {
-                stdIn = false;
-                filePath = fs::path(input);
-                verbose("Input file basename: ", false);
-                verbose(filePath.stem());
-                verbose("Parent path: ", false);
-                verbose(fs::absolute(filePath).parent_path());
-
-                FILE *inFile;
-                if ((inFile = fopen(input.c_str(), "rb")) != NULL)
-                {
-                    auto myDsd = dsd(inFile);
-                    audioPos = myDsd.audioPos;
-                    audioLength = myDsd.audioLength;
-                    channelsNum = myDsd.channelCount;
-                    dsdRate = myDsd.dsdRate;
-                    interleaved = myDsd.interleaved;
-                    lsbitfirst = myDsd.isLsb;
-
-                    if (myDsd.blockSize)
-                    {
-                        verbose("Setting block size from file");
-                        setBlockSize(myDsd.blockSize);
-                    }
-                    verbose("Audio length in bytes: ", false);
-                    verbose(std::to_string(audioLength));
-                }
-
-                TagLib::FileRef f(input.c_str());
-
-                if (!f.isNull() && f.tag())
-                {
-                    TagLib::Tag *tag = f.tag();
-                    verbose("Artist: ", false);
-                    verbose(tag->artist().to8Bit());
-                    props = f.properties();
-                }
-            }
-        }
-
-        void setBlockSize(int blockSizeIn)
-        {
-            blockSize = blockSizeIn;
-            dsdChanOffset = interleaved ? 1 : blockSize; // Default to one byte for interleaved
-            dsdStride = interleaved ? channelsNum : 1;
-        }
-    };
-
-    struct OutputContext
-    {
-        // Trivial inits
-        int clips;
-        int lastSampsClippedLow;
-        int lastSampsClippedHigh;
-
-        // Init'd via input params
-        int bits;
-        int channelsNum;
-        int rate;
-        int decimRatio;
-        int bytespersample;
-        int blockSize;
-        int pcmBlockSize;
-        int outBlockSize;
-        char output;
-        char filtType;
-        char ditherType;
-
-        // Set freely
-        int peakLevel;
-        double scaleFactor;
-
-        // Dither vars
-        double noise_shaping_l; // Noise shape state L
-        double noise_shaping_r; // Noise shape state R
-        double byn_l[13];       // Delay line L
-        double byn_r[13];       // Delay line R;
-        uint32_t fpd;           // Floating-point dither
-
-        template <typename T>
-        static AudioFile<T> aFile;
-
-        inline void fpdither(double &sample);
-        inline void njad(double &sample, int chanNum);
-        inline void tpdf(double &sample);
-        inline void writeLSBF(unsigned char *&ptr, unsigned long word);
-        static inline void writeFloat(unsigned char *ptr, double sample);
-        static inline int myround(double x);
-        template <typename ST>
-        static inline void pushSamp(ST samp, int c);
-        inline void scaleAndDither(double &sample, int chanNum);
-        inline void writeToBuffer(unsigned char *&out, double &sample, int chanNum);
-
-        template <typename T>
-        inline T clip(T min, T v, T max);
-
-        OutputContext() {}
-
-        OutputContext(int outBits, int outRate, char outType,
-                      int decimation, char ditherTypeOut, char filtTypeOut,
-                      double outVol)
-        {
-            if (outBits != 16 && outBits != 20 && outBits != 24 && outBits != 32)
-            {
-                throw "Unsupported bit depth";
-            }
-
-            bits = outBits;
-            rate = outRate;
-            output = tolower(outType);
-
-            if (output != 's' && output != 'w' && output != 'a' && output != 'f')
-            {
-                throw "Unrecognized output type";
-            }
-
-            if (output == 'f' && outBits == 32)
-            {
-                throw "32 bit float not allowed with flac output";
-            }
-
-            decimRatio = decimation;
-            clips = 0;
-            lastSampsClippedHigh = 0;
-            lastSampsClippedLow = 0;
-            bytespersample = bits == 20 ? 3 : bits / 8;
-            ditherType = tolower(ditherTypeOut);
-            filtType = tolower(filtTypeOut);
-
-            setScaling(outVol);
-
-            if (ditherType != 'n' && ditherType != 't' && ditherType != 'f' && ditherType != 'x')
-            {
-                throw "Invalid dither type!";
-            }
-        }
-
-        void setBlockSize(int blockSizeOut, int chanNumOut)
-        {
-            verbose("Got block size of ", false);
-            verbose(std::to_string(blockSizeOut));
-            channelsNum = chanNumOut;
-            blockSize = blockSizeOut;
-            pcmBlockSize = blockSize / (decimRatio / 8);
-            outBlockSize = pcmBlockSize * channelsNum * bytespersample;
-        }
-
-        void initDither()
-        {
-            if (ditherType != 'x')
-            {
-                // Seed rng
-                srand(static_cast<unsigned>(time(0)));
-            }
-
-            if (ditherType == 'n')
-            {
-                initOutputs();
-            }
-            else if (ditherType == 'f')
-            {
-                initRand();
-            }
-        }
-
-        void initFile()
-        {
-            if (output == 's')
-            {
-                return;
-            }
-
-            if (bits == 32)
-            {
-                aFile<float> = AudioFile<float>();
-                setFileParams<float>();
-                verbose("Finished setting file params for float type");
-            }
-            else
-            {
-                aFile<int> = AudioFile<int>();
-                setFileParams<int>();
-                verbose("Finished setting file params for int type");
-            }
-        }
-
-        void setScaling(double volume)
-        {
-            scaleFactor = 1.0;
-            double volScale = pow(10.0, volume / 20);
-
-            if (bits != 32)
-            {
-                scaleFactor = pow(2.0, (bits - 1));
-            }
-
-            peakLevel = (int)floor(scaleFactor);
-            scaleFactor *= volScale;
-        }
-
-        template <typename ST>
-        void setFileParams()
-        {
-            verbose("About to set params for file type:");
-            verbose(typeid(OutputContext::aFile<ST>).name());
-
-            aFile<ST>.setNumChannels(channelsNum);
-            aFile<ST>.setBitDepth(bits);
-            aFile<ST>.setSampleRate(rate);
-        }
-
-        // Initialize outputs/dither state
-        void initOutputs()
-        {
-            // Weights based on Benford's law. Smaller leading digits more likely.
-            byn_l[0] = 1000;
-            byn_l[1] = 301;
-            byn_l[2] = 176;
-            byn_l[3] = 125;
-            byn_l[4] = 97;
-            byn_l[5] = 79;
-            byn_l[6] = 67;
-            byn_l[7] = 58;
-            byn_l[8] = 51;
-            byn_l[9] = 46;
-            byn_l[10] = 1000;
-
-            byn_r[0] = 1000;
-            byn_r[1] = 301;
-            byn_r[2] = 176;
-            byn_r[3] = 125;
-            byn_r[4] = 97;
-            byn_r[5] = 79;
-            byn_r[6] = 67;
-            byn_r[7] = 58;
-            byn_r[8] = 51;
-            byn_r[9] = 46;
-            byn_r[10] = 1000;
-        }
-
-        void initRand()
-        {
-            fpd = 1.0;
-            while (fpd < 16386)
-                fpd = rand() * UINT32_MAX;
-        }
-
-        void saveAndPrintFile(string fileName, AudioFileFormat fmt)
-        {
-            if (bits == 32)
-            {
-                verbose("About to write 32b file");
-                aFile<float>.save(fileName, fmt);
-                aFile<float>.printSummary();
-            }
-            else
-            {
-                verbose("About to write int file");
-                aFile<int>.save(fileName, fmt);
-                aFile<int>.printSummary();
-            }
-            cerr << "Wrote to file: " << fileName << "\n";
-        }
-
-        void saveFlacFile(string fileName)
-        {
-            // flac vars
-            bool ok = true;
-            FLAC::Encoder::File encoder;
-            FLAC__StreamEncoderInitStatus init_status;
-
-            if (!encoder)
-            {
-                cerr << "Couldn't init flac encoder\n";
-                throw 1;
-            }
-
-            int samplesNum = aFile<int>.getNumSamplesPerChannel();
-            FLAC__int32 *samples[channelsNum];
-
-            for (int c = 0; c < channelsNum; ++c)
-            {
-                samples[c] = &(aFile<int>.samples[c][0]);
-            }
-
-            ok &= encoder.set_verify(true);
-            ok &= encoder.set_compression_level(8);
-            ok &= encoder.set_channels(channelsNum);
-            ok &= encoder.set_bits_per_sample(bits);
-            ok &= encoder.set_sample_rate(rate);
-            ok &= encoder.set_total_samples_estimate(samplesNum * channelsNum);
-
-            if (ok)
-            {
-                init_status = encoder.init(fileName.c_str());
-
-                if (init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK)
-                {
-                    fprintf(stderr, "ERROR: initializing encoder: %s\n", FLAC__StreamEncoderInitStatusString[init_status]);
-                    ok = false;
-                }
-            }
-
-            if (!ok)
-            {
-                throw 1;
-            }
-
-            verbose("About to write flac file");
-
-            if (!(ok = encoder.process(samples, samplesNum)))
-            {
-                fprintf(stderr, "   state: %s\n", encoder.get_state().resolved_as_cstring(encoder));
-                throw 1;
-            }
-
-            ok &= encoder.finish();
-
-            if (ok)
-            {
-                fprintf(stderr, "Conversion completed sucessfully.\n");
-            }
-            else
-            {
-                fprintf(stderr, "\nError during conversion.\n");
-                fprintf(stderr, "encoding: %s\n", ok ? "succeeded" : "FAILED");
-                fprintf(stderr, "   state: %s\n", encoder.get_state().resolved_as_cstring(encoder));
-                throw 1;
-            }
-        }
-    };
-
-    template <typename T>
-    AudioFile<T> OutputContext::aFile = {};
-
-    inline void OutputContext::writeToBuffer(unsigned char *&out, double &sample, int chanNum)
-    {
-        if (output == 's')
-        {
-            if (bits == 32)
-            {
-                writeFloat(out, sample);
-            }
-            else
-            {
-                writeLSBF(out, clip(-peakLevel,
-                                    myround(sample), peakLevel - 1));
-            }
-
-            out += channelsNum * bytespersample;
-        }
-        else
-        {
-            if (bits == 32)
-            {
-                pushSamp((float)sample, chanNum);
-            }
-            else
-            {
-                pushSamp(clip(-peakLevel, myround(sample),
-                              peakLevel - 1),
-                         chanNum);
-            }
-        }
-    }
-
-    inline void OutputContext::scaleAndDither(double &sample, int chanNum)
-    {
-        // Scale up so 0-1 is one bit of output format
-        sample *= scaleFactor;
-
-        if (ditherType == 'n')
-        {
-            njad(sample, chanNum);
-        }
-        else if (ditherType == 't')
-        {
-            tpdf(sample);
-        }
-        else if (ditherType == 'f')
-        {
-            fpdither(sample);
-        }
-    }
-
-    template <typename ST>
-    inline void OutputContext::pushSamp(ST samp, int c)
-    {
-        aFile<ST>.samples[c].push_back(samp);
-    }
-
-    // Floating point dither for going from double to float
-    // Part of Airwindows plugin suite
-    inline void OutputContext::fpdither(double &inputSample)
-    {
-        // begin stereo 32 bit floating point dither
-        int expon;
-        frexpf((float)inputSample, &expon);
-        fpd ^= fpd << 13;
-        fpd ^= fpd >> 17;
-        fpd ^= fpd << 5;
-        inputSample += (fpd * 3.4e-36l * pow(2, expon + 62)); // removed 'blend' for real use, it's for the demo;
-        // end stereo 32 bit floating point dither
-
-        inputSample = (float)inputSample; // equivalent of 'floor' for 32 bit floating point
-    }
-
-    // Not Just Another Dither
-    // Not truly random. Uses Benford Real Numbers for the dither values
-    // Part of Airwindows plugin suite
-    inline void OutputContext::njad(double &inputSample, int chanNum)
-    {
-        double *noiseShaping;
-        double(*byn)[13];
-
-        if (chanNum == 0)
-        {
-            noiseShaping = &noise_shaping_l;
-            byn = &byn_l;
-        }
-        else if (chanNum == 1)
-        {
-            noiseShaping = &noise_shaping_r;
-            byn = &byn_r;
-        }
-        else
-        {
-            cerr << "njad only supports a maximum of 2 channels!";
-            throw 1;
-        }
-
-        bool cutbins = false;
-        double drySample = inputSample;
-
-        // Subtract error from previous iteration
-        inputSample -= *noiseShaping;
-
-        // Isolate leading digit of number
-        double benfordize = floor(inputSample);
-        while (benfordize >= 1.0)
-            benfordize /= 10;
-        while (benfordize < 1.0 && benfordize > 0.0000001)
-            benfordize *= 10;
-
-        // Hotbin A becomes the Benford bin value for this number floored (leading digit)
-        int hotbinA = floor(benfordize);
-
-        double totalA = 0;
-        // produce total number- smaller of totalA & totalB is closer to Benford real
-        if ((hotbinA > 0) && (hotbinA < 10))
-        {
-            // Temp add weight to this leading digit
-            *byn[hotbinA] += 1;
-
-            // Coeffs get permanently incremented later in the loop, eventually need
-            // to be scaled back down (cut bins).
-            if (*byn[hotbinA] > 982)
-                cutbins = true;
-
-            totalA += (301 - (*byn[1]));
-            totalA += (176 - (*byn[2]));
-            totalA += (125 - (*byn[3]));
-            totalA += (97 - (*byn[4]));
-            totalA += (79 - (*byn[5]));
-            totalA += (67 - (*byn[6]));
-            totalA += (58 - (*byn[7]));
-            totalA += (51 - (*byn[8]));
-            totalA += (46 - (*byn[9]));
-
-            // Remove temp weight from this leading digit
-            *byn[hotbinA] -= 1;
-        }
-        else
-            hotbinA = 10; // 1000
-
-        // Isolate leading digit of number
-        benfordize = ceil(inputSample);
-
-        while (benfordize >= 1.0)
-            benfordize /= 10;
-        while (benfordize < 1.0 && benfordize > 0.0000001)
-            benfordize *= 10;
-
-        // Hotbin B becomes the Benford bin value for this number ceiled
-        int hotbinB = floor(benfordize);
-
-        double totalB = 0;
-        // produce total number- smaller of totalA & totalB is closer to Benford real
-        if ((hotbinB > 0) && (hotbinB < 10))
-        {
-            // Temp add weight to this leading digit
-            (*byn[hotbinB]) += 1;
-
-            // Coeffs get permanently incremented later in the loop, eventually need
-            // to be scaled back down (cut bins).
-            if (*byn[hotbinB] > 982)
-                cutbins = true;
-
-            totalB += (301 - (*byn[1]));
-            totalB += (176 - (*byn[2]));
-            totalB += (125 - (*byn[3]));
-            totalB += (97 - (*byn[4]));
-            totalB += (79 - (*byn[5]));
-            totalB += (67 - (*byn[6]));
-            totalB += (58 - (*byn[7]));
-            totalB += (51 - (*byn[8]));
-            totalB += (46 - (*byn[9]));
-
-            // Remove temp weight from this leading digit
-            *byn[hotbinB] -= 1;
-        }
-        else
-            hotbinB = 10;
-
-        double outputSample;
-
-        // assign the relevant one to the delay line
-        // and floor/ceil (quantize) signal accordingly
-        if (totalA < totalB)
-        {
-            // Add weight to relevant coeff
-            (*byn[hotbinA]) += 1;
-            outputSample = floor(inputSample);
-        }
-        else
-        {
-            // Add weight to relevant coeff
-            (*byn[hotbinB]) += 1;
-            // If totalB is less, we got here by using a sample that was
-            // previously ceil'd to create hotbin, so add one
-            outputSample = floor(inputSample + 1);
-        }
-
-        if (cutbins)
-        {
-            // Scale down coeffs (weights based on Benford's Law)
-            (*byn[1]) *= 0.99;
-            (*byn[2]) *= 0.99;
-            (*byn[3]) *= 0.99;
-            (*byn[4]) *= 0.99;
-            (*byn[5]) *= 0.99;
-            (*byn[6]) *= 0.99;
-            (*byn[7]) *= 0.99;
-            (*byn[8]) *= 0.99;
-            (*byn[9]) *= 0.99;
-            (*byn[10]) *= 0.99;
-        }
-
-        // Store the error
-        *noiseShaping += outputSample - drySample;
-
-        // Error shouldn't be greater than input sample value
-        if (*noiseShaping > fabs(inputSample))
-            *noiseShaping = fabs(inputSample);
-        if (*noiseShaping < -fabs(inputSample))
-            *noiseShaping = -fabs(inputSample);
-    }
-
-    template <typename T>
-    inline T OutputContext::clip(T min, T v, T max)
-    {
-        if (v < min)
-        {
-            if (lastSampsClippedLow == 1)
-                ++clips;
-            ++lastSampsClippedLow;
-            return min;
-        }
-        lastSampsClippedLow = 0;
-
-        if (v > max)
-        {
-            if (lastSampsClippedHigh == 1)
-                ++clips;
-            ++lastSampsClippedHigh;
-            return max;
-        }
-        lastSampsClippedHigh = 0;
-
-        return v;
-    }
-
-    // TPDF dither
-    inline void OutputContext::tpdf(double &sample)
-    {
-        double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-        double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-        sample += (rand1 - rand2);
-    }
-
-    inline int OutputContext::myround(double x)
-    {
-        // x += x >= 0 ? 0.5 : -0.5;
-        return static_cast<int>(round(x));
-    }
-
-    inline void OutputContext::writeLSBF(unsigned char *&ptr, unsigned long word)
-    {
-        if (bits == 20)
-        {
-            word <<= 4;
-        }
-
-        ptr[0] = word & 0xFF;
-        ptr[1] = (word >> 8) & 0xFF;
-
-        if (bits == 24 || bits == 20)
-        {
-            ptr[2] = (word >> 16) & 0xFF;
-        }
-    }
-
-    inline void OutputContext::writeFloat(unsigned char *ptr, double sample)
-    {
-        float word = (float)sample;
-
-        memcpy(ptr, &word, sizeof(float));
-    }
-
     struct ConversionContext
     {
         InputContext inCtx;
         OutputContext outCtx;
+        Dither dither;
 
         vector<unsigned char> dsdData;
         vector<double> floatData;
         vector<unsigned char> pcmData;
         vector<dxd> dxds;
 
+        // Trivial inits
+        int clips;
+        int lastSampsClippedLow;
+        int lastSampsClippedHigh;
+
+        inline void scaleAndDither(double &sample, int chanNum);
+        inline void writeToBuffer(unsigned char *&out, double &sample, int chanNum);
+        template <typename T>
+        inline T clamp(T min, T v, T max);
+        static inline int myRound(double x);
+        inline void writeLSBF(unsigned char *&ptr, unsigned long word);
+        static inline void writeFloat(unsigned char *ptr, double sample);
+
         ConversionContext() {}
 
-        ConversionContext(InputContext &inCtxParam, OutputContext &outCtxParam)
+        ConversionContext(InputContext &inCtxParam, OutputContext &outCtxParam,
+                          Dither &ditherParam)
         {
             inCtx = inCtxParam;
             outCtx = outCtxParam;
+            dither = ditherParam;
             outCtx.setBlockSize(inCtx.blockSize, inCtx.channelsNum);
             outCtx.initFile();
-            outCtx.initDither();
+            dither.init();
+
+            clips = 0;
+            lastSampsClippedHigh = 0;
+            lastSampsClippedLow = 0;
         }
 
         void doConversion()
@@ -826,7 +129,6 @@ namespace
                                      inCtx.channelsNum;
                     bytesRemaining -= frameSize;
                 }
-                // loud("-", false);
 
                 for (int c = 0; c < inCtx.channelsNum; ++c)
                 {
@@ -841,8 +143,8 @@ namespace
                     {
                         double r = floatData[s];
 
-                        outCtx.scaleAndDither(r, c);
-                        outCtx.writeToBuffer(out, r, c);
+                        scaleAndDither(r, c);
+                        writeToBuffer(out, r, c);
                     }
                 }
 
@@ -860,56 +162,61 @@ namespace
                 fp.close();
             }
 
-            if (outCtx.clips)
+            if (clips)
             {
-                cerr << "Clipped " << outCtx.clips << " times.\n";
+                cerr << "Clipped " << clips << " times.\n";
             }
 
             if (outCtx.output != 's')
             {
-                string outBaseName = "outfile";
-                string outExt = "";
-                AudioFileFormat fmt;
+                writeFile();
+            }
+        }
 
-                switch (outCtx.output)
-                {
-                case 'w':
-                    outExt = ".wav";
-                    fmt = AudioFileFormat::Wave;
-                    break;
-                case 'a':
-                    outExt = ".aif";
-                    fmt = AudioFileFormat::Aiff;
-                    break;
-                case 'f':
-                    outExt = ".flac";
-                    break;
-                default:
-                    break;
-                }
+        void writeFile()
+        {
+            string outBaseName = "outfile";
+            string outExt = "";
+            AudioFileFormat fmt;
 
-                string outName = outBaseName + outExt;
+            switch (outCtx.output)
+            {
+            case 'w':
+                outExt = ".wav";
+                fmt = AudioFileFormat::Wave;
+                break;
+            case 'a':
+                outExt = ".aif";
+                fmt = AudioFileFormat::Aiff;
+                break;
+            case 'f':
+                outExt = ".flac";
+                break;
+            default:
+                break;
+            }
 
-                if (!inCtx.stdIn)
-                {
-                    outName = inCtx.filePath.stem().string() + outExt;
-                }
+            string outName = outBaseName + outExt;
 
-                if (outCtx.output == 'f')
-                {
-                    outCtx.saveFlacFile(outName);
-                }
-                else
-                {
-                    outCtx.saveAndPrintFile(outName, fmt);
-                }
+            if (!inCtx.stdIn)
+            {
+                outName = inCtx.filePath.stem().string() + outExt;
+            }
 
-                if (inCtx.props.size() > 0)
-                {
-                    TagLib::FileRef f(outName.c_str());
-                    f.setProperties(inCtx.props);
-                    f.save();
-                }
+            if (outCtx.output == 'f')
+            {
+                outCtx.saveFlacFile(outName);
+            }
+            else
+            {
+                outCtx.saveAndPrintFile(outName, fmt);
+            }
+
+            if (inCtx.props.size() > 0)
+            {
+                TagLib::FileRef f(outName.c_str());
+                f.setProperties(inCtx.props);
+                f.save();
             }
         }
 
@@ -936,7 +243,7 @@ namespace
 
             cerr << "\nInterleaved: " << (inCtx.interleaved ? "yes" : "no")
                  << "\nLs bit first: " << (inCtx.lsbitfirst ? "yes" : "no")
-                 << "\nDither type: " << outCtx.ditherType
+                 << "\nDither type: " << dither.type
                  << "\nFilter type: " << outCtx.filtType
                  << "\nBit depth: " << outCtx.bits
                  << "\nOutput Rate: " << outCtx.rate
@@ -949,6 +256,97 @@ namespace
                  << "\nChannels: " << outCtx.channelsNum << "\n\n";
         }
     };
+
+    template <typename T>
+    inline T ConversionContext::clamp(T min, T v, T max)
+    {
+        if (v < min)
+        {
+            if (lastSampsClippedLow == 1)
+                ++clips;
+            ++lastSampsClippedLow;
+            return min;
+        }
+        lastSampsClippedLow = 0;
+
+        if (v > max)
+        {
+            if (lastSampsClippedHigh == 1)
+                ++clips;
+            ++lastSampsClippedHigh;
+            return max;
+        }
+        lastSampsClippedHigh = 0;
+
+        return v;
+    }
+
+    inline int ConversionContext::myRound(double x)
+    {
+        // x += x >= 0 ? 0.5 : -0.5;
+        return static_cast<int>(round(x));
+    }
+
+    inline void ConversionContext::scaleAndDither(double &sample, int chanNum)
+    {
+        // Scale up so 0-1 is one bit of output format
+        sample *= outCtx.scaleFactor;
+        dither.processSamp(sample, chanNum);
+    }
+
+    inline void ConversionContext::writeToBuffer(unsigned char *&out, double &sample, int chanNum)
+    {
+        if (outCtx.output == 's')
+        {
+            if (outCtx.bits == 32)
+            {
+                writeFloat(out, sample);
+            }
+            else
+            {
+                writeLSBF(out, clamp(-outCtx.peakLevel,
+                                     myRound(sample), outCtx.peakLevel - 1));
+            }
+
+            out += outCtx.channelsNum * outCtx.bytespersample;
+        }
+        else
+        {
+            if (outCtx.bits == 32)
+            {
+                outCtx.pushSamp((float)sample, chanNum);
+            }
+            else
+            {
+                outCtx.pushSamp(clamp(-outCtx.peakLevel, myRound(sample),
+                                      outCtx.peakLevel - 1),
+                                chanNum);
+            }
+        }
+    }
+
+    inline void ConversionContext::writeLSBF(unsigned char *&ptr, unsigned long word)
+    {
+        if (outCtx.bits == 20)
+        {
+            word <<= 4;
+        }
+
+        ptr[0] = word & 0xFF;
+        ptr[1] = (word >> 8) & 0xFF;
+
+        if (outCtx.bits == 24 || outCtx.bits == 20)
+        {
+            ptr[2] = (word >> 16) & 0xFF;
+        }
+    }
+
+    inline void ConversionContext::writeFloat(unsigned char *ptr, double sample)
+    {
+        float word = (float)sample;
+
+        memcpy(ptr, &word, sizeof(float));
+    }
 
     argagg::parser_results parseArgs(int argc, char *argv[])
     {
@@ -1037,12 +435,14 @@ int main(int argc, char *argv[])
                                                         : "T")
                           .c_str()[0];
 
+    // cerr << "Dither type: "<< ditherType << "\n";
+
     OutputContext outCtx;
     try
     {
         outCtx = OutputContext(bitDepth, outRate,
                                args["output"].as<string>("S").c_str()[0],
-                               decimation, ditherType,
+                               decimation,
                                args["filtertype"].as<string>(inputRate == 2
                                                                  ? "C"
                                                                  : "X")
@@ -1057,16 +457,13 @@ int main(int argc, char *argv[])
 
     for (const string &input : inputs)
     {
-        if (verboseMode)
-        {
-            cerr << "Input: " << input << "\n";
-        }
+        verbose("Input: " + input);
 
         InputContext inCtx;
         try
         {
             inCtx = InputContext(input, format, endianness, inputRate, blockSize,
-                                 channels);
+                                 channels, verboseMode);
         }
         catch (const char *str)
         {
@@ -1076,7 +473,8 @@ int main(int argc, char *argv[])
 
         try
         {
-            ConversionContext convCtx(inCtx, outCtx);
+            Dither dither(ditherType);
+            ConversionContext convCtx(inCtx, outCtx, dither);
             convCtx.doConversion();
         }
         catch (int r)
