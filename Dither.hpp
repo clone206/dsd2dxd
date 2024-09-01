@@ -27,6 +27,7 @@ struct Dither
     inline void fpdither(double &sample);
     inline void njad(double &sample, int chanNum);
     inline void tpdf(double &sample);
+    inline void rect(double &sample);
 
     Dither() {}
 
@@ -34,7 +35,7 @@ struct Dither
     {
         type = tolower(ditherTypeOut);
 
-        if (type != 'n' && type != 't' && type != 'f' && type != 'x')
+        if (type != 'n' && type != 't' && type != 'f' && type != 'x' && type != 'r')
         {
             throw "Invalid dither type!";
         }
@@ -108,6 +109,10 @@ inline void Dither::processSamp(double &sample, int chanNum)
     else if (type == 'f')
     {
         fpdither(sample);
+    }
+    else if (type == 'r')
+    {
+        rect(sample);
     }
 }
 // Floating point dither for going from double to float
@@ -278,7 +283,14 @@ inline void Dither::njad(double &inputSample, int chanNum)
 // TPDF dither
 inline void Dither::tpdf(double &sample)
 {
+    double rand1 = ((double)rand()) / ((double)RAND_MAX) / 2; // rand value between 0 and 0.5
+    double rand2 = ((double)rand()) / ((double)RAND_MAX) / 2; // rand value between 0 and 0.5
+    sample += (rand1 - rand2); // Range from -0.5 to +0.5
+}
+
+// Rectangular dither
+inline void Dither::rect(double &sample)
+{
     double rand1 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-    double rand2 = ((double)rand()) / ((double)RAND_MAX); // rand value between 0 and 1
-    sample += (rand1 - rand2);
+    sample += (rand1 - 0.5); // Range from -0.5 to +0.5
 }

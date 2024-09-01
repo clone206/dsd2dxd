@@ -75,45 +75,45 @@ using the metadata found in that file (either a dsf or dff file).
 If neither filename(s) or - is provided, standard in is assumed.
 Multiple filenames can be provided and the input-related options specified will be applied to each, 
 except where overridden by each file's metadata.
-  -h, --help
-      Shows this help message
-  -c, --channels
-      Number of channels (default: 2)
-  -f, --fmt
-      I (interleaved) or P (planar) (DSD stream option) (default: I)
-  -b, --bitdepth
-      16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
-  -t, --filttype
-      X (XLD filter), D (Original dsd2pcm filter. Only 
-      available with 8:1 decimation ratio), 
-      E (Equiripple. Only 
-      available with double rate DSD input),
-      C (Chebyshev. Only available with double rate DSD input)
-      (default: X [single rate] or C [double rate])
-  -e, --endianness
-      Byte order of input. M (MSB first) or L (LSB first) (default: M)
-  -s, --bs
-      Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
-  -d, --dither
-      Which type of dither to use. T (TPDF), N (Not Just Another Dither), F (floating 
-     point dither), or X (no dither) (default: F for 32 bit, T otherwise)
-  -r, --ratio
-      Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with 
-      double rate DSD, Chebyshev filter)
-  -i, --inrate
-      Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with 
-      Decimation ratio of 16, 32, or 64)
-  -o, --output
-      Output type. S (stdout), A (aif), W (wave), or F (flac)
-      (default: S. Note that W, A, or F outputs to either 
-      <basename>.[wav|aif|flac] in current directory,
-      where <basename> is the input filename 
-      without the extension, or outfile.[wav|aif|flac] if reading from stdin.)
-  -l, --level
-      Volume level adjustment in dB. If a negative number is needed use the --level= 
-      format (with no space after the "="). (default: 0).
-  -v, --verbose
-      Print diagnostic messages to standard error while converting.
+    -h, --help
+        shows this help message
+    -c, --channels
+        Number of channels (default: 2)
+    -f, --fmt
+        I (interleaved) or P (planar) (DSD stream option) (default: I)
+    -b, --bitdepth
+        16, 20, 24, or 32 (float) (intel byte order, output option) (default: 24)
+    -t, --filttype
+        X (XLD filter), D (Original dsd2pcm filter. Only 
+        available with 8:1 decimation ratio), 
+        E (Equiripple. Only 
+        available with double rate DSD input),
+        C (Chebyshev. Only available with double rate DSD input)
+        (default: X [single rate] or C [double rate])
+    -e, --endianness
+        Byte order of input. M (MSB first) or L (LSB first) (default: M)
+    -s, --bs
+        Block size to read/write at a time in bytes, e.g. 4096 (default: 4096)
+    -d, --dither
+        Which type of dither to use. T (TPDF), R (rectangular), N (Not Just Another
+        Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)
+    -r, --ratio
+        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with 
+        double rate DSD, Chebyshev filter)
+    -i, --inrate
+        Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with 
+        Decimation ratio of 16, 32, or 64)
+    -o, --output
+        Output type. S (stdout), A (aif), W (wave), or F (flac)
+        (default: S. Note that W, A, or F outputs to either 
+        <basename>.[wav|aif|flac] in current directory,
+        where <basename> is the input filename 
+        without the extension, or outfile.[wav|aif|flac] if reading from stdin.)
+    -l, --level
+        Volume level adjustment in dB. If a negative number is needed use the --level= 
+        format (with no space after the "="). (default: 0).
+    -v, --verbose
+        Print diagnostic messages to standard error while converting.
 ```
 
 ## Testing Examples
