@@ -145,6 +145,29 @@ There are a few dither options, including the Airwindows [Not Just Another Dithe
 
 You can also turn the dither off completely if that's your thing.
 
+### Notes on decimation ratios
+
+Using the `-r|--ratio` option, you set the effective output sample rate. The below tables show the output sample rate for each of dsd2dxd's allowed input rates and decimation ratios.
+
+#### DSD 64 (Single rate/2.8 mHz)
+```
+-r|--ratio  Output Rate
+-------------------------
+8           352.8 kHz
+16          176.4 kHz
+32           88.2 kHz
+```
+
+#### DSD 128 (Double rate/5.6 mHz)
+```
+-r|--ratio  Output Rate
+-------------------------
+16          352.8 kHz
+32          176.4 kHz
+64           88.2 kHz
+
+```
+
 ## Acknowledgements
 
 Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2pcm/](https://code.google.com/archive/p/dsd2pcm/). Added many enhancements over the original dsd2pcm as detailed above.
