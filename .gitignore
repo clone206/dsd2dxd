@@ -10,6 +10,7 @@ dsd2pcm
 *.aiff
 *.aif
 *.dff
+*.m4a
 dsd2dxd
 dsf2dsdiff
 dsdextractor

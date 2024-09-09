@@ -200,7 +200,7 @@ namespace
 
             if (!inCtx.stdIn)
             {
-                outName = inCtx.filePath.stem().string() + outExt;
+                outName = inCtx.parentPath.string() + "/" + inCtx.filePath.stem().string() + outExt;
             }
 
             if (outCtx.output == 'f')
