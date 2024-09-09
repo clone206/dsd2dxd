@@ -145,7 +145,7 @@ struct OutputContext
         cerr << "Wrote to file: " << fileName << "\n";
     }
 
-    void saveFlacFile(string fileName)
+    void saveFlacFile(string filePath)
     {
         // flac vars
         bool ok = true;
@@ -175,7 +175,7 @@ struct OutputContext
 
         if (ok)
         {
-            init_status = encoder.init(fileName.c_str());
+            init_status = encoder.init(filePath.c_str());
 
             if (init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK)
             {
@@ -199,7 +199,7 @@ struct OutputContext
 
         if (ok)
         {
-            fprintf(stderr, "Conversion completed sucessfully.\n");
+            fprintf(stderr, "Conversion completed sucessfully for %s.\n", filePath.c_str());
         }
         else
         {

@@ -196,25 +196,25 @@ namespace
                 break;
             }
 
-            string outName = outBaseName + outExt;
+            string outPath = outBaseName + outExt;
 
             if (!inCtx.stdIn)
             {
-                outName = inCtx.parentPath.string() + "/" + inCtx.filePath.stem().string() + outExt;
+                outPath = inCtx.parentPath.string() + "/" + inCtx.filePath.stem().string() + outExt;
             }
 
             if (outCtx.output == 'f')
             {
-                outCtx.saveFlacFile(outName);
+                outCtx.saveFlacFile(outPath);
             }
             else
             {
-                outCtx.saveAndPrintFile(outName, fmt);
+                outCtx.saveAndPrintFile(outPath, fmt);
             }
 
             if (inCtx.props.size() > 0)
             {
-                TagLib::FileRef f(outName.c_str());
+                TagLib::FileRef f(outPath.c_str());
                 f.setProperties(inCtx.props);
                 f.save();
             }
