@@ -46,6 +46,11 @@ namespace
         }
     }
 
+    int calculateOutRate(int dsdRate, int decimation)
+    {
+        return DSD_64_RATE * dsdRate / decimation;
+    }
+
     struct ConversionContext
     {
         InputContext inCtx;
@@ -202,7 +207,8 @@ namespace
 
             if (!inCtx.stdIn)
             {
-                outPath = inCtx.parentPath.string() + "/" + inCtx.filePath.stem().string() + outExt;
+                outPath = inCtx.parentPath.string() + "/" +
+                          inCtx.filePath.stem().string() + outExt;
             }
 
             if (outCtx.output == 'f')
@@ -391,11 +397,6 @@ namespace
         }
 
         return args;
-    }
-
-    int calculateOutRate(int dsdRate, int decimation)
-    {
-        return DSD_64_RATE * dsdRate / decimation;
     }
 } // anonymous namespace
 
