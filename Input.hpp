@@ -36,6 +36,7 @@ struct InputContext
     int dsdRate;
     string input;
     fs::path filePath;
+    fs::path parentPath;
 
     int dsdStride;
     int dsdChanOffset;
@@ -101,10 +102,11 @@ struct InputContext
         {
             stdIn = false;
             filePath = fs::path(input);
+            parentPath = fs::absolute(filePath).parent_path();
             verbose("Input file basename: ", false);
             verbose(filePath.stem());
             verbose("Parent path: ", false);
-            verbose(fs::absolute(filePath).parent_path());
+            verbose(parentPath);
 
             FILE *inFile;
             if ((inFile = fopen(input.c_str(), "rb")) != NULL)

@@ -46,6 +46,11 @@ namespace
         }
     }
 
+    int calculateOutRate(int dsdRate, int decimation)
+    {
+        return DSD_64_RATE * dsdRate / decimation;
+    }
+
     struct ConversionContext
     {
         InputContext inCtx;
@@ -78,6 +83,8 @@ namespace
             inCtx = inCtxParam;
             outCtx = outCtxParam;
             dither = ditherParam;
+
+            outCtx.setRate(calculateOutRate(inCtx.dsdRate, outCtx.decimRatio));
             outCtx.setBlockSize(inCtx.blockSize, inCtx.channelsNum);
             outCtx.initFile();
             dither.init();
@@ -196,25 +203,26 @@ namespace
                 break;
             }
 
-            string outName = outBaseName + outExt;
+            string outPath = outBaseName + outExt;
 
             if (!inCtx.stdIn)
             {
-                outName = inCtx.filePath.stem().string() + outExt;
+                outPath = inCtx.parentPath.string() + "/" +
+                          inCtx.filePath.stem().string() + outExt;
             }
 
             if (outCtx.output == 'f')
             {
-                outCtx.saveFlacFile(outName);
+                outCtx.saveFlacFile(outPath);
             }
             else
             {
-                outCtx.saveAndPrintFile(outName, fmt);
+                outCtx.saveAndPrintFile(outPath, fmt);
             }
 
             if (inCtx.props.size() > 0)
             {
-                TagLib::FileRef f(outName.c_str());
+                TagLib::FileRef f(outPath.c_str());
                 f.setProperties(inCtx.props);
                 f.save();
             }
@@ -426,7 +434,6 @@ int main(int argc, char *argv[])
     auto channels = args["channels"].as<int>(2);
     auto inputRate = args["inputrate"].as<int>(1);
     auto decimation = args["decimation"].as<int>(8);
-    auto outRate = DSD_64_RATE * inputRate / decimation;
     auto bitDepth = args["bitdepth"].as<int>(24);
     auto format = args["format"].as<string>("I").c_str()[0];
     auto endianness = args["endianness"].as<string>("M").c_str()[0];
@@ -440,7 +447,7 @@ int main(int argc, char *argv[])
     OutputContext outCtx;
     try
     {
-        outCtx = OutputContext(bitDepth, outRate,
+        outCtx = OutputContext(bitDepth,
                                args["output"].as<string>("S").c_str()[0],
                                decimation,
                                args["filtertype"].as<string>(inputRate == 2
