@@ -51,7 +51,7 @@ public:
 
     OutputContext() {}
 
-    OutputContext(int outBits, int outRate, char outType,
+    OutputContext(int outBits, char outType,
                   int decimation, char filtTypeOut,
                   double outVol)
     {
@@ -61,7 +61,6 @@ public:
         }
 
         bits = outBits;
-        rate = outRate;
         output = tolower(outType);
 
         if (output != 's' && output != 'w' && output != 'a' && output != 'f')
