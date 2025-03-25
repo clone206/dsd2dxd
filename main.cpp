@@ -390,6 +390,10 @@ namespace
 
         return args;
     }
+
+    int calculateOutRate(int dsdRate, int decimation) {
+        return DSD_64_RATE * dsdRate / decimation;
+    }
 } // anonymous namespace
 
 int main(int argc, char *argv[])
@@ -426,7 +430,7 @@ int main(int argc, char *argv[])
     auto channels = args["channels"].as<int>(2);
     auto inputRate = args["inputrate"].as<int>(1);
     auto decimation = args["decimation"].as<int>(8);
-    auto outRate = DSD_64_RATE * inputRate / decimation;
+    auto outRate = calculateOutRate(inputRate, decimation);
     auto bitDepth = args["bitdepth"].as<int>(24);
     auto format = args["format"].as<string>("I").c_str()[0];
     auto endianness = args["endianness"].as<string>("M").c_str()[0];
@@ -470,6 +474,10 @@ int main(int argc, char *argv[])
             cerr << str << "\n";
             return 1;
         }
+
+        // Calculate outRate based on the current input file's dsdRate
+        outRate = calculateOutRate(inCtx.dsdRate, decimation);
+        outCtx.setRate(outRate); // Update the rate in the existing OutputContext
 
         try
         {

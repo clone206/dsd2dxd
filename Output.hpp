@@ -28,8 +28,8 @@
 using namespace std;
 namespace fs = std::filesystem;
 
-struct OutputContext
-{
+class OutputContext {
+public:
     // Init'd via input params
     int bits;
     int channelsNum;
@@ -214,6 +214,11 @@ struct OutputContext
     void pushSamp(ST samp, int c)
     {
         aFile<ST>.samples[c].push_back(samp);
+    }
+
+    void setRate(int newRate) {
+        rate = newRate;
+        // Update any other dependent members if necessary
     }
 };
 
