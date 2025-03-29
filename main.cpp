@@ -468,7 +468,7 @@ int main(int argc, char *argv[])
         if (input.find('*') != string::npos)
         {
             verbose(
-                "Warning: Unexpanded glob pattern detected in input: \"" + 
+                "Warning: Unexpanded glob pattern detected in input: \"" +
                 input + "\". Skipping.");
             continue; // Skip this input
         }
