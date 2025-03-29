@@ -60,6 +60,11 @@ dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 
 # Generalized example of using with an input and output file,
 # via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
+# Recursively convert all files ending in .dsf or .DSF in the current
+# directory and subdirectories, to 24 bit flac files, using the equiripple filter
+# where the input files are dsd128 (falling back to the default filter for 
+# dsd64), with 32:1 decimation.
+dsd2dxd -t E -r 32 -b 24 -o f ./{*,**/*}.{dsf,DSF}
 ```
 
 ### Full Usage and Options
