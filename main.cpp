@@ -464,6 +464,15 @@ int main(int argc, char *argv[])
 
     for (const string &input : inputs)
     {
+        // Check for unexpanded glob patterns (any input containing '*')
+        if (input.find('*') != string::npos)
+        {
+            verbose(
+                "Warning: Unexpanded glob pattern detected in input: \"" +
+                input + "\". Skipping.");
+            continue; // Skip this input
+        }
+
         verbose("Input: " + input);
 
         InputContext inCtx;
