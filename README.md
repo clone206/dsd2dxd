@@ -179,7 +179,7 @@ Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2p
 
 Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
 
-Commandline options parsing uses [argagg](https://github.com/vietjtnguyen/argagg). Wav and aiff output uses [AudioFile](https://github.com/adamstark/AudioFile). .dsf and .dff file metadata reading is done via a modified version of [dsdunpack](https://github.com/michaelburton/dsdunpack).
+Commandline options parsing uses [argagg](https://github.com/vietjtnguyen/argagg). Wav and aiff output uses [AudioFile](https://github.com/adamstark/AudioFile). .dsf and .dff file metadata reading is done via a modified version of [dsdunpack](https://github.com/wishyoushine/dsdunpack).
 
 ## Modified original info.txt
 
