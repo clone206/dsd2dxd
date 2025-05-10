@@ -20,9 +20,6 @@
 
 #include <filesystem>
 #include <math.h>
-#include <taglib/tag.h>
-#include <taglib/fileref.h>
-#include <taglib/tpropertymap.h>
 #include <FLAC++/encoder.h>
 
 #include "AudioFile.h"
