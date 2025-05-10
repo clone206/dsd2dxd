@@ -16,6 +16,8 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+#pragma once
+
 #include <filesystem>
 #include <taglib/tag.h>
 #include <taglib/fileref.h>

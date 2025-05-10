@@ -3,6 +3,8 @@
  *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
  * ======================================== */
 
+ #pragma once
+
 #include <math.h>
 #include <cstring>
 #include <ctype.h>
