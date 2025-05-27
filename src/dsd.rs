@@ -2,9 +2,20 @@ use std::fs::File;
 use std::ptr::NonNull;
 use std::os::unix::io::AsRawFd;
 use libc::FILE;
-use crate::dsdin_sys::{dsd_reader_t, dsd_reader_open, dsd_reader_close, 
-                       dsd_reader_clone, dsd_reader_read, dsd_reader_next_chunk,
-                       DSD_FORMAT_DSDIFF, DSD_FORMAT_DSF}; // Add these to imports
+use crate::dsdin_sys::{
+    self, 
+    dsd_reader_t, 
+    dsd_reader_open, 
+    dsd_reader_close, 
+    dsd_reader_clone, 
+    dsd_reader_read, 
+    dsd_reader_next_chunk,
+    DSD_FORMAT_DSDIFF, 
+    DSD_FORMAT_DSF
+};
+
+// Re-export only
+pub use crate::dsdin_sys::DSD_64_RATE;
 
 pub struct Dsd {
     reader: NonNull<dsd_reader_t>,

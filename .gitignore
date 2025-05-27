@@ -15,3 +15,5 @@ dsd2dxd
 dsf2dsdiff
 dsdextractor
 dsdunpack
+target/*
+lib/*

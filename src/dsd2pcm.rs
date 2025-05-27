@@ -33,7 +33,7 @@ impl Dxd {
             dsd2pcm_translate(
                 self.handle.as_ptr(),
                 block_size,
-                dsd_data.as_ptr(),
+                dsd_data.as_ptr() as *const i8,  // Add cast to i8 (c_char)
                 dsd_stride,
                 float_data.as_mut_ptr(),
                 float_stride,

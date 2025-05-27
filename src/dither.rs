@@ -1,6 +1,7 @@
 use rand::Rng;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone)]
 pub struct Dither {
     noise_shaping_l: f64,  // Noise shape state L
     noise_shaping_r: f64,  // Noise shape state R

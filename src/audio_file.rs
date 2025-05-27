@@ -10,6 +10,7 @@ pub enum AudioFileFormat {
     Aiff,
 }
 
+#[derive(Clone)]
 pub struct AudioFile<T> {
     pub samples: Vec<Vec<T>>,
     sample_rate: u32,

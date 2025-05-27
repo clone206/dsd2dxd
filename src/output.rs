@@ -1,6 +1,8 @@
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
+use std::error::Error;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct OutputContext {
     // Init'd via input params
     pub bits: i32,
@@ -74,9 +76,9 @@ impl OutputContext {
         self.out_block_size = self.pcm_block_size * self.channels_num * self.bytes_per_sample;
     }
 
-    pub fn init_file(&mut self) {
+    pub fn init_file(&mut self) -> Result<(), Box<dyn Error>> {
         if self.output == 's' {
-            return;
+            return Ok(());
         }
 
         if self.bits == 32 {
@@ -86,6 +88,7 @@ impl OutputContext {
             self.int_file = Some(AudioFile::new());
             self.set_file_params_int();
         }
+        Ok(())
     }
 
     pub fn set_scaling(&mut self, volume: f64) {
