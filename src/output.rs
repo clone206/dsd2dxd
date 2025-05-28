@@ -1,8 +1,8 @@
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::Write;
 
-#[derive(Clone)]
 pub struct OutputContext {
     // Init'd via input params
     pub bits: i32,
@@ -23,6 +23,8 @@ pub struct OutputContext {
     // Internal state
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
+    pub file: Option<File>,
+    pub output_path: String,
 }
 
 impl OutputContext {
@@ -30,20 +32,20 @@ impl OutputContext {
         out_bits: i32,
         out_type: char,
         decimation: i32,
-        filt_type_out: char,
         out_vol: f64,
-    ) -> Result<Self, &'static str> {
+        output_path: String,
+    ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
-            return Err("Unsupported bit depth");
+            return Err("Unsupported bit depth".into());
         }
 
         let output = out_type.to_ascii_lowercase();
         if !['s', 'w', 'a', 'f'].contains(&output) {
-            return Err("Unrecognized output type");
+            return Err("Unrecognized output type".into());
         }
 
         if output == 'f' && out_bits == 32 {
-            return Err("32 bit float not allowed with flac output");
+            return Err("32 bit float not allowed with flac output".into());
         }
 
         let bytes_per_sample = if out_bits == 20 { 3 } else { out_bits / 8 };
@@ -53,7 +55,7 @@ impl OutputContext {
             output,
             decim_ratio: decimation,
             bytes_per_sample,
-            filt_type: filt_type_out.to_ascii_lowercase(),
+            filt_type: 'n', // Default filter type to 'n' (none)
             channels_num: 0,
             rate: 0,
             block_size: 0,
@@ -63,6 +65,8 @@ impl OutputContext {
             scale_factor: 1.0,
             float_file: None,
             int_file: None,
+            file: None,
+            output_path,
         };
 
         ctx.set_scaling(out_vol);
@@ -150,5 +154,39 @@ impl OutputContext {
 
     pub fn set_rate(&mut self, new_rate: i32) {
         self.rate = new_rate;
+    }
+
+    pub fn open_output_file(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.output != 's' {
+            self.file = Some(File::create(&self.output_path)?);
+        }
+        Ok(())
+    }
+
+    pub fn set_filter_type(&mut self, filt_type: char) {
+        self.filt_type = filt_type;
+    }
+}
+
+impl Clone for OutputContext {
+    fn clone(&self) -> Self {
+        Self {
+            bits: self.bits,
+            channels_num: self.channels_num,
+            rate: self.rate,
+            decim_ratio: self.decim_ratio,
+            bytes_per_sample: self.bytes_per_sample,
+            block_size: self.block_size,
+            pcm_block_size: self.pcm_block_size,
+            out_block_size: self.out_block_size,
+            output: self.output,
+            filt_type: self.filt_type,
+            peak_level: self.peak_level,
+            scale_factor: self.scale_factor,
+            float_file: self.float_file.clone(),
+            int_file: self.int_file.clone(),
+            file: None, // File cannot be cloned, so we create a new None
+            output_path: self.output_path.clone(),
+        }
     }
 }

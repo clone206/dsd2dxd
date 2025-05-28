@@ -1,5 +1,4 @@
-use clap::{Parser, ValueEnum};
-use std::path::PathBuf;
+use clap::Parser;
 use std::error::Error;
 
 mod audio_file;
@@ -22,11 +21,10 @@ static mut VERBOSE_MODE: bool = false;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd")]
-#[command(about = "DSD to PCM filter. Reads from stdin or file and writes to stdout or file.")]
 struct Cli {
     /// Number of channels
-    #[arg(short = 'c', long = "channels", default_value = "2")]
-    channels: i32,
+    #[arg(short = 'c', long = "channels")]
+    channels: Option<i32>,
 
     /// Format: Interleaved (I) or Planar (P)
     #[arg(short = 'f', long = "fmt", default_value = "I")]
@@ -45,8 +43,8 @@ struct Cli {
     endianness: char,
 
     /// Block size in bytes
-    #[arg(short = 's', long = "bs", default_value = "4096")]
-    block_size: i32,
+    #[arg(short = 's', long = "bs")]
+    block_size: Option<i32>,
 
     /// Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X (none)
     #[arg(short = 'd', long = "dither")]
@@ -75,6 +73,10 @@ struct Cli {
     /// Input files (use - for stdin)
     #[arg(name = "FILES")]
     files: Vec<String>,
+
+    /// Output file (if not stdout)
+    #[arg(short = 'O', long = "output-file")]
+    output_file: Option<String>,
 }
 
 fn verbose(message: &str, new_line: bool) {
@@ -103,19 +105,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         if cli.bit_depth == 32 { 'F' } else { 'T' }
     );
 
-    let filter_type = cli.filter_type.unwrap_or(
-        if cli.input_rate == 2 { 'C' } else { 'X' }
-    );
+    // Update filter type handling
+    let filter_type = cli.filter_type.unwrap_or_else(|| {
+        match cli.input_rate {
+            2 => 'C',  // DSD128
+            _ => 'X'   // Default/DSD64
+        }
+    }).to_ascii_uppercase();  // Ensure uppercase for validation
 
     let mut out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
         cli.decimation,
-        filter_type,
         cli.level,
+        cli.output_file.unwrap_or_default(),
     )?;
 
-    let mut dither = Dither::new(dither_type)?;
+    out_ctx.set_filter_type(filter_type);
+
+    let dither = Dither::new(dither_type)?;
 
     for input in inputs {
         // Check for unexpanded glob patterns
@@ -131,20 +139,20 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Create input context
         let in_ctx = InputContext::new(
-            input,
+            input.clone(),
             cli.format,
             cli.endianness,
             cli.input_rate,
-            cli.block_size,
-            cli.channels,
+            cli.block_size.unwrap_or(4096),
+            cli.channels.unwrap_or(2),
             cli.verbose,
         )?;
 
-        // Create dither and conversion context
+        // Create conversion context
         let mut conv_ctx = ConversionContext::new(
             in_ctx,
-            out_ctx.clone(),  // Clone here instead
-            dither.clone(),   // Clone here instead
+            out_ctx.clone(),
+            dither.clone(),
             cli.verbose
         )?;
         conv_ctx.do_conversion()?;

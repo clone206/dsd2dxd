@@ -1,9 +1,7 @@
 use std::fs::File;
 use std::ptr::NonNull;
 use std::os::unix::io::AsRawFd;
-use libc::FILE;
 use crate::dsdin_sys::{
-    self, 
     dsd_reader_t, 
     dsd_reader_open, 
     dsd_reader_close, 

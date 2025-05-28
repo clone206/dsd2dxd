@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::fs::File;
-use crate::dsd::{Dsd, DSD_64_RATE};
+use crate::dsd::{Dsd};
+use std::error::Error;
 
 pub struct InputContext {
     pub verbose_mode: bool,
@@ -22,51 +23,51 @@ pub struct InputContext {
 
 impl InputContext {
     pub fn new(
-        in_file: String,
-        fmt: char,
-        endianness: char,
-        in_rate: i32,
-        block_size_in: i32,
+        input_file: String,
+        format: char,
+        endian: char,
+        dsd_rate: i32,
+        block_size: i32,
         channels: i32,
-        verbose_param: bool,
-    ) -> Result<Self, &'static str> {
-        let lsbit_first = match endianness.to_ascii_lowercase() {
+        verbose: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        let lsbit_first = match endian.to_ascii_lowercase() {
             'l' => 1,
             'm' => 0,
-            _ => return Err("No endianness detected!"),
+            _ => return Err("No endianness detected!".into()),
         };
 
-        let interleaved = match fmt.to_ascii_lowercase() {
+        let interleaved = match format.to_ascii_lowercase() {
             'p' => false,
             'i' => true,
-            _ => return Err("No fmt detected!"),
+            _ => return Err("No fmt detected!".into()),
         };
 
-        if ![1, 2].contains(&in_rate) {
-            return Err("Unsupported DSD input rate.");
+        if ![1, 2].contains(&dsd_rate) {
+            return Err("Unsupported DSD input rate.".into());
         }
 
         let mut ctx = Self {
-            verbose_mode: verbose_param,
+            verbose_mode: verbose,
             lsbit_first,
             interleaved,
-            std_in: in_file == "-",
-            dsd_rate: in_rate,
-            input: in_file.clone(),
+            std_in: input_file == "-",
+            dsd_rate,
+            input: input_file.clone(),
             file_path: None,
             parent_path: None,
             dsd_stride: 0,
             dsd_chan_offset: 0,
             channels_num: channels,
-            block_size: block_size_in,
+            block_size: block_size,
             audio_length: 0,
             audio_pos: 0,
         };
 
-        ctx.set_block_size(block_size_in);
+        ctx.set_block_size(block_size);
 
         if !ctx.std_in {
-            let path = PathBuf::from(&in_file);
+            let path = PathBuf::from(&input_file);
             ctx.file_path = Some(path.clone());
             ctx.parent_path = Some(path.parent().unwrap_or(Path::new("")).to_path_buf());
 
@@ -75,7 +76,13 @@ impl InputContext {
             ctx.verbose(&format!("Parent path: {}", 
                 ctx.parent_path.as_ref().unwrap().display()), true);
 
-            if let Ok(file) = File::open(&in_file) {
+            ctx.verbose(&format!("Opening input file: {}", input_file), true);
+
+            if let Ok(file) = File::open(&input_file) {
+                if let Ok(metadata) = file.metadata() {
+                    ctx.verbose(&format!("File size: {} bytes", metadata.len()), true);
+                }
+
                 if let Ok(my_dsd) = Dsd::new(file) {
                     ctx.audio_pos = my_dsd.audio_pos;
                     ctx.audio_length = my_dsd.audio_length;
@@ -91,6 +98,20 @@ impl InputContext {
                     ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
                 }
             }
+        } else {
+            // Handle stdin case
+            ctx.verbose("Reading from stdin", true);
+            // For stdin, we need to set a reasonable audio length
+            // Let's use the maximum possible length for now
+            ctx.audio_length = i64::MAX;
+            ctx.audio_pos = 0;
+            
+            // Other parameters should already be set from CLI args
+            ctx.verbose(&format!("Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}", 
+                ctx.channels_num, 
+                ctx.lsbit_first, 
+                ctx.interleaved
+            ), true);
         }
 
         Ok(ctx)

@@ -1,5 +1,4 @@
 use rand::Rng;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct Dither {
