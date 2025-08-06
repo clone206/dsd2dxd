@@ -53,14 +53,28 @@ impl Dither {
         }
     }
 
-    pub fn process_samp(&mut self, sample: &mut f64, chan_num: i32) {
+    fn process_tpdf(&mut self) -> f64 {
+        let mut rng = rand::thread_rng();
+        // Scale TPDF dither for 24-bit
+        // For 24-bit, we want the dither amplitude to be 1 LSB peak-to-peak
+        // 1 LSB at 24-bit is 1/8388608 (2^-23)
+        let scale = 1.0 / 8388608.0;
+        (rng.gen::<f64>() - rng.gen::<f64>()) * scale
+    }
+
+    pub fn process_samp(&mut self, sample: &mut f64, chan: usize) {
         match self.dither_type {
-            'n' => self.njad(sample, chan_num),
-            't' => self.tpdf(sample),
-            'f' => self.fpdither(sample),
-            'r' => self.rect(sample),
-            _ => {}
+            't' => *sample += self.process_tpdf(),
+            'r' => *sample += self.process_rpdf(),
+            'n' => self.njad(sample, chan as i32),
+            'f' => self.fpdither(sample),  // Call floating point dither
+            _ => (),   // No dithering
         }
+    }
+
+    fn process_rpdf(&mut self) -> f64 {
+        let mut rng = rand::thread_rng();
+        rng.gen::<f64>() - 0.5
     }
 
     fn fpdither(&mut self, sample: &mut f64) {
@@ -181,16 +195,8 @@ impl Dither {
         *noise_shaping = noise_shaping.clamp(-abs_sample, abs_sample);
     }
 
-    fn tpdf(&self, sample: &mut f64) {
-        let mut rng = rand::thread_rng();
-        let rand1: f64 = rng.gen::<f64>() / 2.0;  // rand value between 0 and 0.5
-        let rand2: f64 = rng.gen::<f64>() / 2.0;  // rand value between 0 and 0.5
-        *sample += rand1 - rand2;  // Range from -0.5 to +0.5
-    }
-
-    fn rect(&self, sample: &mut f64) {
-        let mut rng = rand::thread_rng();
-        let rand1: f64 = rng.gen::<f64>();  // rand value between 0 and 1
-        *sample += rand1 - 0.5;  // Range from -0.5 to +0.5
+    // Add getter for dither type
+    pub fn dither_type(&self) -> char {
+        self.dither_type
     }
 }

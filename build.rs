@@ -1,6 +1,3 @@
-use std::env;
-use std::path::PathBuf;
-
 fn main() {
     cc::Build::new()
         .files(&[
@@ -9,7 +6,7 @@ fn main() {
             "dsdiff.c",
             "dsf.c"
         ])
-        .compile("dsd2dxd");
+        .compile("dsd2pcm");
 
     // Tell cargo to invalidate the built crate whenever any of these change
     println!("cargo:rerun-if-changed=dsd2pcm.c");

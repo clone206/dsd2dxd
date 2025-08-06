@@ -62,7 +62,7 @@ where T: AudioSample
         let mut file = File::create(path)?;
         let channels = self.num_channels as u16;
         let bytes_per_sample = (self.bit_depth / 8) as u16;
-        let _block_align = channels * bytes_per_sample; // Added underscore prefix
+        let _block_align = channels * bytes_per_sample;
         let data_size = (self.get_num_samples_per_channel() * 
             self.num_channels * bytes_per_sample as usize) as u32;
         let file_size = data_size + 36; // 36 = size of WAV header

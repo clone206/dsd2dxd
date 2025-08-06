@@ -1,10 +1,39 @@
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::marker::PhantomData;
-use crate::dsd2pcm_sys::*;
+use libc::{c_char, c_int, ptrdiff_t, size_t};
+
+#[repr(C)]
+pub struct Dsd2PcmCtx {
+    fifo: [u8; 65536],  // FIFOSIZE = 1<<16
+    fifopos: u32,
+    num_tables: u32,
+    lsbfirst: i32,
+    decimation: i32,
+    delay: i32,
+    delay2: i32,
+    ctables: *mut *mut f64,
+}
+
+#[link(name = "dsd2pcm")]
+extern "C" {
+    fn dsd2pcm_init(filt_type: c_char, lsbf: c_int, decimation: c_int, dsd_rate: c_int) -> *mut Dsd2PcmCtx;
+    fn dsd2pcm_destroy(ctx: *mut Dsd2PcmCtx);
+    fn dsd2pcm_clone(ctx: *mut Dsd2PcmCtx) -> *mut Dsd2PcmCtx;
+    fn dsd2pcm_reset(ctx: *mut Dsd2PcmCtx);
+    fn dsd2pcm_translate(
+        ctx: *mut Dsd2PcmCtx,
+        block_size: size_t,
+        dsd_data: *const u8,
+        dsd_stride: ptrdiff_t,
+        float_data: *mut f64,
+        float_stride: ptrdiff_t,
+        decimation: c_int
+    );
+}
 
 pub struct Dxd {
-    ctx: NonNull<dsd2pcm_ctx>,
+    ctx: NonNull<Dsd2PcmCtx>,
     dropped: AtomicBool,
     _not_send_sync: PhantomData<*mut ()>,  // Add PhantomData field
 }
@@ -63,37 +92,24 @@ impl Dxd {
 
     pub fn translate(
         &mut self,
-        block_size: usize,
+        dsd_samples: usize,
         dsd_data: &[u8],
         dsd_stride: isize,
-        float_data: &mut [f64],
-        float_stride: isize,
+        pcm_data: &mut [f64],
+        pcm_stride: isize,
         decimation: i32,
-    ) {
-        // Don't translate if already dropped
-        if self.dropped.load(Ordering::SeqCst) {
-            return;
-        }
-
-        // Validate buffer sizes
-        let min_dsd_len = block_size + (dsd_stride as usize * (block_size - 1));
-        let min_float_len = (block_size / decimation as usize) + 
-            (float_stride as usize * ((block_size / decimation as usize) - 1));
-
-        if dsd_data.len() < min_dsd_len || float_data.len() < min_float_len {
-            return;
-        }
-
+    ) -> Result<(), &'static str> {
         unsafe {
             dsd2pcm_translate(
                 self.ctx.as_ptr(),
-                block_size,
-                dsd_data.as_ptr() as *const i8,
+                dsd_samples,
+                dsd_data.as_ptr(),
                 dsd_stride,
-                float_data.as_mut_ptr(),
-                float_stride,
+                pcm_data.as_mut_ptr(),
+                pcm_stride,
                 decimation,
             );
         }
+        Ok(())
     }
 }

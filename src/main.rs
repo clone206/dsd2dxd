@@ -9,7 +9,6 @@ mod input;
 mod output;
 mod dither;
 mod conversion_context;
-mod dsd2pcm_sys;
 
 pub use conversion_context::ConversionContext;
 pub use input::InputContext;

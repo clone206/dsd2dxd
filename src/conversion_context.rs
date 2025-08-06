@@ -11,29 +11,43 @@ pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
     dither: Dither,
-
+    
+    // Add buffer sizes as fields to track them consistently
+    buffer_sizes: BufferSizes,
     dsd_data: Vec<u8>,
     float_data: Vec<f64>,
     pcm_data: Vec<u8>,
     dxds: Vec<Dxd>,
-
+    
     clips: i32,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
     verbose_mode: bool,
 }
 
+// Separate struct to manage buffer sizes
+struct BufferSizes {
+    dsd_block: usize,
+    float_block: usize,
+    pcm_block: usize,
+}
+
 impl ConversionContext {
     pub fn new(
         in_ctx: InputContext,
-        out_ctx: OutputContext,  // Take ownership
-        dither: Dither,         // Take ownership
+        out_ctx: OutputContext,
+        dither: Dither,
         verbose_param: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut ctx = Self {
+        let mut ctx = Self {  // Make ctx mutable
             in_ctx,
-            out_ctx,    // No need to clone
-            dither,     // No need to clone
+            out_ctx,
+            dither,
+            buffer_sizes: BufferSizes {
+                dsd_block: 0,
+                float_block: 0,
+                pcm_block: 0,
+            },
             dsd_data: Vec::new(),
             float_data: Vec::new(),
             pcm_data: Vec::new(),
@@ -49,6 +63,9 @@ impl ConversionContext {
         ctx.out_ctx.init_file()?;
         ctx.dither.init();
 
+        // Initialize buffers
+        ctx.initialize_buffers()?;
+
         Ok(ctx)
     }
 
@@ -57,178 +74,205 @@ impl ConversionContext {
         ((DSD_64_RATE as i32) * self.in_ctx.dsd_rate / self.out_ctx.decim_ratio) as i32
     }
 
-    // Add write_file implementation
-    fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.out_ctx.output != 's' {
-            if let Some(ref mut file) = self.out_ctx.file {
-                file.write_all(&self.pcm_data)?;
-            } else {
-                self.out_ctx.open_output_file()?;
-                if let Some(ref mut file) = self.out_ctx.file {
-                    file.write_all(&self.pcm_data)?;
-                }
-            }
-        } else {
-            let stdout = io::stdout();
-            let mut handle = stdout.lock();
-            handle.write_all(&self.pcm_data)?;
-            handle.flush()?;
-        }
-        Ok(())
-    }
-
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
 
-        // Calculate buffer sizes correctly - account for interleaving
-        let samples_per_channel = self.in_ctx.block_size as usize;
-        let dsd_block_size = if self.in_ctx.interleaved {
-            samples_per_channel * self.in_ctx.channels_num as usize
+        // Print configuration information
+        eprintln!("\nConfiguration:");
+        let input_path = if self.in_ctx.std_in {
+            "stdin".to_string()
         } else {
-            samples_per_channel
+            self.in_ctx.file_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
         };
+        eprintln!("Input: {}", input_path);
+        eprintln!("Format: {}", if self.in_ctx.interleaved { "Interleaved" } else { "Planar" });
+        eprintln!("Channels: {}", self.in_ctx.channels_num);
+        eprintln!("LSB First: {}", self.in_ctx.lsbit_first != 0);
+        eprintln!("DSD Rate: {}", if self.in_ctx.dsd_rate == 2 { "DSD128" } else { "DSD64" });
+        eprintln!("Output Format: {} bit{}", 
+            self.out_ctx.bits,
+            if self.out_ctx.output == 'f' { " float" } else { "" }
+        );
+        eprintln!("Output Type: {}", match self.out_ctx.output {
+            's' => "stdout",
+            'f' => "file",
+            _ => "unknown"
+        });
+        eprintln!("Decimation Ratio: {}", self.out_ctx.decim_ratio);
+        eprintln!("Output Sample Rate: {} Hz", self.out_ctx.rate);
+        eprintln!("Filter Type: {}", match self.out_ctx.filt_type {
+            'X' => "XLD",
+            'D' => "Original",
+            'E' => "Equiripple",
+            'C' => "Chebyshev",
+            _ => "Unknown"
+        });
+        eprintln!("Dither Type: {}", match self.dither.dither_type() {
+            't' => "TPDF",
+            'r' => "Rectangular",
+            'n' => "NJAD",
+            'f' => "Float",
+            'x' => "None",
+            _ => "Unknown"
+        });
+        eprintln!("Block Size: {} bytes", self.in_ctx.block_size);
+        eprintln!("");
+
+        // Print buffer configuration
+        eprintln!("\nBuffer Configuration:");
+        eprintln!("DSD block size: {} bytes", self.buffer_sizes.dsd_block);
+        eprintln!("Float block size: {} samples", self.buffer_sizes.float_block);
+        eprintln!("PCM block size: {} bytes", self.buffer_sizes.pcm_block);
+        eprintln!("");
+
+        // Process blocks
+        self.process_blocks()
+    }
+
+    fn initialize_buffers(&mut self) -> Result<(), Box<dyn Error>> {
+        // All calculations in usize to avoid type mismatches
+        let samples_per_channel = self.in_ctx.block_size as usize;
+        let channels = self.in_ctx.channels_num as usize;
+        let bytes_per_sample = self.out_ctx.bytes_per_sample as usize;
         
-        let float_samples_per_channel = dsd_block_size / self.out_ctx.decim_ratio as usize;
-        let float_block_size = float_samples_per_channel * self.in_ctx.channels_num as usize;
-        let pcm_block_size = float_block_size * self.out_ctx.bytes_per_sample as usize;
+        // Calculate decimated PCM samples per channel
+        let pcm_samples_per_channel = samples_per_channel / self.out_ctx.decim_ratio as usize;
+        
+        // Calculate buffer sizes 
+        self.buffer_sizes = BufferSizes {
+            // DSD buffer holds raw input for all channels
+            dsd_block: samples_per_channel * channels,
+            
+            // Float buffer holds decimated samples per channel
+            float_block: pcm_samples_per_channel,  // Changed: only store one channel at a time
+            
+            // PCM buffer holds final output for all channels
+            pcm_block: pcm_samples_per_channel * channels * bytes_per_sample,
+        };
 
-        self.verbose(&format!("DSD block size per channel: {}", dsd_block_size), true);
-        self.verbose(&format!("Float block size total: {}", float_block_size), true);
-        self.verbose(&format!("PCM block size total: {}", pcm_block_size), true);
+        // Allocate buffers with correct sizes
+        self.dsd_data = vec![0; self.buffer_sizes.dsd_block];
+        self.float_data = vec![0.0; self.buffer_sizes.float_block];
+        self.pcm_data = vec![0; self.buffer_sizes.pcm_block];
 
-        // Initialize vectors with correct sizes
-        self.dsd_data = vec![0; dsd_block_size];
-        self.float_data = vec![0.0; float_block_size];
-        self.pcm_data = vec![0; pcm_block_size];
-
-        // Initialize dxd instances for each channel
+        // Initialize DXD processors for each channel
         self.dxds = (0..self.in_ctx.channels_num)
-            .map(|_| {
-                Dxd::new(
-                    self.out_ctx.filt_type,
-                    self.in_ctx.lsbit_first != 0,
-                    self.out_ctx.decim_ratio,
-                    self.in_ctx.dsd_rate,
-                )
-            })
+            .map(|_| Dxd::new(
+                self.out_ctx.filt_type,
+                self.in_ctx.lsbit_first != 0,
+                self.out_ctx.decim_ratio,
+                self.in_ctx.dsd_rate
+            ))
             .collect::<Result<Vec<_>, _>>()?;
 
-        self.process_blocks()?;
         Ok(())
     }
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut bytes_left = self.in_ctx.audio_length;
-        
-        self.verbose(&format!("Starting to process blocks. Total bytes: {}", bytes_left), true);
+        let mut bytes_left = if self.in_ctx.std_in {
+            i64::MAX
+        } else {
+            self.in_ctx.audio_length
+        };
+
+        let dsd_block_size = self.in_ctx.block_size as usize * self.in_ctx.channels_num as usize;
         
         while bytes_left > 0 {
-            let bytes_to_read = std::cmp::min(bytes_left, self.in_ctx.block_size as i64) as usize;
-            self.verbose(&format!("Attempting to read {} bytes", bytes_to_read), true);
-            
-            // Ensure our buffers are large enough
-            if bytes_to_read > self.dsd_data.len() {
-                self.dsd_data.resize(bytes_to_read, 0);
-            }
-
-            // Read input data
+            // Read one complete DSD block for all channels
             let read_size = if self.in_ctx.std_in {
-                match io::stdin().read(&mut self.dsd_data[..bytes_to_read]) {
-                    Ok(n) => {
-                        if n == 0 {
-                            self.verbose("EOF reached", true);
-                            break;
-                        }
-                        self.verbose(&format!("Read {} bytes from stdin", n), true);
-                        self.verbose(&format!("First few DSD bytes: {:?}", 
-                            &self.dsd_data[..std::cmp::min(10, n)]), true);
-                        n
-                    }
+                match io::stdin().read_exact(&mut self.dsd_data[..dsd_block_size]) {
+                    Ok(()) => dsd_block_size,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
                     Err(e) => return Err(Box::new(e))
                 }
             } else {
-                // ... file reading code ...
                 0
             };
 
-            // Calculate sizes based on what we actually read
-            let bytes_per_channel = read_size / self.in_ctx.channels_num as usize;
-            let float_len = bytes_per_channel / self.out_ctx.decim_ratio as usize;
-            
-            // Ensure float buffer is large enough
-            let required_float_size = float_len * self.in_ctx.channels_num as usize;
-            if required_float_size > self.float_data.len() {
-                self.float_data.resize(required_float_size, 0.0);
-            }
+            let samples_per_channel = read_size / self.in_ctx.channels_num as usize;
+            let pcm_samples = samples_per_channel / self.out_ctx.decim_ratio as usize;
+            let mut pcm_offset = 0;
+
+            // Clear PCM buffer for new block
+            self.pcm_data.fill(0);
 
             // Process each channel
             for chan in 0..self.in_ctx.channels_num {
-                let (dsd_start, dsd_stride) = if self.in_ctx.interleaved {
-                    (chan as usize, self.in_ctx.channels_num as usize)
+                // Calculate DSD offset for this channel's data
+                let dsd_chan_offset = if self.in_ctx.interleaved {
+                    chan as usize
                 } else {
-                    (chan as usize * bytes_per_channel, 1)
+                    chan as usize * samples_per_channel
                 };
 
-                let float_start = chan as usize * float_len;
-                
-                // Process DSD to PCM conversion
+                // Clear float buffer for this channel
+                self.float_data.fill(0.0);
+
                 if let Some(dxd) = self.dxds.get_mut(chan as usize) {
+                    // Process DSD to PCM for this channel
                     dxd.translate(
-                        bytes_per_channel,
-                        &self.dsd_data[dsd_start..],
-                        dsd_stride as isize,
-                        &mut self.float_data[float_start..float_start + float_len],
+                        samples_per_channel,
+                        &self.dsd_data[dsd_chan_offset..],
+                        if self.in_ctx.interleaved { self.in_ctx.channels_num as isize } else { 1 },
+                        &mut self.float_data[..pcm_samples],
                         1,
-                        self.out_ctx.decim_ratio,
-                    );
+                        self.out_ctx.decim_ratio
+                    )?;
+
+                    // Convert float samples to PCM with bounds checking
+                    for s in 0..pcm_samples {
+                        let mut sample = self.float_data[s];
+                        sample *= self.out_ctx.scale_factor;
+                        self.dither.process_samp(&mut sample, chan as usize);
+                        
+                        let mut pcm_pos = (s * self.in_ctx.channels_num as usize + chan as usize) * 
+                                     self.out_ctx.bytes_per_sample as usize;
+                        
+                        // Ensure we don't write past buffer end
+                        if pcm_pos + self.out_ctx.bytes_per_sample as usize <= self.pcm_data.len() {
+                            let value = Self::my_round(sample * 8388607.0) as i32;
+                            let clamped = self.clamp_value(-8388608, value, 8388607);
+                            self.write_int(&mut pcm_pos, clamped, self.out_ctx.bytes_per_sample as usize);
+                            pcm_offset = pcm_offset.max(pcm_pos + self.out_ctx.bytes_per_sample as usize);
+                        }
+                    }
                 }
             }
 
-            // After channel processing, convert float data to PCM
-            let mut pcm_offset = 0;
-            let peak_level = self.out_ctx.peak_level;
-            let scale_factor = self.out_ctx.scale_factor;
-            let bits = self.out_ctx.bits;
-            let output = self.out_ctx.output;
-            let bytes_per_sample = self.out_ctx.bytes_per_sample;
-
-            // Process samples in chunks to avoid borrow conflict
-            let samples: Vec<_> = self.float_data[..required_float_size]
-                .iter()
-                .map(|&sample| {
-                    let mut sample = sample * scale_factor;
-                    self.dither.process_samp(&mut sample, 0);
-                    sample
-                })
-                .collect();
-
-            // Convert processed samples to PCM
-            for &sample in &samples {
-                if bits == 32 && output != 'f' {
-                    let value = Self::my_round(sample) as i32;
-                    let clamped = self.clamp(-peak_level, value, peak_level);
-                    Self::write_lsbf(
-                        &mut &mut self.pcm_data[pcm_offset..], 
-                        clamped as u64, 
-                        bytes_per_sample
-                    );
-                } else {
-                    Self::write_float(&mut &mut self.pcm_data[pcm_offset..], sample);
-                }
-                pcm_offset += bytes_per_sample as usize;
-            }
-
-            // Write the processed block
-            if pcm_offset > 0 {
-                self.write_file()?;
+            // Write the complete block only if we have valid data
+            if pcm_offset > 0 && pcm_offset <= self.pcm_data.len() {
+                self.write_block(pcm_offset)?;
             }
 
             bytes_left -= read_size as i64;
-            self.verbose(&format!("Processed {} bytes, {} remaining", read_size, bytes_left), true);
         }
 
         Ok(())
     }
+
+    fn write_block(&mut self, pcm_bytes: usize) -> Result<(), Box<dyn Error>> {
+        if pcm_bytes == 0 || pcm_bytes > self.pcm_data.len() {
+            return Ok(());
+        }
+
+        // Write the block
+        if self.out_ctx.output != 's' {
+            if let Some(ref mut file) = self.out_ctx.file {
+                file.write_all(&self.pcm_data[..pcm_bytes])?;
+                file.flush()?;
+            }
+        } else {
+            io::stdout().write_all(&self.pcm_data[..pcm_bytes])?;
+            io::stdout().flush()?;
+        }
+
+        Ok(())
+    }
+
+    // Remove the separate write_file method since we're now writing directly
 
     // Helper function for clip stats
     fn update_clip_stats(&mut self, low: bool, high: bool) {
@@ -257,51 +301,50 @@ impl ConversionContext {
 
     fn my_round(x: f64) -> i64 {
         if x < 0.0 {
-            (x - 0.5) as i64
+            (x - 0.5).floor() as i64
         } else {
-            (x + 0.5) as i64
+            (x + 0.5).floor() as i64
         }
     }
 
-    fn write_float<'a>(ptr: &'a mut &'a mut [u8], sample: f64) {
+    fn write_float(&mut self, offset: &mut usize, sample: f64) {
+        // Convert to f32 and write in little-endian
         let bytes = (sample as f32).to_le_bytes();
-        ptr[..4].copy_from_slice(&bytes);
-        *ptr = &mut ptr[4..];
+        self.pcm_data[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
     }
 
-    fn write_lsbf<'a>(ptr: &'a mut &'a mut [u8], word: u64, bytes_per_sample: i32) {
-        for i in 0..bytes_per_sample {
-            ptr[i as usize] = ((word >> (i * 8)) & 0xFF) as u8;
+    fn write_int(&mut self, offset: &mut usize, value: i32, bytes: usize) {
+        // Bounds check
+        if *offset + bytes > self.pcm_data.len() {
+            return;
         }
-        *ptr = &mut ptr[bytes_per_sample as usize..];
+        
+        // Write in little-endian format
+        for i in 0..bytes {
+            self.pcm_data[*offset + i] = ((value >> (8 * i)) & 0xFF) as u8;
+        }
+        *offset += bytes;
     }
 
-    fn clamp<T: PartialOrd + Copy>(&mut self, min: T, v: T, max: T) -> T {
-        if v < min {
-            if self.last_samps_clipped_low == 1 {
-                self.clips += 1;
-            }
-            self.last_samps_clipped_low += 1;
-            min
-        } else if v > max {
-            if self.last_samps_clipped_high == 1 {
-                self.clips += 1;
-            }
-            self.last_samps_clipped_high += 1;
-            max
-        } else {
-            v
+    // Add verbose method
+    fn verbose(&self, msg: &str, show: bool) {
+        if self.verbose_mode && show {
+            eprintln!("{}", msg);
         }
     }
 
-    fn verbose(&self, message: &str, new_line: bool) {
-        if self.verbose_mode {
-            if new_line {
-                eprintln!("{}", message);
-            } else {
-                eprint!("{}", message);
-            }
+    // Make clamp a method to access self
+    fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
+        let mut result = value;
+        if value < min {
+            result = min;
+            self.update_clip_stats(true, false);
+        } else if value > max {
+            result = max;
+            self.update_clip_stats(false, true);
         }
+        result
     }
 }
 
