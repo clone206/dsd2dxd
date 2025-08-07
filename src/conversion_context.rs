@@ -222,22 +222,22 @@ impl ConversionContext {
                         self.out_ctx.decim_ratio
                     )?;
 
-                    // Convert float samples to PCM with bounds checking
+                    // Write PCM data with correct interleaving
+                    let mut pcm_pos = chan as usize * self.out_ctx.bytes_per_sample as usize;
                     for s in 0..pcm_samples {
                         let mut sample = self.float_data[s];
                         sample *= self.out_ctx.scale_factor;
                         self.dither.process_samp(&mut sample, chan as usize);
                         
-                        let mut pcm_pos = (s * self.in_ctx.channels_num as usize + chan as usize) * 
-                                     self.out_ctx.bytes_per_sample as usize;
-                        
-                        // Ensure we don't write past buffer end
                         if pcm_pos + self.out_ctx.bytes_per_sample as usize <= self.pcm_data.len() {
                             let value = Self::my_round(sample * 8388607.0) as i32;
                             let clamped = self.clamp_value(-8388608, value, 8388607);
                             self.write_int(&mut pcm_pos, clamped, self.out_ctx.bytes_per_sample as usize);
-                            pcm_offset = pcm_offset.max(pcm_pos + self.out_ctx.bytes_per_sample as usize);
+                            pcm_offset = pcm_offset.max(pcm_pos);
                         }
+                        
+                        // Move to next sample position
+                        pcm_pos += self.in_ctx.channels_num as usize * self.out_ctx.bytes_per_sample as usize;
                     }
                 }
             }
