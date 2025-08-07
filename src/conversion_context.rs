@@ -209,7 +209,7 @@ impl ConversionContext {
                 };
 
                 // Clear float buffer for this channel
-                self.float_data.fill(0.0);
+                //self.float_data.fill(0.0);
 
                 if let Some(dxd) = self.dxds.get_mut(chan as usize) {
                     // Process DSD to PCM for this channel
@@ -245,7 +245,7 @@ impl ConversionContext {
             // Write the complete block only if we have valid data
             if pcm_offset > 0 && pcm_offset <= self.pcm_data.len() {
                 self.write_block(pcm_offset)?;
-            }
+            } 
 
             bytes_left -= read_size as i64;
         }
