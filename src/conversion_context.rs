@@ -1,8 +1,8 @@
+use crate::dither::Dither;
+use crate::dsd2pcm::Dxd;
+use crate::dsdin_sys::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::output::OutputContext;
-use crate::dither::Dither;
-use crate::dsdin_sys::DSD_64_RATE;
-use crate::dsd2pcm::Dxd;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -11,25 +11,16 @@ pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
     dither: Dither,
-    
-    // Add buffer sizes as fields to track them consistently
-    buffer_sizes: BufferSizes,
+
     dsd_data: Vec<u8>,
     float_data: Vec<f64>,
     pcm_data: Vec<u8>,
     dxds: Vec<Dxd>,
-    
+
     clips: i32,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
     verbose_mode: bool,
-}
-
-// Separate struct to manage buffer sizes
-struct BufferSizes {
-    dsd_block: usize,
-    float_block: usize,
-    pcm_block: usize,
 }
 
 impl ConversionContext {
@@ -39,19 +30,38 @@ impl ConversionContext {
         dither: Dither,
         verbose_param: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut ctx = Self {  // Make ctx mutable
+        // All calculations in usize
+        let dsd_bytes_per_chan = in_ctx.block_size as usize; // bytes per channel
+        let channels = in_ctx.channels_num as usize;
+        let bytes_per_sample = out_ctx.bytes_per_sample as usize;
+        let lsb_first = in_ctx.lsbit_first != 0;
+        let dsd_rate = in_ctx.dsd_rate;
+        let decim_ratio = out_ctx.decim_ratio;
+        let filt_type = out_ctx.filt_type;
+
+        // Decimated PCM samples per channel: 8 DSD bits per byte
+        let pcm_samples_per_chan = (dsd_bytes_per_chan * 8) / decim_ratio as usize;
+
+        let mut ctx = Self {
             in_ctx,
             out_ctx,
             dither,
-            buffer_sizes: BufferSizes {
-                dsd_block: 0,
-                float_block: 0,
-                pcm_block: 0,
-            },
-            dsd_data: Vec::new(),
-            float_data: Vec::new(),
-            pcm_data: Vec::new(),
-            dxds: Vec::new(),
+            // Input buffer: bytes_per_chan * channels
+            dsd_data: vec![0; dsd_bytes_per_chan * channels],
+            // Per-channel float buffer sized for one channel’s decimated output
+            float_data: vec![0.0; pcm_samples_per_chan],
+            // Interleaved PCM buffer for all channels
+            pcm_data: vec![0; pcm_samples_per_chan * channels * bytes_per_sample],
+            dxds: (0..channels)
+                .map(|_| {
+                    Dxd::new(
+                        filt_type,
+                        lsb_first,
+                        decim_ratio,
+                        dsd_rate,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?,
             clips: 0,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
@@ -59,12 +69,10 @@ impl ConversionContext {
         };
 
         ctx.out_ctx.set_rate(ctx.calculate_out_rate());
-        ctx.out_ctx.set_block_size(ctx.in_ctx.block_size, ctx.in_ctx.channels_num);
+        ctx.out_ctx
+            .set_block_size(ctx.in_ctx.block_size, ctx.in_ctx.channels_num);
         ctx.out_ctx.init_file()?;
         ctx.dither.init();
-
-        // Initialize buffers
-        ctx.initialize_buffers()?;
 
         Ok(ctx)
     }
@@ -82,93 +90,77 @@ impl ConversionContext {
         let input_path = if self.in_ctx.std_in {
             "stdin".to_string()
         } else {
-            self.in_ctx.file_path
+            self.in_ctx
+                .file_path
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
         eprintln!("Input: {}", input_path);
-        eprintln!("Format: {}", if self.in_ctx.interleaved { "Interleaved" } else { "Planar" });
+        eprintln!(
+            "Format: {}",
+            if self.in_ctx.interleaved {
+                "Interleaved"
+            } else {
+                "Planar"
+            }
+        );
         eprintln!("Channels: {}", self.in_ctx.channels_num);
         eprintln!("LSB First: {}", self.in_ctx.lsbit_first != 0);
-        eprintln!("DSD Rate: {}", if self.in_ctx.dsd_rate == 2 { "DSD128" } else { "DSD64" });
-        eprintln!("Output Format: {} bit{}", 
-            self.out_ctx.bits,
-            if self.out_ctx.output == 'f' { " float" } else { "" }
+        eprintln!(
+            "DSD Rate: {}",
+            if self.in_ctx.dsd_rate == 2 {
+                "DSD128"
+            } else {
+                "DSD64"
+            }
         );
-        eprintln!("Output Type: {}", match self.out_ctx.output {
-            's' => "stdout",
-            'f' => "file",
-            _ => "unknown"
-        });
+        eprintln!(
+            "Output Format: {} bit{}",
+            self.out_ctx.bits,
+            if self.out_ctx.output == 'f' {
+                " float"
+            } else {
+                ""
+            }
+        );
+        eprintln!(
+            "Output Type: {}",
+            match self.out_ctx.output {
+                's' => "stdout",
+                'f' => "file",
+                _ => "unknown",
+            }
+        );
         eprintln!("Decimation Ratio: {}", self.out_ctx.decim_ratio);
         eprintln!("Output Sample Rate: {} Hz", self.out_ctx.rate);
-        eprintln!("Filter Type: {}", match self.out_ctx.filt_type {
-            'X' => "XLD",
-            'D' => "Original",
-            'E' => "Equiripple",
-            'C' => "Chebyshev",
-            _ => "Unknown"
-        });
-        eprintln!("Dither Type: {}", match self.dither.dither_type() {
-            't' => "TPDF",
-            'r' => "Rectangular",
-            'n' => "NJAD",
-            'f' => "Float",
-            'x' => "None",
-            _ => "Unknown"
-        });
+        eprintln!(
+            "Filter Type: {}",
+            match self.out_ctx.filt_type {
+                'X' => "XLD",
+                'D' => "Original",
+                'E' => "Equiripple",
+                'C' => "Chebyshev",
+                _ => "Unknown",
+            }
+        );
+        eprintln!(
+            "Dither Type: {}",
+            match self.dither.dither_type() {
+                't' => "TPDF",
+                'r' => "Rectangular",
+                'n' => "NJAD",
+                'f' => "Float",
+                'x' => "None",
+                _ => "Unknown",
+            }
+        );
         eprintln!("Block Size: {} bytes", self.in_ctx.block_size);
-        eprintln!("");
-
-        // Print buffer configuration
-        eprintln!("\nBuffer Configuration:");
-        eprintln!("DSD block size: {} bytes", self.buffer_sizes.dsd_block);
-        eprintln!("Float block size: {} samples", self.buffer_sizes.float_block);
-        eprintln!("PCM block size: {} bytes", self.buffer_sizes.pcm_block);
+        eprintln!("Scaling Factor: {}", self.out_ctx.scale_factor);
         eprintln!("");
 
         // Process blocks
         self.process_blocks()
-    }
-
-    fn initialize_buffers(&mut self) -> Result<(), Box<dyn Error>> {
-        // All calculations in usize to avoid type mismatches
-        let samples_per_channel = self.in_ctx.block_size as usize;
-        let channels = self.in_ctx.channels_num as usize;
-        let bytes_per_sample = self.out_ctx.bytes_per_sample as usize;
-        
-        // Calculate decimated PCM samples per channel
-        let pcm_samples_per_channel = samples_per_channel / self.out_ctx.decim_ratio as usize;
-        
-        // Calculate buffer sizes 
-        self.buffer_sizes = BufferSizes {
-            // DSD buffer holds raw input for all channels
-            dsd_block: samples_per_channel * channels,
-            
-            // Float buffer holds decimated samples per channel
-            float_block: pcm_samples_per_channel,  // Changed: only store one channel at a time
-            
-            // PCM buffer holds final output for all channels
-            pcm_block: pcm_samples_per_channel * channels * bytes_per_sample,
-        };
-
-        // Allocate buffers with correct sizes
-        self.dsd_data = vec![0; self.buffer_sizes.dsd_block];
-        self.float_data = vec![0.0; self.buffer_sizes.float_block];
-        self.pcm_data = vec![0; self.buffer_sizes.pcm_block];
-
-        // Initialize DXD processors for each channel
-        self.dxds = (0..self.in_ctx.channels_num)
-            .map(|_| Dxd::new(
-                self.out_ctx.filt_type,
-                self.in_ctx.lsbit_first != 0,
-                self.out_ctx.decim_ratio,
-                self.in_ctx.dsd_rate
-            ))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(())
     }
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
@@ -178,74 +170,88 @@ impl ConversionContext {
             self.in_ctx.audio_length
         };
 
-        let dsd_block_size = self.in_ctx.block_size as usize * self.in_ctx.channels_num as usize;
-        
         while bytes_left > 0 {
-            // Read one complete DSD block for all channels
             let read_size = if self.in_ctx.std_in {
-                match io::stdin().read_exact(&mut self.dsd_data[..dsd_block_size]) {
-                    Ok(()) => dsd_block_size,
+                match io::stdin().read_exact(&mut self.dsd_data) {
+                    Ok(()) => self.in_ctx.block_size * self.in_ctx.channels_num,
                     Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(Box::new(e))
+                    Err(e) => return Err(Box::new(e)),
                 }
             } else {
                 0
             };
 
-            let samples_per_channel = read_size / self.in_ctx.channels_num as usize;
-            let pcm_samples = samples_per_channel / self.out_ctx.decim_ratio as usize;
-            let mut pcm_offset = 0;
+            // Bytes per channel in this block
+            let dsd_bytes_per_chan = (read_size as usize) / (self.in_ctx.channels_num as usize);
 
-            // Clear PCM buffer for new block
-            self.pcm_data.fill(0);
+            // Correct decimated PCM frames per channel: (bytes * 8) / decim
+            let pcm_samples = (dsd_bytes_per_chan * 8) / (self.out_ctx.decim_ratio as usize);
 
-            // Process each channel
+            // Ensure float buffer is big enough (and clean it)
+            if self.float_data.len() < pcm_samples {
+                self.float_data.resize(pcm_samples, 0.0);
+            } else {
+                self.float_data[..pcm_samples].fill(0.0);
+            }
+
+            // Clear PCM buffer slice we will write
+            let needed_pcm_bytes = pcm_samples
+                * (self.in_ctx.channels_num as usize)
+                * (self.out_ctx.bytes_per_sample as usize);
+            if self.pcm_data.len() < needed_pcm_bytes {
+                self.pcm_data.resize(needed_pcm_bytes, 0);
+            } else {
+                self.pcm_data[..needed_pcm_bytes].fill(0);
+            }
+
             for chan in 0..self.in_ctx.channels_num {
-                // Calculate DSD offset for this channel's data
+                // Channel start offset in the DSD byte stream
                 let dsd_chan_offset = if self.in_ctx.interleaved {
                     chan as usize
                 } else {
-                    chan as usize * samples_per_channel
+                    chan as usize * dsd_bytes_per_chan
                 };
 
-                // Clear float buffer for this channel
-                //self.float_data.fill(0.0);
-
                 if let Some(dxd) = self.dxds.get_mut(chan as usize) {
-                    // Process DSD to PCM for this channel
                     dxd.translate(
-                        samples_per_channel,
+                        dsd_bytes_per_chan,                                // input length in BYTES
                         &self.dsd_data[dsd_chan_offset..],
-                        if self.in_ctx.interleaved { self.in_ctx.channels_num as isize } else { 1 },
-                        &mut self.float_data[..pcm_samples],
+                        if self.in_ctx.interleaved {
+                            self.in_ctx.channels_num as isize
+                        } else {
+                            1
+                        },
+                        &mut self.float_data[..pcm_samples],               // output slice
                         1,
-                        self.out_ctx.decim_ratio
+                        self.out_ctx.decim_ratio,
                     )?;
 
-                    // Write PCM data with correct interleaving
+                    // Pack to interleaved s24le
                     let mut pcm_pos = chan as usize * self.out_ctx.bytes_per_sample as usize;
                     for s in 0..pcm_samples {
-                        let mut sample = self.float_data[s];
-                        sample *= self.out_ctx.scale_factor;
-                        self.dither.process_samp(&mut sample, chan as usize);
-                        
-                        if pcm_pos + self.out_ctx.bytes_per_sample as usize <= self.pcm_data.len() {
-                            let value = Self::my_round(sample * 8388607.0) as i32;
-                            let clamped = self.clamp_value(-8388608, value, 8388607);
-                            self.write_int(&mut pcm_pos, clamped, self.out_ctx.bytes_per_sample as usize);
-                            pcm_offset = pcm_offset.max(pcm_pos);
-                        }
-                        
-                        // Move to next sample position
-                        pcm_pos += self.in_ctx.channels_num as usize * self.out_ctx.bytes_per_sample as usize;
+                        // Single scaling: scale_factor already equals 2^23 for 24-bit
+                        let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+
+                        // Dither in quantizer units, then quantize
+                        self.dither.process_samp(&mut qin, chan as usize);
+                        let value = Self::my_round(qin) as i32;
+
+                        // Clamp and write 3 bytes LE
+                        let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
+                        let mut out_idx = pcm_pos;
+                        self.write_int(&mut out_idx, clamped, self.out_ctx.bytes_per_sample as usize);
+
+                        pcm_pos += (self.in_ctx.channels_num as usize)
+                            * (self.out_ctx.bytes_per_sample as usize);
                     }
                 }
             }
 
-            // Write the complete block only if we have valid data
-            if pcm_offset > 0 && pcm_offset <= self.pcm_data.len() {
-                self.write_block(pcm_offset)?;
-            } 
+            // Write exactly the bytes we produced
+            let pcm_block_bytes = needed_pcm_bytes;
+            if pcm_block_bytes > 0 {
+                self.write_block(pcm_block_bytes)?;
+            }
 
             bytes_left -= read_size as i64;
         }
@@ -315,14 +321,27 @@ impl ConversionContext {
     }
 
     fn write_int(&mut self, offset: &mut usize, value: i32, bytes: usize) {
-        // Bounds check
         if *offset + bytes > self.pcm_data.len() {
             return;
         }
-        
-        // Write in little-endian format
-        for i in 0..bytes {
-            self.pcm_data[*offset + i] = ((value >> (8 * i)) & 0xFF) as u8;
+
+        match bytes {
+            3 => {
+                let v = value as i32;
+                self.pcm_data[*offset] = (v & 0xFF) as u8;
+                self.pcm_data[*offset + 1] = ((v >> 8) & 0xFF) as u8;
+                self.pcm_data[*offset + 2] = ((v >> 16) & 0xFF) as u8;
+            }
+            2 => {
+                let v = value as i16;
+                let b = v.to_le_bytes();
+                self.pcm_data[*offset..*offset + 2].copy_from_slice(&b);
+            }
+            4 => {
+                let b = (value as i32).to_le_bytes();
+                self.pcm_data[*offset..*offset + 4].copy_from_slice(&b);
+            }
+            _ => return,
         }
         *offset += bytes;
     }

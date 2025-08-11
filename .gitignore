@@ -17,3 +17,5 @@ dsdextractor
 dsdunpack
 target/*
 lib/*
+*.log
+*.dump
