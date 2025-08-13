@@ -30,7 +30,6 @@ impl ConversionContext {
         dither: Dither,
         verbose_param: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        // All calculations in usize
         let dsd_bytes_per_chan = in_ctx.block_size as usize; // bytes per channel
         let channels = in_ctx.channels_num as usize;
         let bytes_per_sample = out_ctx.bytes_per_sample as usize;
