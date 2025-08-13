@@ -5,7 +5,7 @@ use crate::input::InputContext;
 use crate::output::OutputContext;
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Write, Seek, SeekFrom};
 
 pub struct ConversionContext {
     in_ctx: InputContext,
@@ -163,30 +163,73 @@ impl ConversionContext {
     }
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut bytes_left = if self.in_ctx.std_in {
-            i64::MAX
-        } else {
+        // C++: frameSize = inCtx.blockSize * inCtx.channelsNum
+        let channels = self.in_ctx.channels_num as usize;
+        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
+
+        // Open file if not reading from stdin and seek to audio_pos
+        let mut file: Option<File> = None;
+        if !self.in_ctx.std_in {
+            let path = if let Some(p) = &self.in_ctx.file_path {
+                p.clone()
+            } else {
+                std::path::PathBuf::from(&self.in_ctx.input)
+            };
+            let mut f = File::open(&path)?;
+            if self.in_ctx.audio_pos > 0 {
+                f.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
+            }
+            file = Some(f);
+        }
+
+        // C++: bytesRemaining = inCtx.audioLength > 0 ? inCtx.audioLength : frameSize
+        let mut bytes_remaining: i64 = if self.in_ctx.std_in {
+            frame_size as i64
+        } else if self.in_ctx.audio_length > 0 {
             self.in_ctx.audio_length
+        } else {
+            frame_size as i64
         };
 
-        while bytes_left > 0 {
-            let read_size = if self.in_ctx.std_in {
-                match io::stdin().read_exact(&mut self.dsd_data) {
-                    Ok(()) => self.in_ctx.block_size * self.in_ctx.channels_num,
-                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(Box::new(e)),
-                }
+        loop {
+            // C++: in.read(dsdIn, bytesRemaining > frameSize ? frameSize : bytesRemaining)
+            let to_read: usize = if self.in_ctx.std_in {
+                frame_size
+            } else if bytes_remaining > 0 {
+                bytes_remaining.min(frame_size as i64) as usize
             } else {
                 0
             };
 
-            // Bytes per channel in this block
-            let dsd_bytes_per_chan = (read_size as usize) / (self.in_ctx.channels_num as usize);
+            if to_read == 0 {
+                break;
+            }
 
-            // Correct decimated PCM frames per channel: (bytes * 8) / decim
-            let pcm_samples = (dsd_bytes_per_chan * 8) / (self.out_ctx.decim_ratio as usize);
+            // Read one full frame (stdin) or the final partial frame (file)
+            let read_size: usize = if self.in_ctx.std_in {
+                match io::stdin().read_exact(&mut self.dsd_data[..to_read]) {
+                    Ok(()) => to_read,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(Box::new(e)),
+                }
+            } else {
+                let f = file.as_mut().expect("file not opened");
+                match f.read_exact(&mut self.dsd_data[..to_read]) {
+                    Ok(()) => to_read,
+                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => return Err(Box::new(e)),
+                }
+            };
 
-            // Ensure float buffer is big enough (and clean it)
+            // C++: blockRemaining = (...)/channelsNum (bytes per channel in this read)
+            let block_remaining: usize = read_size / channels;
+
+            // Decimated PCM samples per channel
+            // NOTE: If output still sounds aliased/short, try: let pcm_samples = block_remaining / (self.out_ctx.decim_ratio as usize);
+            let pcm_samples: usize =
+                (block_remaining * 8) / (self.out_ctx.decim_ratio as usize);
+
+            // Ensure float buffer big enough (and clear the slice we’ll write)
             if self.float_data.len() < pcm_samples {
                 self.float_data.resize(pcm_samples, 0.0);
             } else {
@@ -194,65 +237,64 @@ impl ConversionContext {
             }
 
             // Clear PCM buffer slice we will write
-            let needed_pcm_bytes = pcm_samples
-                * (self.in_ctx.channels_num as usize)
-                * (self.out_ctx.bytes_per_sample as usize);
-            if self.pcm_data.len() < needed_pcm_bytes {
-                self.pcm_data.resize(needed_pcm_bytes, 0);
+            let pcm_block_bytes: usize =
+                pcm_samples * channels * (self.out_ctx.bytes_per_sample as usize);
+            if self.pcm_data.len() < pcm_block_bytes {
+                self.pcm_data.resize(pcm_block_bytes, 0);
             } else {
-                self.pcm_data[..needed_pcm_bytes].fill(0);
+                self.pcm_data[..pcm_block_bytes].fill(0);
             }
 
+            // Per-channel processing (offset + stride like C++)
             for chan in 0..self.in_ctx.channels_num {
-                // Channel start offset in the DSD byte stream
                 let dsd_chan_offset = if self.in_ctx.interleaved {
                     chan as usize
                 } else {
-                    chan as usize * dsd_bytes_per_chan
+                    chan as usize * block_remaining
                 };
 
                 if let Some(dxd) = self.dxds.get_mut(chan as usize) {
                     dxd.translate(
-                        dsd_bytes_per_chan,                                // input length in BYTES
+                        block_remaining,                                  // input length in BYTES
                         &self.dsd_data[dsd_chan_offset..],
                         if self.in_ctx.interleaved {
                             self.in_ctx.channels_num as isize
                         } else {
                             1
                         },
-                        &mut self.float_data[..pcm_samples],               // output slice
+                        &mut self.float_data[..pcm_samples],               // output slice (samples)
                         1,
                         self.out_ctx.decim_ratio,
                     )?;
 
-                    // Pack to interleaved s24le
+                    // Pack to interleaved s24le (scale → dither → round → clamp → write)
                     let mut pcm_pos = chan as usize * self.out_ctx.bytes_per_sample as usize;
                     for s in 0..pcm_samples {
-                        // Single scaling: scale_factor already equals 2^23 for 24-bit
                         let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-
-                        // Dither in quantizer units, then quantize
                         self.dither.process_samp(&mut qin, chan as usize);
                         let value = Self::my_round(qin) as i32;
-
-                        // Clamp and write 3 bytes LE
                         let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
+
                         let mut out_idx = pcm_pos;
                         self.write_int(&mut out_idx, clamped, self.out_ctx.bytes_per_sample as usize);
 
-                        pcm_pos += (self.in_ctx.channels_num as usize)
-                            * (self.out_ctx.bytes_per_sample as usize);
+                        pcm_pos += channels * (self.out_ctx.bytes_per_sample as usize);
                     }
                 }
             }
 
-            // Write exactly the bytes we produced
-            let pcm_block_bytes = needed_pcm_bytes;
+            // Write one complete interleaved PCM block
             if pcm_block_bytes > 0 {
                 self.write_block(pcm_block_bytes)?;
             }
 
-            bytes_left -= read_size as i64;
+            // C++: bytesRemaining -= frameSize (only for file input)
+            if !self.in_ctx.std_in {
+                bytes_remaining -= read_size as i64;
+                if bytes_remaining <= 0 {
+                    break;
+                }
+            }
         }
 
         Ok(())
