@@ -25,10 +25,11 @@
 #include <inttypes.h>
 #include <stdio.h>
 #include "endianess.h"
+#include <stdint.h>
+#include <stddef.h> // add for size_t
 
 #ifdef __cplusplus
-extern "C"
-{
+extern "C" {
 #endif
 
 /* Supported file format markers */
@@ -66,11 +67,24 @@ extern "C"
         dsd_reader_funcs_t *impl;
     } dsd_reader_t;
 
+    extern int dsd_reader_open_str(char *filename, dsd_reader_t *reader);
     extern int dsd_reader_open(FILE *fp, dsd_reader_t *reader);
     extern size_t dsd_reader_read(char *buf, size_t len, dsd_reader_t *reader);
     extern uint32_t dsd_reader_next_chunk(dsd_reader_t *reader);
     extern void dsd_reader_close(dsd_reader_t *reader);
     extern dsd_reader_t *dsd_reader_clone(dsd_reader_t *reader);
+
+    // Report the size so Rust can allocate correctly
+    size_t dsd_reader_sizeof(void);
+
+    // Getters (avoid Rust relying on struct layout)
+    uint64_t dsd_reader_get_data_length(const dsd_reader_t *reader);
+    uint64_t dsd_reader_get_audio_pos(const dsd_reader_t *reader);
+    int      dsd_reader_get_channel_count(const dsd_reader_t *reader);
+    uint32_t dsd_reader_get_sample_rate(const dsd_reader_t *reader);
+    uint32_t dsd_reader_get_container_format(const dsd_reader_t *reader);
+    int      dsd_reader_get_is_lsb(const dsd_reader_t *reader);
+    uint32_t dsd_reader_get_block_size(const dsd_reader_t *reader);
 
 #ifdef __cplusplus
 } /* extern "C" */

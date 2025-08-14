@@ -5,6 +5,7 @@ use std::error::Error;
 use std::mem; // add
 use std::io; // add this
 use std::io::{Read, Seek, SeekFrom}; // existing
+use crate::dsdin_sys::{DSD_FORMAT_DSDIFF, DSD_FORMAT_DSF};
 
 pub struct InputContext {
     pub verbose_mode: bool,
@@ -46,7 +47,13 @@ impl InputContext {
             _ => return Err("No fmt detected!".into()),
         };
 
-        if ![1, 2].contains(&dsd_rate) {
+        // Determine input kind early
+        let lower_name = input_file.to_ascii_lowercase();
+        let is_container = lower_name.ends_with(".dsf") || lower_name.ends_with(".dff");
+        let is_stdin = input_file == "-";
+
+        // Only enforce CLI dsd_rate for stdin or raw inputs
+        if (is_stdin || !is_container) && ![1, 2].contains(&dsd_rate) {
             return Err("Unsupported DSD input rate.".into());
         }
 
@@ -54,7 +61,7 @@ impl InputContext {
             verbose_mode: verbose,
             lsbit_first,
             interleaved,
-            std_in: input_file == "-",
+            std_in: is_stdin,
             dsd_rate,
             input: input_file.clone(),
             file_path: None,
@@ -89,51 +96,82 @@ impl InputContext {
                 let lower_name = input_file.to_ascii_lowercase();
                 let use_container = lower_name.ends_with(".dsf") || lower_name.ends_with(".dff");
 
-                if use_container && lower_name.ends_with(".dsf") {
-                    // Parse DSF container header in Rust (avoid FFI double-close/segfault)
-                    match parse_dsf_header(Path::new(&input_file)) {
-                        Ok(h) => {
-                            ctx.audio_pos    = h.audio_pos as i64;
-                            ctx.audio_length = h.audio_len as i64;
-                            ctx.channels_num = h.channels as i32;
+                if use_container {
+                    match Dsd::new(input_file.clone()) {
+                        Ok(my_dsd) => {
+                            // Pull raw fields
+                            let file_len = std::fs::metadata(&input_file)?.len() as i64;
 
-                            // DSF stores actual sampling frequency (e.g., 2_822_400 for DSD64)
-                            ctx.dsd_rate = match h.sampling_freq {
-                                2_822_400 => 1,
-                                5_644_800 => 2,
-                                other => (other / 2_822_400) as i32,
+                            ctx.audio_pos    = my_dsd.audio_pos;
+                            // Clamp audio_length to what the file can actually contain
+                            let max_len = (file_len - ctx.audio_pos).max(0);
+                            ctx.audio_length = if my_dsd.audio_length > 0 && my_dsd.audio_length <= max_len {
+                                my_dsd.audio_length
+                            } else {
+                                max_len
                             };
 
-                            // DSF is LSBit-first, block-interleaved. Treat as planar-per-frame.
-                            ctx.lsbit_first = 1;
-                            ctx.interleaved = false; // was true; block-interleaved -> stride=1, offset=block_size
+                            // Channels from container (fallback to CLI on nonsense)
+                            ctx.channels_num = if my_dsd.channel_count > 0 {
+                                my_dsd.channel_count
+                            } else {
+                                ctx.channels_num
+                            };
 
-                            // Use the container’s block size per channel
-                            ctx.set_block_size(h.block_size_per_channel as i32);
+                            // Bit order from container
+                            ctx.lsbit_first = if my_dsd.is_lsb { 1 } else { 0 };
+
+                            // Interleaving from container (DSF = block-interleaved → treat as planar per frame)
+                            match my_dsd.container_format {
+                                DSD_FORMAT_DSDIFF => ctx.interleaved = true,
+                                DSD_FORMAT_DSF => ctx.interleaved = false,
+                                _ => { /* keep CLI */ }
+                            }
+
+                            // Block size from container if present, then recompute stride/offset
+                            if my_dsd.block_size > 0 {
+                                ctx.block_size = my_dsd.block_size as i32;
+                            }
+                            ctx.set_block_size(ctx.block_size);
+
+                            // DSD rate from container sample_rate if valid (2.8224MHz → 1, 5.6448MHz → 2)
+                            if my_dsd.sample_rate == 2_822_400 {
+                                ctx.dsd_rate = 1;
+                            } else if my_dsd.sample_rate == 5_644_800 {
+                                ctx.dsd_rate = 2;
+                            } else if my_dsd.sample_rate > 0 && my_dsd.sample_rate % 2_822_400 == 0 {
+                                ctx.dsd_rate = (my_dsd.sample_rate / 2_822_400) as i32;
+                            } else {
+                                // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
+                                ctx.verbose(
+                                    &format!(
+                                        "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
+                                        my_dsd.sample_rate, ctx.dsd_rate
+                                    ),
+                                    true,
+                                );
+                            }
 
                             ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
                             ctx.verbose(
                                 &format!(
-                                    "DSF: channels={} fs={}Hz block_size/ch={} audio_pos={} audio_len={}",
-                                    h.channels, h.sampling_freq, h.block_size_per_channel, h.audio_pos, h.audio_len
+                                    "Container: sr={}Hz channels={} interleaved={} block_size/ch={} pos={}",
+                                    my_dsd.sample_rate,
+                                    ctx.channels_num,
+                                    ctx.interleaved,
+                                    ctx.block_size,
+                                    ctx.audio_pos
                                 ),
                                 true,
                             );
                         }
                         Err(e) => {
-                            ctx.verbose(&format!("DSF parse failed ({}); treating as raw DSD", e), true);
+                            ctx.verbose(&format!("Container open failed ({}); treating as raw DSD", e), true);
                             if let Ok(meta) = std::fs::metadata(&input_file) {
                                 ctx.audio_pos = 0;
                                 ctx.audio_length = meta.len() as i64;
                             }
                         }
-                    }
-                } else if use_container && lower_name.ends_with(".dff") {
-                    // Minimal fallback: treat DFF like raw (or add a small DFF parser similarly)
-                    ctx.verbose("DFF container not parsed; treating as raw DSD", true);
-                    if let Ok(meta) = std::fs::metadata(&input_file) {
-                        ctx.audio_pos = 0;
-                        ctx.audio_length = meta.len() as i64;
                     }
                 } else {
                     // Raw DSD
@@ -163,6 +201,22 @@ impl InputContext {
         self.block_size = block_size_in;
         self.dsd_chan_offset = if self.interleaved { 1 } else { block_size_in };
         self.dsd_stride = if self.interleaved { self.channels_num } else { 1 };
+    }
+
+    // ADD: mirror C++ setDsdRate(sample_rate)
+    pub fn set_dsd_rate_from_sample_rate(&mut self, sample_rate: u32) {
+        self.dsd_rate = (sample_rate / 44100 / 64) as i32;
+    }
+
+    // ADD: mirror C++ setInterleaved(container_format)
+    pub fn set_interleaved_from_container(&mut self, container_format: u32) {
+        self.interleaved = match container_format {
+            DSD_FORMAT_DSDIFF => true,
+            DSD_FORMAT_DSF => false,
+            _ => self.interleaved,
+        };
+        // Recompute derived offsets/strides after interleaving mode change
+        self.set_block_size(self.block_size);
     }
 
     fn verbose(&self, say: &str, new_line: bool) {

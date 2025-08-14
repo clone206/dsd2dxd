@@ -31,6 +31,23 @@ extern dsd_reader_funcs_t *dsf_reader_funcs();
 
 /* Reading */
 
+extern int dsd_reader_open_str(char *filename, dsd_reader_t *reader)
+{
+    FILE *fp = fopen(filename, "rb");
+    if (!fp)
+    {
+        perror("Failed to open file");
+        return -1;
+    }
+    return dsd_reader_open(fp, reader);
+}
+
+// ADD: size reporter so Rust can malloc the correct size
+size_t dsd_reader_sizeof(void)
+{
+    return sizeof(dsd_reader_t);
+}
+
 extern int dsd_reader_open(FILE *fp, dsd_reader_t *reader)
 {
     int result = 0;
@@ -99,3 +116,12 @@ extern void dsd_reader_close(dsd_reader_t *reader)
         reader->input = NULL;
     }
 }
+
+// Getter implementations
+uint64_t dsd_reader_get_data_length(const dsd_reader_t *r)      { return (uint64_t)r->data_length; }
+uint64_t dsd_reader_get_audio_pos(const dsd_reader_t *r)        { return (uint64_t)r->audio_pos; }
+int      dsd_reader_get_channel_count(const dsd_reader_t *r)    { return (int)r->channel_count; }
+uint32_t dsd_reader_get_sample_rate(const dsd_reader_t *r)      { return (uint32_t)r->sample_rate; }
+uint32_t dsd_reader_get_container_format(const dsd_reader_t *r) { return (uint32_t)r->container_format; }
+int      dsd_reader_get_is_lsb(const dsd_reader_t *r)           { return (int)r->is_lsb; }
+uint32_t dsd_reader_get_block_size(const dsd_reader_t *r)       { return (uint32_t)r->block_size; }
