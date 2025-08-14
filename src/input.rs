@@ -72,7 +72,7 @@ impl InputContext {
             ctx.parent_path = Some(path.parent().unwrap_or(Path::new("")).to_path_buf());
 
             ctx.verbose(&format!("Input file basename: {}", 
-                path.file_stem().unwrap_or_default().to_string_lossy()), false);
+                path.file_stem().unwrap_or_default().to_string_lossy()), true);
             ctx.verbose(&format!("Parent path: {}", 
                 ctx.parent_path.as_ref().unwrap().display()), true);
 
@@ -83,30 +83,47 @@ impl InputContext {
                     ctx.verbose(&format!("File size: {} bytes", metadata.len()), true);
                 }
 
-                if let Ok(my_dsd) = Dsd::new(file) {
-                    ctx.audio_pos = my_dsd.audio_pos;
-                    ctx.audio_length = my_dsd.audio_length;
-                    ctx.channels_num = my_dsd.channel_count;
-                    ctx.dsd_rate = my_dsd.dsd_rate;
-                    ctx.interleaved = my_dsd.interleaved;
-                    ctx.lsbit_first = my_dsd.is_lsb as i32;
+                // Decide whether to use the container parser (DSF/DFF) or treat as raw DSD
+                let lower_name = input_file.to_ascii_lowercase();
+                let use_container = lower_name.ends_with(".dsf") || lower_name.ends_with(".dff");
 
-                    if my_dsd.block_size > 0 {
-                        ctx.verbose("Setting block size from file", true);
-                        ctx.set_block_size(my_dsd.block_size as i32);
+                if use_container {
+                    // Use FFI parser for container formats
+                    if let Ok(my_dsd) = Dsd::new(file) {
+                        ctx.audio_pos = my_dsd.audio_pos;
+                        ctx.audio_length = my_dsd.audio_length;
+                        ctx.channels_num = my_dsd.channel_count;
+                        ctx.dsd_rate = my_dsd.dsd_rate;
+                        ctx.interleaved = my_dsd.interleaved;
+                        ctx.lsbit_first = my_dsd.is_lsb as i32;
+
+                        if my_dsd.block_size > 0 {
+                            ctx.verbose("Setting block size from file", true);
+                            ctx.set_block_size(my_dsd.block_size as i32);
+                        }
+                        ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
+                    } else {
+                        // Fallback: treat as raw if parser fails
+                        if let Ok(meta) = File::open(&input_file).and_then(|f| f.metadata()) {
+                            ctx.audio_pos = 0;
+                            ctx.audio_length = meta.len() as i64;
+                            ctx.verbose("Container parse failed; treating as raw DSD", true);
+                        }
                     }
-                    ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
+                } else {
+                    // Raw DSD: no FFI parser; behave like stdin
+                    if let Ok(meta) = file.metadata() {
+                        ctx.audio_pos = 0;
+                        ctx.audio_length = meta.len() as i64;
+                        ctx.verbose("Treating input as raw DSD (no container)", true);
+                    }
                 }
             }
         } else {
             // Handle stdin case
             ctx.verbose("Reading from stdin", true);
-            // For stdin, we need to set a reasonable audio length
-            // Let's use the maximum possible length for now
             ctx.audio_length = i64::MAX;
             ctx.audio_pos = 0;
-            
-            // Other parameters should already be set from CLI args
             ctx.verbose(&format!("Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}", 
                 ctx.channels_num, 
                 ctx.lsbit_first, 

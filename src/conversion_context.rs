@@ -163,13 +163,17 @@ impl ConversionContext {
     }
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
-        // C++: frameSize = inCtx.blockSize * inCtx.channelsNum
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
 
-        // Open file if not reading from stdin and seek to audio_pos
-        let mut file: Option<File> = None;
-        if !self.in_ctx.std_in {
+        // Ensure input buffer can hold one full frame
+        if self.dsd_data.len() < frame_size {
+            self.dsd_data.resize(frame_size, 0);
+        }
+
+        // Open a unified reader (stdin or file), seeking if needed
+        let reading_from_file = !self.in_ctx.std_in;
+        let mut reader: Box<dyn Read> = if reading_from_file {
             let path = if let Some(p) = &self.in_ctx.file_path {
                 p.clone()
             } else {
@@ -179,53 +183,51 @@ impl ConversionContext {
             if self.in_ctx.audio_pos > 0 {
                 f.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
             }
-            file = Some(f);
-        }
+            Box::new(f)
+        } else {
+            Box::new(io::stdin().lock())
+        };
 
-        // C++: bytesRemaining = inCtx.audioLength > 0 ? inCtx.audioLength : frameSize
-        let mut bytes_remaining: i64 = if self.in_ctx.std_in {
-            frame_size as i64
-        } else if self.in_ctx.audio_length > 0 {
-            self.in_ctx.audio_length
+        // Initialize bytes_remaining like C++
+        let mut bytes_remaining: i64 = if reading_from_file {
+            if self.in_ctx.audio_length > 0 {
+                self.in_ctx.audio_length
+            } else {
+                frame_size as i64
+            }
         } else {
             frame_size as i64
         };
 
-        loop {
-            // C++: in.read(dsdIn, bytesRemaining > frameSize ? frameSize : bytesRemaining)
-            let to_read: usize = if self.in_ctx.std_in {
-                frame_size
-            } else if bytes_remaining > 0 {
-                bytes_remaining.min(frame_size as i64) as usize
-            } else {
-                0
-            };
+        // Use InputContext’s precomputed per-channel offset and stride (match C++)
+        let chan_offset_base: usize = self.in_ctx.dsd_chan_offset as usize;
+        let dsd_stride: isize = self.in_ctx.dsd_stride as isize;
 
-            if to_read == 0 {
-                break;
+        loop {
+            // Read only full frames from file; stdin always reads frame_size
+            let to_read: usize = if reading_from_file {
+                if bytes_remaining >= frame_size as i64 { frame_size } else { break }
+            } else {
+                frame_size
+            };
+            if to_read == 0 { break; }
+
+            // Make sure the buffer is big enough (defensive for future config changes)
+            if self.dsd_data.len() < to_read {
+                self.dsd_data.resize(to_read, 0);
             }
 
-            // Read one full frame (stdin) or the final partial frame (file)
-            let read_size: usize = if self.in_ctx.std_in {
-                match io::stdin().read_exact(&mut self.dsd_data[..to_read]) {
-                    Ok(()) => to_read,
-                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(Box::new(e)),
-                }
-            } else {
-                let f = file.as_mut().expect("file not opened");
-                match f.read_exact(&mut self.dsd_data[..to_read]) {
-                    Ok(()) => to_read,
-                    Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                    Err(e) => return Err(Box::new(e)),
-                }
+            // Read one frame identically for stdin and file
+            let read_size: usize = match reader.read_exact(&mut self.dsd_data[..to_read]) {
+                Ok(()) => to_read,
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(Box::new(e)),
             };
 
-            // C++: blockRemaining = (...)/channelsNum (bytes per channel in this read)
+            // Bytes per channel in this read
             let block_remaining: usize = read_size / channels;
 
-            // Decimated PCM samples per channel
-            // NOTE: If output still sounds aliased/short, try: let pcm_samples = block_remaining / (self.out_ctx.decim_ratio as usize);
+            // Decimated PCM samples per channel (UNCHANGED — keep your existing formula)
             let pcm_samples: usize =
                 (block_remaining * 8) / (self.out_ctx.decim_ratio as usize);
 
@@ -245,25 +247,36 @@ impl ConversionContext {
                 self.pcm_data[..pcm_block_bytes].fill(0);
             }
 
-            // Per-channel processing (offset + stride like C++)
+            // Debug-only span check to avoid OOB in FFI translate()
             for chan in 0..self.in_ctx.channels_num {
-                let dsd_chan_offset = if self.in_ctx.interleaved {
-                    chan as usize
-                } else {
-                    chan as usize * block_remaining
-                };
+                let dsd_chan_offset = chan as usize * chan_offset_base;
+
+                #[cfg(debug_assertions)]
+                {
+                    let stride_usize = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
+                    if stride_usize > 0 && block_remaining > 0 {
+                        let needed = dsd_chan_offset
+                            + (block_remaining - 1).saturating_mul(stride_usize)
+                            + 1;
+                        debug_assert!(
+                            needed <= self.dsd_data.len(),
+                            "DSD span OOB: need {}, have {} (offset={}, stride={}, block_remaining={})",
+                            needed,
+                            self.dsd_data.len(),
+                            dsd_chan_offset,
+                            stride_usize,
+                            block_remaining
+                        );
+                    }
+                }
 
                 if let Some(dxd) = self.dxds.get_mut(chan as usize) {
                     dxd.translate(
-                        block_remaining,                                  // input length in BYTES
-                        &self.dsd_data[dsd_chan_offset..],
-                        if self.in_ctx.interleaved {
-                            self.in_ctx.channels_num as isize
-                        } else {
-                            1
-                        },
-                        &mut self.float_data[..pcm_samples],               // output slice (samples)
-                        1,
+                        block_remaining,                                   // length in BYTES (per channel)
+                        &self.dsd_data[dsd_chan_offset..],                 // channel start
+                        dsd_stride,                                        // stride (planar:1, interleaved:channels)
+                        &mut self.float_data[..pcm_samples],               // output float samples
+                        1,                                                 // pcm stride
                         self.out_ctx.decim_ratio,
                     )?;
 
@@ -283,13 +296,12 @@ impl ConversionContext {
                 }
             }
 
-            // Write one complete interleaved PCM block
             if pcm_block_bytes > 0 {
                 self.write_block(pcm_block_bytes)?;
             }
 
-            // C++: bytesRemaining -= frameSize (only for file input)
-            if !self.in_ctx.std_in {
+            // Decrement for file input using actual read size
+            if reading_from_file {
                 bytes_remaining -= read_size as i64;
                 if bytes_remaining <= 0 {
                     break;
