@@ -1,3 +1,4 @@
+use crate::audio_file::AudioFileFormat; // ADD
 use crate::dither::Dither;
 use crate::dsd2pcm::Dxd;
 use crate::dsdin_sys::DSD_64_RATE;
@@ -127,7 +128,9 @@ impl ConversionContext {
             "Output Type: {}",
             match self.out_ctx.output {
                 's' => "stdout",
-                'f' => "file",
+                'w' => "wav",     // FIX print label
+                'a' => "aiff",    // FIX print label
+                'f' => "flac",    // FIX print label
                 _ => "unknown",
             }
         );
@@ -158,8 +161,24 @@ impl ConversionContext {
         eprintln!("Scaling Factor: {}", self.out_ctx.scale_factor);
         eprintln!("");
 
-        // Process blocks
-        self.process_blocks()
+        // Process blocks first
+        let res = self.process_blocks();
+
+        // For file formats (wav/aiff/flac), save via AudioFile after processing
+        if res.is_ok() && self.out_ctx.output != 's' {
+            let fmt = match self.out_ctx.output {
+                'w' => AudioFileFormat::Wave,
+                'a' => AudioFileFormat::Aiff,
+                _ => AudioFileFormat::Error,
+            };
+            if !matches!(fmt, AudioFileFormat::Error) {
+                self.out_ctx
+                    .save_and_print_file(&self.out_ctx.output_path, fmt)
+                    .map_err(|e| Box::<dyn Error>::from(e))?;
+            }
+        }
+
+        res
     }
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
@@ -276,32 +295,51 @@ impl ConversionContext {
 
                 if let Some(dxd) = self.dxds.get_mut(chan as usize) {
                     dxd.translate(
-                        block_remaining,                                   // length in BYTES (per channel)
+                        block_remaining,                                   // bytes per channel
                         &self.dsd_data[dsd_chan_offset..],                 // channel start
-                        dsd_stride,                                        // stride (planar:1, interleaved:channels)
-                        &mut self.float_data[..pcm_frames_per_chan],      // output float samples
-                        1,                                                 // pcm stride
+                        dsd_stride,                                        // stride
+                        &mut self.float_data[..pcm_frames_per_chan],       // output floats
+                        1,
                         self.out_ctx.decim_ratio,
                     )?;
 
-                    // Pack exactly pcm_frames_per_chan frames
-                    let mut pcm_pos = chan as usize * self.out_ctx.bytes_per_sample as usize;
-                    for s in 0..pcm_frames_per_chan {
-                        let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                        self.dither.process_samp(&mut qin, chan as usize);
-                        let value = Self::my_round(qin) as i32;
-                        let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
+                    if self.out_ctx.output == 's' {
+                        // Pack exactly pcm_frames_per_chan frames to interleaved bytes for stdout
+                        let mut pcm_pos = chan as usize * self.out_ctx.bytes_per_sample as usize;
+                        for s in 0..pcm_frames_per_chan {
+                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut qin, chan as usize);
+                            let value = Self::my_round(qin) as i32;
+                            let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
 
-                        let mut out_idx = pcm_pos;
-                        self.write_int(&mut out_idx, clamped, self.out_ctx.bytes_per_sample as usize);
+                            let mut out_idx = pcm_pos;
+                            self.write_int(&mut out_idx, clamped, self.out_ctx.bytes_per_sample as usize);
 
-                        pcm_pos += (self.in_ctx.channels_num as usize) * (self.out_ctx.bytes_per_sample as usize);
+                            pcm_pos += (self.in_ctx.channels_num as usize)
+                                * (self.out_ctx.bytes_per_sample as usize);
+                        }
+                    } else {
+                        // File formats: push samples into AudioFile buffers
+                        // Use the same count we produced (pcm_frames_per_chan)
+                        if self.out_ctx.bits == 32 {
+                            for s in 0..pcm_frames_per_chan {
+                                self.out_ctx.push_samp(self.float_data[s] as f32, chan as usize);
+                            }
+                        } else {
+                            for s in 0..pcm_frames_per_chan {
+                                let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+                                self.dither.process_samp(&mut qin, chan as usize);
+                                let value = Self::my_round(qin) as i32;
+                                let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
+                                self.out_ctx.push_samp(clamped, chan as usize);
+                            }
+                        }
                     }
                 }
             }
 
-            // Write the complete interleaved block
-            if pcm_block_bytes > 0 {
+            // Write the complete interleaved block only for stdout
+            if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
                 self.write_block(pcm_block_bytes)?;
             }
 
@@ -322,17 +360,11 @@ impl ConversionContext {
             return Ok(());
         }
 
-        // Write the block
-        if self.out_ctx.output != 's' {
-            if let Some(ref mut file) = self.out_ctx.file {
-                file.write_all(&self.pcm_data[..pcm_bytes])?;
-                file.flush()?;
-            }
-        } else {
+        // Only stdout; file formats are saved at end via AudioFile
+        if self.out_ctx.output == 's' {
             io::stdout().write_all(&self.pcm_data[..pcm_bytes])?;
             io::stdout().flush()?;
         }
-
         Ok(())
     }
 
