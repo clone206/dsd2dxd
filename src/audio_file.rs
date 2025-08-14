@@ -232,7 +232,7 @@ impl AudioSample for i32 {
     fn from_float(value: f32) -> Self { (value * 2147483647.0) as i32 }
     fn to_float(self) -> f32 { self as f32 / 2147483647.0 }
     fn to_i16(self) -> i16 { (self >> 16) as i16 }
-    fn to_i24(self) -> i32 { self >> 8 }
+    fn to_i24(self) -> i32 { self }
     fn to_i32(self) -> i32 { self }
     fn to_f32(self) -> f32 { self as f32 / 2147483647.0 }
     fn is_float() -> bool { false }
