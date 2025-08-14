@@ -1,4 +1,4 @@
-use crate::audio_file::AudioFileFormat; // ADD
+use crate::audio_file::AudioFileFormat;
 use crate::dither::Dither;
 use crate::dsd2pcm::Dxd;
 use crate::dsdin_sys::DSD_64_RATE;
@@ -7,6 +7,7 @@ use crate::output::OutputContext;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 pub struct ConversionContext {
     in_ctx: InputContext,
@@ -80,6 +81,28 @@ impl ConversionContext {
     fn calculate_out_rate(&self) -> i32 {
         // Convert all values to i32 before operations
         ((DSD_64_RATE as i32) * self.in_ctx.dsd_rate / self.out_ctx.decim_ratio) as i32
+    }
+
+    // Derive output path like the C++ writeFile(): basename + proper extension, or "output.xxx" for stdin
+    fn derive_output_path(&self) -> String {
+        let ext = match self.out_ctx.output.to_ascii_lowercase() {
+            'w' => "wav",
+            'a' => "aif",
+            'f' => "flac",
+            _ => "out",
+        };
+        if self.in_ctx.std_in {
+            return format!("output.{}", ext);
+        }
+        let parent = self.in_ctx.parent_path.as_ref().map(|p| p.as_path()).unwrap_or(Path::new(""));
+        let stem = self
+            .in_ctx
+            .file_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+        parent.join(format!("{}.{}", stem, ext)).to_string_lossy().into_owned()
     }
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
@@ -161,24 +184,26 @@ impl ConversionContext {
         eprintln!("Scaling Factor: {}", self.out_ctx.scale_factor);
         eprintln!("");
 
-        // Process blocks first
-        let res = self.process_blocks();
+        // Process blocks
+        self.process_blocks()?;
 
-        // For file formats (wav/aiff/flac), save via AudioFile after processing
-        if res.is_ok() && self.out_ctx.output != 's' {
-            let fmt = match self.out_ctx.output {
-                'w' => AudioFileFormat::Wave,
-                'a' => AudioFileFormat::Aiff,
-                _ => AudioFileFormat::Error,
-            };
-            if !matches!(fmt, AudioFileFormat::Error) {
-                self.out_ctx
-                    .save_and_print_file(&self.out_ctx.output_path, fmt)
-                    .map_err(|e| Box::<dyn Error>::from(e))?;
+        // Save file for non-stdout outputs using a derived path (like C++)
+        if self.out_ctx.output != 's' {
+            let out_path = self.derive_output_path();
+            match self.out_ctx.output.to_ascii_lowercase() {
+                'w' => {
+                    self.out_ctx
+                        .save_and_print_file(&out_path, AudioFileFormat::Wave)?;
+                }
+                'a' => {
+                    self.out_ctx
+                        .save_and_print_file(&out_path, AudioFileFormat::Aiff)?;
+                }
+                _ => {}
             }
         }
 
-        res
+        Ok(())
     }
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
