@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 use std::fs::File;
 use crate::dsd::{Dsd};
 use std::error::Error;
+use std::mem; // add
+use std::io; // add this
+use std::io::{Read, Seek, SeekFrom}; // existing
 
 pub struct InputContext {
     pub verbose_mode: bool,
@@ -83,36 +86,58 @@ impl InputContext {
                     ctx.verbose(&format!("File size: {} bytes", metadata.len()), true);
                 }
 
-                // Decide whether to use the container parser (DSF/DFF) or treat as raw DSD
                 let lower_name = input_file.to_ascii_lowercase();
                 let use_container = lower_name.ends_with(".dsf") || lower_name.ends_with(".dff");
 
-                if use_container {
-                    // Use FFI parser for container formats
-                    if let Ok(my_dsd) = Dsd::new(file) {
-                        ctx.audio_pos = my_dsd.audio_pos;
-                        ctx.audio_length = my_dsd.audio_length;
-                        ctx.channels_num = my_dsd.channel_count;
-                        ctx.dsd_rate = my_dsd.dsd_rate;
-                        ctx.interleaved = my_dsd.interleaved;
-                        ctx.lsbit_first = my_dsd.is_lsb as i32;
+                if use_container && lower_name.ends_with(".dsf") {
+                    // Parse DSF container header in Rust (avoid FFI double-close/segfault)
+                    match parse_dsf_header(Path::new(&input_file)) {
+                        Ok(h) => {
+                            ctx.audio_pos    = h.audio_pos as i64;
+                            ctx.audio_length = h.audio_len as i64;
+                            ctx.channels_num = h.channels as i32;
 
-                        if my_dsd.block_size > 0 {
-                            ctx.verbose("Setting block size from file", true);
-                            ctx.set_block_size(my_dsd.block_size as i32);
+                            // DSF stores actual sampling frequency (e.g., 2_822_400 for DSD64)
+                            ctx.dsd_rate = match h.sampling_freq {
+                                2_822_400 => 1,
+                                5_644_800 => 2,
+                                other => (other / 2_822_400) as i32,
+                            };
+
+                            // DSF is LSBit-first, block-interleaved. Treat as planar-per-frame.
+                            ctx.lsbit_first = 1;
+                            ctx.interleaved = false; // was true; block-interleaved -> stride=1, offset=block_size
+
+                            // Use the container’s block size per channel
+                            ctx.set_block_size(h.block_size_per_channel as i32);
+
+                            ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
+                            ctx.verbose(
+                                &format!(
+                                    "DSF: channels={} fs={}Hz block_size/ch={} audio_pos={} audio_len={}",
+                                    h.channels, h.sampling_freq, h.block_size_per_channel, h.audio_pos, h.audio_len
+                                ),
+                                true,
+                            );
                         }
-                        ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
-                    } else {
-                        // Fallback: treat as raw if parser fails
-                        if let Ok(meta) = File::open(&input_file).and_then(|f| f.metadata()) {
-                            ctx.audio_pos = 0;
-                            ctx.audio_length = meta.len() as i64;
-                            ctx.verbose("Container parse failed; treating as raw DSD", true);
+                        Err(e) => {
+                            ctx.verbose(&format!("DSF parse failed ({}); treating as raw DSD", e), true);
+                            if let Ok(meta) = std::fs::metadata(&input_file) {
+                                ctx.audio_pos = 0;
+                                ctx.audio_length = meta.len() as i64;
+                            }
                         }
                     }
+                } else if use_container && lower_name.ends_with(".dff") {
+                    // Minimal fallback: treat DFF like raw (or add a small DFF parser similarly)
+                    ctx.verbose("DFF container not parsed; treating as raw DSD", true);
+                    if let Ok(meta) = std::fs::metadata(&input_file) {
+                        ctx.audio_pos = 0;
+                        ctx.audio_length = meta.len() as i64;
+                    }
                 } else {
-                    // Raw DSD: no FFI parser; behave like stdin
-                    if let Ok(meta) = file.metadata() {
+                    // Raw DSD
+                    if let Ok(meta) = std::fs::metadata(&input_file) {
                         ctx.audio_pos = 0;
                         ctx.audio_length = meta.len() as i64;
                         ctx.verbose("Treating input as raw DSD (no container)", true);
@@ -153,4 +178,90 @@ impl InputContext {
     fn lower_cmp(a: char, b: char) -> bool {
         a.to_ascii_lowercase() == b
     }
+}
+
+// Minimal DSF header parser (enough to locate audio data and basic format)
+struct DsfHeader {
+    audio_pos: u64,
+    audio_len: u64,
+    channels: u32,
+    sampling_freq: u32,
+    block_size_per_channel: u32,
+}
+
+fn read_u32le<R: Read>(r: &mut R) -> io::Result<u32> {
+    let mut b = [0u8; 4];
+    r.read_exact(&mut b)?;
+    Ok(u32::from_le_bytes(b))
+}
+
+fn read_u64le<R: Read>(r: &mut R) -> io::Result<u64> {
+    let mut b = [0u8; 8];
+    r.read_exact(&mut b)?;
+    Ok(u64::from_le_bytes(b))
+}
+
+fn parse_dsf_header(path: &Path) -> Result<DsfHeader, Box<dyn Error>> {
+    let mut f = File::open(path)?;
+    let file_size = f.metadata()?.len();
+
+    // 'DSD ' chunk
+    let mut id = [0u8; 4];
+    f.read_exact(&mut id)?;
+    if &id != b"DSD " {
+        return Err("Not a DSF file (missing 'DSD ' chunk)".into());
+    }
+    let _dsd_size = read_u64le(&mut f)?;     // typically 28
+    let _file_size_field = read_u64le(&mut f)?; // total file size (can ignore)
+    let _meta_ptr = read_u64le(&mut f)?;     // metadata offset (unused here)
+
+    // 'fmt ' chunk
+    f.read_exact(&mut id)?;
+    if &id != b"fmt " {
+        return Err("DSF missing 'fmt ' chunk".into());
+    }
+    let fmt_size = read_u64le(&mut f)?;
+    let _fmt_version = read_u32le(&mut f)?;
+    let _fmt_id      = read_u32le(&mut f)?;
+    let _chan_type   = read_u32le(&mut f)?;
+    let channels     = read_u32le(&mut f)?;
+    let sampling_freq = read_u32le(&mut f)?;
+    let _bits_per_sample = read_u32le(&mut f)?; // should be 1
+    let _sample_count = read_u64le(&mut f)?;
+    let block_size_per_channel = read_u32le(&mut f)?;
+    let _reserved = read_u32le(&mut f)?;
+    // Skip any extra fmt payload beyond standard 40 bytes
+    let fmt_payload_read: i64 = 40; // bytes read after fmt_size
+    let fmt_payload_to_skip = (fmt_size as i64) - 12 - fmt_payload_read;
+    if fmt_payload_to_skip > 0 {
+        f.seek(SeekFrom::Current(fmt_payload_to_skip))?;
+    }
+
+    // 'data' chunk
+    f.read_exact(&mut id)?;
+    if &id != b"data" {
+        return Err("DSF missing 'data' chunk".into());
+    }
+    let data_size = read_u64le(&mut f)?; // chunk size (metadata ptr + audio data)
+    let _metadata_ptr2 = read_u64le(&mut f)?;
+    let audio_pos = f.seek(SeekFrom::Current(0))?;
+
+    // Two independent ways to compute audio length:
+    // 1) from chunk size: data_size = 8 (metadata ptr) + audio_len
+    let from_chunk = data_size.saturating_sub(8);
+    // 2) from file size and current position
+    let from_file = file_size
+        .checked_sub(audio_pos)
+        .ok_or("Invalid positions for DSF data")?;
+
+    // Use the minimum (robust against writer quirks) and log if they differ (via your verbose prints outside)
+    let audio_len = from_chunk.min(from_file);
+
+    Ok(DsfHeader {
+        audio_pos,
+        audio_len,
+        channels,
+        sampling_freq,
+        block_size_per_channel,
+    })
 }

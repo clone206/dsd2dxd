@@ -231,16 +231,20 @@ impl ConversionContext {
             let pcm_samples: usize =
                 (block_remaining * 8) / (self.out_ctx.decim_ratio as usize);
 
-            // Ensure float buffer big enough (and clear the slice we’ll write)
-            if self.float_data.len() < pcm_samples {
-                self.float_data.resize(pcm_samples, 0.0);
+            // Authoritative frames per channel to produce this block (matches C++ outCtx.pcmBlockSize)
+            let pcm_frames_per_chan = self.out_ctx.pcm_block_size as usize;
+
+            // Buffer sizes based on pcm_frames_per_chan (do not change your pcm_samples line)
+            if self.float_data.len() < pcm_frames_per_chan {
+                self.float_data.resize(pcm_frames_per_chan, 0.0);
             } else {
-                self.float_data[..pcm_samples].fill(0.0);
+                self.float_data[..pcm_frames_per_chan].fill(0.0);
             }
 
-            // Clear PCM buffer slice we will write
-            let pcm_block_bytes: usize =
-                pcm_samples * channels * (self.out_ctx.bytes_per_sample as usize);
+            let pcm_block_bytes = pcm_frames_per_chan
+                * (self.in_ctx.channels_num as usize)
+                * (self.out_ctx.bytes_per_sample as usize);
+
             if self.pcm_data.len() < pcm_block_bytes {
                 self.pcm_data.resize(pcm_block_bytes, 0);
             } else {
@@ -275,14 +279,14 @@ impl ConversionContext {
                         block_remaining,                                   // length in BYTES (per channel)
                         &self.dsd_data[dsd_chan_offset..],                 // channel start
                         dsd_stride,                                        // stride (planar:1, interleaved:channels)
-                        &mut self.float_data[..pcm_samples],               // output float samples
+                        &mut self.float_data[..pcm_frames_per_chan],      // output float samples
                         1,                                                 // pcm stride
                         self.out_ctx.decim_ratio,
                     )?;
 
-                    // Pack to interleaved s24le (scale → dither → round → clamp → write)
+                    // Pack exactly pcm_frames_per_chan frames
                     let mut pcm_pos = chan as usize * self.out_ctx.bytes_per_sample as usize;
-                    for s in 0..pcm_samples {
+                    for s in 0..pcm_frames_per_chan {
                         let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
                         self.dither.process_samp(&mut qin, chan as usize);
                         let value = Self::my_round(qin) as i32;
@@ -291,11 +295,12 @@ impl ConversionContext {
                         let mut out_idx = pcm_pos;
                         self.write_int(&mut out_idx, clamped, self.out_ctx.bytes_per_sample as usize);
 
-                        pcm_pos += channels * (self.out_ctx.bytes_per_sample as usize);
+                        pcm_pos += (self.in_ctx.channels_num as usize) * (self.out_ctx.bytes_per_sample as usize);
                     }
                 }
             }
 
+            // Write the complete interleaved block
             if pcm_block_bytes > 0 {
                 self.write_block(pcm_block_bytes)?;
             }
