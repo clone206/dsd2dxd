@@ -173,30 +173,47 @@ where T: AudioSample
 
     // Helper for AIFF extended float conversion
     fn encode_extended(&self, mut value: f64, buffer: &mut [u8; 10]) {
-        if value == 0.0 {
+        // Encode AIFF 80-bit extended with the integer bit included in the mantissa.
+        // Layout: 1 sign bit, 15-bit exponent (bias 16383), 1-bit integer + 63-bit fraction.
+        for b in buffer.iter_mut() { *b = 0; }
+        if value <= 0.0 {
             return;
         }
 
-        let mut exp = 0;
+        // Normalize into [1.0, 2.0)
+        let mut exp: i32 = 0;
+        while value >= 2.0 {
+            value *= 0.5;
+            exp += 1;
+        }
         while value < 1.0 {
             value *= 2.0;
             exp -= 1;
         }
-        while value >= 2.0 {
-            value /= 2.0;
-            exp += 1;
-        }
 
-        exp += 16383; // bias
-        buffer[0] = ((exp >> 8) & 0xFF) as u8;
-        buffer[1] = (exp & 0xFF) as u8;
+        // Biased exponent
+        let mut exp_field: u16 = (exp + 16383) as u16;
 
-        value -= 1.0; // Remove hidden bit
-        for i in 2..10 {
-            value *= 256.0;
-            buffer[i] = value as u8;
-            value -= buffer[i] as f64;
+        // Mantissa includes the leading 1-bit (integer bit) in the top of the 64-bit field.
+        // Compute with u128 to detect rounding overflow to 2^64, then downcast to u64.
+        let mut mant128: u128 = (value * ((1u128 << 63) as f64)).round() as u128;
+        if mant128 == (1u128 << 64) {
+            // value rounded to 2.0; renormalize
+            mant128 = 1u128 << 63;
+            exp_field = exp_field.wrapping_add(1);
         }
+        let mant: u64 = mant128 as u64;
+        // Store big-endian
+        buffer[0] = (exp_field >> 8) as u8;
+        buffer[1] = (exp_field & 0xFF) as u8;
+        buffer[2] = ((mant >> 56) & 0xFF) as u8;
+        buffer[3] = ((mant >> 48) & 0xFF) as u8;
+        buffer[4] = ((mant >> 40) & 0xFF) as u8;
+        buffer[5] = ((mant >> 32) & 0xFF) as u8;
+        buffer[6] = ((mant >> 24) & 0xFF) as u8;
+        buffer[7] = ((mant >> 16) & 0xFF) as u8;
+        buffer[8] = ((mant >> 8) & 0xFF) as u8;
+        buffer[9] = (mant & 0xFF) as u8;
     }
 
     pub fn print_summary(&self) {
