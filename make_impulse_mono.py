@@ -6,7 +6,7 @@
 #   ./target/debug/dsd2dxd -v -f P -e L -c 1 -s 4096 -i 1 -r 32 -b 32 -o W impulse_mono_toggle.dsd
 
 BLOCK_SIZE = 4096                # bytes per channel per frame (match -s)
-FRAMES = 16                      # choose so BYTES_PER_CH = BLOCK_SIZE * FRAMES
+FRAMES = 1                      # choose so BYTES_PER_CH = BLOCK_SIZE * FRAMES
 BYTES_PER_CH = BLOCK_SIZE * FRAMES
 OUT = "impulse_mono_toggle.dsd"
 
