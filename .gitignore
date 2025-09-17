@@ -4,6 +4,7 @@
 settings.json
 *.ds[df]
 !1kHz*.ds[df]
+!impulse_*.dsd
 dsd2pcm
 *.flac
 .DS_Store
