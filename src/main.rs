@@ -9,6 +9,7 @@ mod input;
 mod output;
 mod dither;
 mod conversion_context;
+mod fir_convolve;
 
 pub use conversion_context::ConversionContext;
 pub use input::InputContext;

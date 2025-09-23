@@ -1831,7 +1831,8 @@ extern "C"
         -1.929475756429e-08,
         -1.813069955527e-08,
         -1.698709747999e-08,
-        -1.135903768078e-07};
+        -1.135903768078e-07
+    };
 
     /**
      * 2nd half of coefficients for targeting 96K from DSD128 (upsampled to 10xDSD first)
@@ -2702,6 +2703,7 @@ extern "C"
         int delay2;
         int (*translate)(struct dsd2pcm_ctx_s *, size_t, const unsigned char *, ptrdiff_t, float *, ptrdiff_t);
         int (*finalize)(struct dsd2pcm_ctx_s *, float *, ptrdiff_t);
+        double gain;
     };
 
     typedef struct dsd2pcm_ctx_s dsd2pcm_ctx;

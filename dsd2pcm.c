@@ -168,6 +168,27 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                     err = 1;
                 }
             }
+            else if (decimation == 294)
+            {
+                // Future path: DSD128 -> upsample (x10) -> 294:1 -> 96 kHz PCM
+                // Using equiripple half-filter htaps_ddrx5_294to1_eq (2nd half of full symmetric filter)
+                switch (filtType)
+                {
+                case 'e':
+                case 'E':
+                    numCoeffs = 3060;                // length of htaps_ddrx5_294to1_eq[]
+                    htaps = htaps_ddrx5_294to1_eq;
+                    ptr->decimation = 294;
+                    ptr->delay = 10;                 // ~ (full_len/2)/decim ≈ (6120/2)/294 ≈ 10.4 → 10
+                    break;
+                default:
+                    err = 1;
+                }
+            }
+            else
+            {
+                err = 1;
+            }
         }
         else if (decimation == 8)
         {
@@ -207,6 +228,22 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
         else
         {
             err = 1;
+        }
+
+        ptr->gain = 1.0; /* default */
+
+        /* After all the decimation / filter selection logic and before precalc: */
+        if (!err) {
+            if (decimation == 294) {
+                /* Compute DC gain for symmetric filter represented by half (htaps) */
+                double sum = 0.0;
+                for (int i = 0; i < numCoeffs; ++i)
+                    sum += htaps[i];
+                /* Full symmetric filter gain ~ 2 * sum (center tap counted twice only if even length – here half representation) */
+                double full_gain = 2.0 * sum;
+                if (full_gain != 0.0)
+                    ptr->gain = 1.0 / full_gain;
+            }
         }
 
         if (err)
@@ -306,10 +343,10 @@ extern void dsd2pcm_translate(
                 acc += handle->ctables[i][bite1] + handle->ctables[i][bite2];
             }
 
+            acc *= handle->gain;
             if (handle->delay2)
                 handle->delay2--;
-            else
-            {
+            else {
                 *floatData = acc;
                 floatData += floatStride;
             }
