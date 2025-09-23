@@ -1,20 +1,27 @@
 use crate::audio_file::AudioFileFormat;
 use crate::dither::Dither;
 use crate::dsd2pcm::Dxd;
+use crate::dsd2pcm::HTAPS_288K_3TO1;
 use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
-use crate::dsd2pcm::HTAPS_DDRX5_294TO1_EQ; // (OLD single–stage path; no longer used but may keep for reference)
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ;   // ADD first-stage half taps (5× up, 14:1 down)
 use crate::dsd2pcm::HTAPS_2MHZ_7TO1_EQ;      // NEW second-stage (7:1)
-use crate::dsd2pcm::HTAPS_288K_3TO1;         // NEW third-stage (3:1)
+use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ;      // NEW: 10*DSD -> /7
+use crate::dsd2pcm::HTAPS_4MHZ_7TO1_EQ;        // NEW: ~4.032 MHz -> /7
+use crate::dsd2pcm::HTAPS_576K_3TO1_EQ;        // NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::dsdin_sys::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::output::OutputContext;
-use crate::fir_convolve::FirConvolve;
+use crate::fir_convolve::{FirConvolve, BytePrecalcDecimator}; // ADD BytePrecalcDecimator import
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+// ADD (near top, after use statements)
+const MAKEUP_GAIN_FRAC_PATH_14DB: f64 = 5.011_872_336_272_722; // 10^(14/20)
+
+// ====================================================================================
 pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
@@ -35,37 +42,27 @@ pub struct ConversionContext {
     eq_5over294_resamplers: Option<Vec<Equi5Over294Resampler>>,
     // ADD: Debug flag to dump intermediate after first cascade stage (×5 -> /14) and skip second /21
     eq_5over294_dump_stage1: bool,
+    // NEW: Optional 5/147 (DSD128 -> 192 kHz) cascade resamplers
+    eq_5over147_resamplers: Option<Vec<Equi5Over147Resampler>>,
+    total_dsd_bytes_processed: u64, // ADD: accumulate total input DSD bytes read
 }
 
-// ADD: State for Chebyshev 64:1 decimation using FirConvolve (half-taps -> full internally)
+// Chebyshev 64:1 decimator using BytePrecalcDecimator (byte-level table lookups)
 struct Cheb64Decimator {
-    fir: FirConvolve,
-    dsd_index: u64,   // total DSD input samples seen
-    latency: u64,     // group delay (N-1)/2 in DSD samples
-    decim: u32,       // decimation factor (64)
+    fast: BytePrecalcDecimator,
 }
-
 impl Cheb64Decimator {
     fn new() -> Self {
-        let fir = FirConvolve::new(&HTAPS_DDR_64TO1_CHEB);
-        let full_len = (HTAPS_DDR_64TO1_CHEB.len() * 2) as u64;
-        let latency = (full_len - 1) / 2;
-        Self { fir, dsd_index: 0, latency, decim: 64 }
+        let fast = BytePrecalcDecimator::new(&HTAPS_DDR_64TO1_CHEB, 64)
+            .expect("BytePrecalcDecimator init failed (64:1)");
+        Self { fast }
     }
     #[inline]
-    fn push_bit(&mut self, bit: u8) -> Option<f64> {
-        let x = if bit != 0 { 1.0 } else { -1.0 };
-        let y = self.fir.process_sample(x);
-        let idx = self.dsd_index;
-        self.dsd_index += 1;
-        if idx >= self.latency {
-            let rel = idx - self.latency;
-            if rel % self.decim as u64 == 0 {
-                return Some(y);
-            }
-        }
-        None
+    fn process_bytes(&mut self, bytes: &[u8], out: &mut [f64]) -> usize {
+        self.fast.process_bytes(bytes, out)
     }
+    #[inline]
+    fn reset(&mut self) { self.fast.reset(); }
 }
 
 // ====================================================================================
@@ -146,12 +143,11 @@ impl Equi5Over294Resampler {
     #[inline]
     fn push_bit(&mut self, bit: u8) -> Option<f64> {
         let mut out: Option<f64> = None;
-        let real = if bit != 0 { 1.0 } else { -1.0 };
-
-        // Stage 1: zero-stuff ×5
+        // Use i8 path for first-stage (bit -> {+1,-1}, zero-stuffed phases -> 0)
+        let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
         for p in 0..self.up_factor {
-            let x = if p == 0 { real } else { 0.0 };
-            let y1 = self.fir1.process_sample(x);
+            let xi8 = if p == 0 { bit_i8 } else { 0 };
+            let y1 = self.fir1.process_sample_i8(xi8);
             let idx_up = self.ups_index;
             self.ups_index += 1;
 
@@ -218,10 +214,11 @@ impl Equi5Over294Resampler {
     #[inline]
     fn push_bit_stage1(&mut self, bit: u8) -> Option<f64> {
         let mut out: Option<f64> = None;
-        let real = if bit != 0 { 1.0 } else { -1.0 };
+        // Use i8 optimized first-stage processing (bit -> {+1,-1}, zero phases -> 0)
+        let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
         for p in 0..self.up_factor {
-            let x = if p == 0 { real } else { 0.0 };
-            let y1 = self.fir1.process_sample(x);
+            let xi8 = if p == 0 { bit_i8 } else { 0 };
+            let y1 = self.fir1.process_sample_i8(xi8);
             let idx_up = self.ups_index;
             self.ups_index += 1;
 
@@ -244,6 +241,130 @@ impl Equi5Over294Resampler {
 // ====================================================================================
 // END replacement
 // ====================================================================================
+
+// === ADD after Equi5Over294Resampler impl (place near other resampler structs) ===
+struct Equi5Over147Resampler {
+    // Stage 1: ×5 zero-stuff then /7
+    fir1: FirConvolve,
+    up_factor: u32,
+    decim1: u32,
+    delay1: u64,
+    ups_index: u64,
+    phase1: u32,
+    primed1: bool,
+    // Stage 2: /7
+    fir2: FirConvolve,
+    decim2: u32,
+    delay2: u64,
+    mid_index2: u64,
+    phase2: u32,
+    primed2: bool,
+    // Stage 3: /3
+    fir3: FirConvolve,
+    decim3: u32,
+    delay3: u64,
+    mid_index3: u64,
+    phase3: u32,
+    primed3: bool,
+}
+
+impl Equi5Over147Resampler {
+    fn new() -> Self {
+        let fir1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
+        let fir2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
+        let fir3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
+
+        let full1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
+        let full2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
+        let full3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
+        let delay1 = (full1 - 1) / 2;
+        let delay2 = (full2 - 1) / 2;
+        let delay3 = (full3 - 1) / 2;
+
+        Self {
+            fir1,
+            up_factor: 5,
+            decim1: 7,
+            delay1,
+            ups_index: 0,
+            phase1: 0,
+            primed1: false,
+            fir2,
+            decim2: 7,
+            delay2,
+            mid_index2: 0,
+            phase2: 0,
+            primed2: false,
+            fir3,
+            decim3: 3,
+            delay3,
+            mid_index3: 0,
+            phase3: 0,
+            primed3: false,
+        }
+    }
+
+    #[inline]
+    fn push_bit(&mut self, bit: u8) -> Option<f64> {
+        let mut out = None;
+        // Use i8 optimized first-stage processing (bit -> {+1,-1}, zero phases -> 0)
+        let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
+        for p in 0..self.up_factor {
+            let xi8 = if p == 0 { bit_i8 } else { 0 };
+            let y1 = self.fir1.process_sample_i8(xi8);
+            let idx_up = self.ups_index;
+            self.ups_index += 1;
+
+            if !self.primed1 {
+                if idx_up >= self.delay1 {
+                    self.primed1 = true;
+                    self.phase1 = 0;
+                }
+                continue;
+            }
+            self.phase1 += 1;
+            if self.phase1 != self.decim1 {
+                continue;
+            }
+            self.phase1 = 0;
+            let y2 = self.fir2.process_sample(y1);
+            let idx2 = self.mid_index2;
+            self.mid_index2 += 1;
+
+            if !self.primed2 {
+                if idx2 >= self.delay2 {
+                    self.primed2 = true;
+                    self.phase2 = 0;
+                }
+                continue;
+            }
+            self.phase2 += 1;
+            if self.phase2 != self.decim2 {
+                continue;
+            }
+            self.phase2 = 0;
+
+            let y3 = self.fir3.process_sample(y2);
+            let idx3 = self.mid_index3;
+            self.mid_index3 += 1;
+
+            if !self.primed3 {
+                if idx3 >= self.delay3 {
+                    self.primed3 = true;
+                    self.phase3 = 0;
+                }
+                continue;
+            }
+            self.phase3 += 1;
+            if self.phase3 == self.decim3 {
+                self.phase3 = 0;
+                out = Some(y3);
+            }
+        }
+        out
+    }
+}
+// === END add Equi5Over147Resampler ===
 
 impl ConversionContext {
     pub fn new(
@@ -289,6 +410,8 @@ impl ConversionContext {
             cheb64_decims: None,
             eq_5over294_resamplers: None,
             eq_5over294_dump_stage1: false,
+            eq_5over147_resamplers: None,
+            total_dsd_bytes_processed: 0,
         };
 
         // Enable Equiripple 5/294 rational path (DSD128 -> 96k) if requested
@@ -310,7 +433,14 @@ impl ConversionContext {
                 if dump_stage1 {
                     eprintln!("[DBG] Equiripple cascade path enabled: (×5 -> /14) STAGE1 DUMP (DSD128 -> 2.016 MHz).");
                 } else {
-                    eprintln!("[DBG] Equiripple cascade path enabled: (×5 -> /14 -> /21) = 5/294 (DSD128 -> 96k).");
+                    eprintln!("[DBG] Equiripple cascade path enabled: (×5 -> /14 -> /21 -> /3) = 5/294 (DSD128 -> 96k).");
+                }
+            }
+            // Apply post-cascade gain only when all stages used (not stage1 dump)
+            if !dump_stage1 {
+                ctx.out_ctx.scale_factor *= MAKEUP_GAIN_FRAC_PATH_14DB;
+                if ctx.verbose_mode {
+                    eprintln!("[DBG] Applied +14 dB makeup to scale_factor (5/294). New scale_factor = {}", ctx.out_ctx.scale_factor);
                 }
             }
         }
@@ -327,6 +457,24 @@ impl ConversionContext {
             }
         }
 
+        // === PATCH inside impl ConversionContext::new AFTER existing 5/294 enabling block ===
+        // (Find the comment "Enable Equiripple 5/294..." and append this right after its block)
+        if ctx.out_ctx.filt_type == 'E'
+            && ctx.in_ctx.dsd_rate == 2
+            && ctx.out_ctx.decim_ratio == 147
+        {
+            let ch = ctx.in_ctx.channels_num as usize;
+            ctx.eq_5over147_resamplers = Some((0..ch).map(|_| Equi5Over147Resampler::new()).collect());
+            if ctx.verbose_mode {
+                eprintln!("[DBG] Equiripple cascade path enabled: (×5 -> /7 -> /7 -> /3) = 5/147 (DSD128 -> 192k).");
+            }
+            // Full cascade gain compensation (same attenuation characteristic observed)
+            ctx.out_ctx.scale_factor *= MAKEUP_GAIN_FRAC_PATH_14DB;
+            if ctx.verbose_mode {
+                eprintln!("[DBG] Applied +14 dB makeup to scale_factor (5/147). New scale_factor = {}", ctx.out_ctx.scale_factor);
+            }
+        }
+
         ctx.out_ctx.set_rate(ctx.calculate_out_rate());
         ctx.out_ctx
             .set_block_size(ctx.in_ctx.block_size, ctx.in_ctx.channels_num);
@@ -337,18 +485,23 @@ impl ConversionContext {
     }
 
     fn calculate_out_rate(&self) -> i32 {
-        // Special-case rational path variants
         if self.in_ctx.dsd_rate == 2
-            && self.out_ctx.decim_ratio == 294
             && self.out_ctx.filt_type == 'E'
-            && self.eq_5over294_resamplers.is_some() {
+            && self.eq_5over294_resamplers.is_some()
+            && self.out_ctx.decim_ratio == 294
+        {
             if self.eq_5over294_dump_stage1 {
-                // Stage1 rate: DSD_64_RATE * dsd_rate * 5 / 14  (DSD128 *5 zero-stuff then /14)
                 return ((DSD_64_RATE as i64) * (self.in_ctx.dsd_rate as i64) * 5 / 14) as i32;
             } else {
-                // Full cascade rate = *5 / 294
                 return ((DSD_64_RATE as i64) * (self.in_ctx.dsd_rate as i64) * 5 / 294) as i32;
             }
+        }
+        if self.in_ctx.dsd_rate == 2
+            && self.out_ctx.filt_type == 'E'
+            && self.eq_5over147_resamplers.is_some()
+            && self.out_ctx.decim_ratio == 147
+        {
+            return ((DSD_64_RATE as i64) * (self.in_ctx.dsd_rate as i64) * 5 / 147) as i32;
         }
         ((DSD_64_RATE as i32) * self.in_ctx.dsd_rate / self.out_ctx.decim_ratio) as i32
     }
@@ -455,7 +608,9 @@ impl ConversionContext {
         eprintln!("");
 
         // Process blocks
+        let wall_start = Instant::now(); // ADD: start timer
         self.process_blocks()?;
+        let elapsed = wall_start.elapsed(); // ADD: end timer
 
         // Save file for non-stdout outputs using a derived path (like C++)
         if self.out_ctx.output != 's' {
@@ -472,6 +627,27 @@ impl ConversionContext {
                 _ => {}
             }
         }
+        // Report timing & speed
+        if self.total_dsd_bytes_processed > 0 {
+            let channels = self.in_ctx.channels_num as u64;
+            // Bytes per channel
+            let bytes_per_chan = self.total_dsd_bytes_processed / channels;
+            let bits_per_chan = bytes_per_chan * 8;
+            let dsd_base_rate = (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
+            let audio_seconds =
+                if dsd_base_rate > 0 { (bits_per_chan as f64) / (dsd_base_rate as f64) } else { 0.0 };
+            let elapsed_sec = elapsed.as_secs_f64().max(1e-9);
+            let speed = audio_seconds / elapsed_sec;
+            // Format H:MM:SS for elapsed
+            let total_secs = elapsed.as_secs();
+            let h = total_secs / 3600;
+            let m = (total_secs % 3600) / 60;
+            let s = total_secs % 60;
+            eprintln!(
+                "Conversion Time: {:02}:{:02}:{:02}  (Speed: {:.2}x realtime)",
+                h, m, s, speed
+            );
+        }
 
         Ok(())
     }
@@ -485,44 +661,27 @@ impl ConversionContext {
         dsd_stride: isize,               // stride from InputContext
         pcm_frames_per_chan: usize,
     ) {
-        if self.float_data.len() < pcm_frames_per_chan {
-            return;
-        }
+        if self.float_data.len() < pcm_frames_per_chan { return; }
         let Some(decims) = self.cheb64_decims.as_mut() else { return; };
         let dec = &mut decims[chan];
         let lsb_first = self.in_ctx.lsbit_first != 0;
         let stride = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
 
-        let mut produced = 0usize;
+        // Gather this channel's bytes (apply bit-reversal if MSB-first)
+        // (Alloc on stack if small; otherwise Vec)
+        let mut chan_bytes = Vec::with_capacity(block_remaining);
         for i in 0..block_remaining {
-            if produced >= pcm_frames_per_chan { break; }
             let byte_index = if stride == 0 {
                 dsd_chan_offset + i
             } else {
                 dsd_chan_offset + i * stride
             };
             if byte_index >= self.dsd_data.len() { break; }
-            let byte = self.dsd_data[byte_index];
-            if lsb_first {
-                for b in 0..8 {
-                    if produced >= pcm_frames_per_chan { break; }
-                    let bit = (byte >> b) & 0x1;
-                    if let Some(s) = dec.push_bit(bit) {
-                        self.float_data[produced] = s;
-                        produced += 1;
-                    }
-                }
-            } else {
-                for b in (0..8).rev() {
-                    if produced >= pcm_frames_per_chan { break; }
-                    let bit = (byte >> b) & 0x1;
-                    if let Some(s) = dec.push_bit(bit) {
-                        self.float_data[produced] = s;
-                        produced += 1;
-                    }
-                }
-            }
+            let b = self.dsd_data[byte_index];
+            chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
         }
+        // Process in one shot
+        let produced = dec.process_bytes(&chan_bytes, &mut self.float_data[..pcm_frames_per_chan]);
         if produced < pcm_frames_per_chan {
             self.float_data[produced..pcm_frames_per_chan].fill(0.0);
         }
@@ -563,7 +722,8 @@ impl ConversionContext {
                         rs.push_bit(bit)
                     };
                     if let Some(y) = got {
-                        self.float_data[produced] = y;
+                        // Only apply gain if full cascade (not stage1 dump)
+                        self.float_data[produced] = y; // gain already folded into scale_factor if needed
                         produced += 1;
                     }
                 }
@@ -577,6 +737,56 @@ impl ConversionContext {
                         rs.push_bit(bit)
                     };
                     if let Some(y) = got {
+                        self.float_data[produced] = y;
+                        produced += 1;
+                    }
+                }
+            }
+        }
+        if produced < buf_capacity {
+            self.float_data[produced..buf_capacity].fill(0.0);
+        }
+        produced
+    }
+
+    // ADD: Produce one channel via 5/147 rational path
+    fn process_eq_5over147_channel(
+        &mut self,
+        chan: usize,
+        block_remaining: usize,
+        dsd_chan_offset: usize,
+        dsd_stride: isize,
+        buf_capacity: usize,
+    ) -> usize {
+        if self.float_data.len() < buf_capacity { return 0; }
+        let Some(resamps) = self.eq_5over147_resamplers.as_mut() else { return 0; };
+        let rs = &mut resamps[chan];
+        let lsb_first = self.in_ctx.lsbit_first != 0;
+        let stride = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
+        let mut produced = 0usize;
+        for i in 0..block_remaining {
+            if produced >= buf_capacity { break; }
+            let byte_index = if stride == 0 {
+                dsd_chan_offset + i
+            } else {
+                dsd_chan_offset + i * stride
+            };
+            if byte_index >= self.dsd_data.len() { break; }
+            let byte = self.dsd_data[byte_index];
+            if lsb_first {
+                for b in 0..8 {
+                    if produced >= buf_capacity { break; }
+                    let bit = (byte >> b) & 1;
+                    if let Some(y) = rs.push_bit(bit) {
+                        self.float_data[produced] = y;
+                        produced += 1;
+                    }
+                }
+            } else {
+                for b in (0..8).rev() {
+                    if produced >= buf_capacity { break; }
+                    let bit = (byte >> b) & 1;
+                    if let Some(y) = rs.push_bit(bit) {
                         self.float_data[produced] = y;
                         produced += 1;
                     }
@@ -650,6 +860,8 @@ impl ConversionContext {
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
                 Err(e) => return Err(Box::new(e)),
             };
+            // Track bytes processed (all channels)
+            self.total_dsd_bytes_processed += read_size as u64;
 
             // Bytes per channel in this read
             let block_remaining: usize = read_size / channels;
@@ -658,19 +870,20 @@ impl ConversionContext {
             // Normal path: floor(bits / decim_ratio)
             // 5/294 path: dynamic; we allocate a ceiling estimate + safety and then use actual produced count.
             let bits_in = block_remaining * 8;
-            let (estimate_frames, is_eq294) = if self.eq_5over294_resamplers.is_some() {
-                if self.eq_5over294_dump_stage1 {
-                    // Ceiling((bits*5)/14)
-                    (((bits_in * 5) + 13) / 14, true)
+            let (estimate_frames, is_rational_5) =
+                if self.eq_5over294_resamplers.is_some() {
+                    if self.eq_5over294_dump_stage1 {
+                        (((bits_in * 5) + 13) / 14, true)
+                    } else {
+                        (((bits_in * 5) + 293) / 294, true)
+                    }
+                } else if self.eq_5over147_resamplers.is_some() {
+                    (((bits_in * 5) + 146) / 147, true) // ceiling(bits*5/147)
                 } else {
-                    // Ceiling((bits*5)/294)
-                    (((bits_in * 5) + 293) / 294, true)
-                }
-            } else {
-                ((bits_in) / (self.out_ctx.decim_ratio as usize), false)
-            };
+                    ((bits_in) / (self.out_ctx.decim_ratio as usize), false)
+                };
             // Add small safety (max +1) to avoid truncation at block boundaries.
-            let buf_needed = estimate_frames + if is_eq294 { 2 } else { 0 };
+            let buf_needed = estimate_frames + if is_rational_5 { 2 } else { 0 };
             if self.float_data.len() < buf_needed {
                 self.float_data.resize(buf_needed, 0.0);
             } else {
@@ -709,14 +922,18 @@ impl ConversionContext {
                         self.in_ctx.dsd_stride as isize,
                         buf_needed,
                     );
-                    if chan == 0 {
-                        frames_used_per_chan = produced;
-                    } else {
-                        debug_assert_eq!(
-                            frames_used_per_chan, produced,
-                            "Per-channel frame mismatch in 5/294 path"
-                        );
-                    }
+                    if chan == 0 { frames_used_per_chan = produced; }
+                    else { debug_assert_eq!(frames_used_per_chan, produced); }
+                } else if self.eq_5over147_resamplers.is_some() {
+                    let produced = self.process_eq_5over147_channel(
+                        chan,
+                        block_remaining,
+                        dsd_chan_offset,
+                        self.in_ctx.dsd_stride as isize,
+                        buf_needed,
+                    );
+                    if chan == 0 { frames_used_per_chan = produced; }
+                    else { debug_assert_eq!(frames_used_per_chan, produced); }
                 } else if let Some(dxd) = self.dxds.get_mut(chan) {
                     dxd.translate(
                         block_remaining,
@@ -814,9 +1031,9 @@ impl ConversionContext {
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         if self.in_ctx.dsd_rate == 2
-            && ![16, 32, 64, 294].contains(&self.out_ctx.decim_ratio)
+            && ![16, 32, 64, 147, 294].contains(&self.out_ctx.decim_ratio)
         {
-            return Err("Only decimation value of 16, 32, 64, or 294 allowed with dsd128 input.".into());
+            return Err("Only decimation value of 16, 32, 64, 147, or 294 allowed with dsd128 input.".into());
         } else if self.in_ctx.dsd_rate == 1 && ![8, 16, 32].contains(&self.out_ctx.decim_ratio) {
             return Err("Only decimation value of 8, 16, or 32 allowed with dsd64 input.".into());
         }
@@ -825,8 +1042,11 @@ impl ConversionContext {
         {
             return Err("294:1 decimation currently only supported for DSD128 with Equiripple filter.".into());
         }
-        // Allow stage1 dump under same invocation (-r 294); rate/frames adjusted internally.
-
+        if self.out_ctx.decim_ratio == 147
+            && !(self.in_ctx.dsd_rate == 2 && self.out_ctx.filt_type == 'E')
+        {
+            return Err("147:1 decimation currently only supported for DSD128 with Equiripple filter.".into());
+        }
         Ok(())
     }
 
@@ -892,15 +1112,11 @@ impl ConversionContext {
     }
 }
 
-// Helper types
-#[derive(Default)]
-struct ClipStats {
-    low: i32,
-    high: i32,
-}
-
-#[derive(Clone, Copy)]
-enum ProcessedSample {
-    Float(f64),
-    Int(i32),
+// ---- ADD local bit reversal helper (LSB <-> MSB) if not already imported -------------
+#[inline]
+fn bit_reverse_u8(mut b: u8) -> u8 {
+    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+    b
 }

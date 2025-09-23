@@ -168,24 +168,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                     err = 1;
                 }
             }
-            else if (decimation == 294)
-            {
-                // Future path: DSD128 -> upsample (x10) -> 294:1 -> 96 kHz PCM
-                // Using equiripple half-filter htaps_ddrx5_294to1_eq (2nd half of full symmetric filter)
-                switch (filtType)
-                {
-                case 'e':
-                case 'E':
-                    numCoeffs = 3060;                // length of htaps_ddrx5_294to1_eq[]
-                    htaps = htaps_ddrx5_294to1_eq;
-                    ptr->decimation = 294;
-                    ptr->delay = 10;                 // ~ (full_len/2)/decim ≈ (6120/2)/294 ≈ 10.4 → 10
-                    break;
-                default:
-                    err = 1;
-                }
-            }
-            else
+            else if (decimation != 147 && decimation != 294)
             {
                 err = 1;
             }
