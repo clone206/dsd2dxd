@@ -4,7 +4,8 @@ use crate::dsd2pcm::Dxd;
 use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
 use crate::dsd2pcm::HTAPS_DDRX5_294TO1_EQ; // (OLD single–stage path; no longer used but may keep for reference)
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ;   // ADD first-stage half taps (5× up, 14:1 down)
-use crate::dsd2pcm::HTAPS_2MHZ_21TO1_EQ;    // ADD second-stage half taps (21:1 down from ~2.016 MHz)
+use crate::dsd2pcm::HTAPS_2MHZ_7TO1_EQ;      // NEW second-stage (7:1)
+use crate::dsd2pcm::HTAPS_288K_3TO1;         // NEW third-stage (3:1)
 use crate::dsdin_sys::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::output::OutputContext;
@@ -67,64 +68,88 @@ impl Cheb64Decimator {
     }
 }
 
-// REPLACE the Equi5Over294Resampler definition + impl block with this version:
-
+// ====================================================================================
+// REPLACE the existing Equi5Over294Resampler struct & impl (two-stage) with this
+// three-stage version:  (×5 zero-stuff -> FIR1 -> /14) -> FIR2 -> /7 -> FIR3 -> /3
+// Overall: ×5 / (14*7*3) = 5 / 294 (unchanged final 96 kHz target).
+// Stage1 dump (env DSD2DXD_DUMP_STAGE1=1) still returns output after /14 only.
+// ====================================================================================
+#[allow(dead_code)]
 struct Equi5Over294Resampler {
-    // Stage 1 (×5 zero-stuff -> /14)
+    // Stage 1: zero-stuff ×5 then FIR1 then /14
     fir1: FirConvolve,
-    up_factor: u32,      // 5
-    decim1: u32,         // 14
-    ups_index: u64,      // total upsampled (zero-stuffed) input positions seen
-    delay1: u64,         // floor((N1-1)/2)
-    phase1: u32,         // counts upsampled positions since last stage1 output
-    primed1: bool,       // true once past warm-up
+    up_factor: u32,       // 5
+    decim1: u32,          // 14
+    delay1: u64,          // floor((N1-1)/2)
+    ups_index: u64,
+    phase1: u32,
+    primed1: bool,
 
-    // Stage 2 (/21)
+    // Stage 2: FIR2 then /7  (input fs ≈ 2.016 MHz)
     fir2: FirConvolve,
-    decim2: u32,         // 21
-    mid_index: u64,      // stage1 output sample index (post /14)
-    delay2: u64,         // floor((N2-1)/2)
-    phase2: u32,         // counts stage2 input samples since last stage2 output
-    primed2: bool,       // true once past warm-up of stage2
+    decim2: u32,          // 7
+    delay2: u64,          // floor((N2-1)/2)
+    mid_index2: u64,      // count of stage1 decimated samples seen by stage2
+    phase2: u32,
+    primed2: bool,
+
+    // Stage 3: FIR3 then /3  (input fs ≈ 288 kHz)
+    fir3: FirConvolve,
+    decim3: u32,          // 3
+    delay3: u64,          // floor((N3-1)/2)
+    mid_index3: u64,      // count of stage2 decimated samples seen by stage3
+    phase3: u32,
+    primed3: bool,
 }
 
 impl Equi5Over294Resampler {
     fn new() -> Self {
         let fir1 = FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ);
-        let fir2 = FirConvolve::new(&HTAPS_2MHZ_21TO1_EQ);
+        let fir2 = FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ);
+        let fir3 = FirConvolve::new(&HTAPS_288K_3TO1);
 
-        let full_len1 = (HTAPS_DDRX5_14TO1_EQ.len() * 2) as u64;
-        let full_len2 = (HTAPS_2MHZ_21TO1_EQ.len() * 2) as u64;
+        // Full lengths = 2 * half_taps (even). Group delay floor((N-1)/2).
+        let full1 = (HTAPS_DDRX5_14TO1_EQ.len() * 2) as u64; // 96 -> delay 47
+        let full2 = (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64;   // 84 -> delay 41
+        let full3 = (HTAPS_288K_3TO1.len() * 2) as u64;      // 52 -> delay 25
 
-        // Use integer floor of (N-1)/2. Fractional 0.5 (even length) just adds a fixed constant < 1 sample error in absolute delay only (not rate).
-        let delay1 = (full_len1 - 1) / 2;
-        let delay2 = (full_len2 - 1) / 2;
+        let delay1 = (full1 - 1) / 2;
+        let delay2 = (full2 - 1) / 2;
+        let delay3 = (full3 - 1) / 2;
 
         Self {
             fir1,
             up_factor: 5,
             decim1: 14,
-            ups_index: 0,
             delay1,
+            ups_index: 0,
             phase1: 0,
             primed1: false,
 
             fir2,
-            decim2: 21,
-            mid_index: 0,
+            decim2: 7,
             delay2,
+            mid_index2: 0,
             phase2: 0,
             primed2: false,
+
+            fir3,
+            decim3: 3,
+            delay3,
+            mid_index3: 0,
+            phase3: 0,
+            primed3: false,
         }
     }
 
+    // Full three-stage output (final 96 kHz)
     #[inline]
     fn push_bit(&mut self, bit: u8) -> Option<f64> {
         let mut out: Option<f64> = None;
         let real = if bit != 0 { 1.0 } else { -1.0 };
 
+        // Stage 1: zero-stuff ×5
         for p in 0..self.up_factor {
-            // Zero-stuff
             let x = if p == 0 { real } else { 0.0 };
             let y1 = self.fir1.process_sample(x);
             let idx_up = self.ups_index;
@@ -136,42 +161,64 @@ impl Equi5Over294Resampler {
                     self.primed1 = true;
                     self.phase1 = 0;
                 }
-            } else {
-                // Count every upsampled position
-                self.phase1 += 1;
-                if self.phase1 == self.decim1 {
-                    self.phase1 = 0;
-                    // This is a stage-1 decimated sample (at 5/14 rate)
-                    let y2_in = y1;
-                    let y2 = self.fir2.process_sample(y2_in);
-                    let mid_idx = self.mid_index;
-                    self.mid_index += 1;
+                continue;
+            }
 
-                    // Warm-up stage 2
-                    if !self.primed2 {
-                        if mid_idx >= self.delay2 {
-                            self.primed2 = true;
-                            self.phase2 = 0;
-                        }
-                    } else {
-                        self.phase2 += 1;
-                        if self.phase2 == self.decim2 {
-                            self.phase2 = 0;
-                            out = Some(y2);
-                        }
-                    }
+            // Count every upsampled position, emit every decim1
+            self.phase1 += 1;
+            if self.phase1 != self.decim1 {
+                continue;
+            }
+            self.phase1 = 0;
+
+            // Stage 2 input sample (2.016 MHz domain)
+            let y2_in = y1;
+            let y2 = self.fir2.process_sample(y2_in);
+            let idx2 = self.mid_index2;
+            self.mid_index2 += 1;
+
+            if !self.primed2 {
+                if idx2 >= self.delay2 {
+                    self.primed2 = true;
+                    self.phase2 = 0;
                 }
+                continue;
+            }
+
+            self.phase2 += 1;
+            if self.phase2 != self.decim2 {
+                continue;
+            }
+            self.phase2 = 0;
+
+            // Stage 3 input sample (≈288 kHz domain)
+            let y3_in = y2;
+            let y3 = self.fir3.process_sample(y3_in);
+            let idx3 = self.mid_index3;
+            self.mid_index3 += 1;
+
+            if !self.primed3 {
+                if idx3 >= self.delay3 {
+                    self.primed3 = true;
+                    self.phase3 = 0;
+                }
+                continue;
+            }
+
+            self.phase3 += 1;
+            if self.phase3 == self.decim3 {
+                self.phase3 = 0;
+                out = Some(y3);
             }
         }
         out
     }
 
-    // Stage1-only dump (after /14, before second FIR+ /21). Returns decimated stage1 sample.
+    // Stage1 dump path (after /14 only) unchanged
     #[inline]
     fn push_bit_stage1(&mut self, bit: u8) -> Option<f64> {
         let mut out: Option<f64> = None;
         let real = if bit != 0 { 1.0 } else { -1.0 };
-
         for p in 0..self.up_factor {
             let x = if p == 0 { real } else { 0.0 };
             let y1 = self.fir1.process_sample(x);
@@ -183,17 +230,20 @@ impl Equi5Over294Resampler {
                     self.primed1 = true;
                     self.phase1 = 0;
                 }
-            } else {
-                self.phase1 += 1;
-                if self.phase1 == self.decim1 {
-                    self.phase1 = 0;
-                    out = Some(y1);
-                }
+                continue;
+            }
+            self.phase1 += 1;
+            if self.phase1 == self.decim1 {
+                self.phase1 = 0;
+                out = Some(y1);
             }
         }
         out
     }
 }
+// ====================================================================================
+// END replacement
+// ====================================================================================
 
 impl ConversionContext {
     pub fn new(
