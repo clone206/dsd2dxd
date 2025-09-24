@@ -10,6 +10,7 @@ mod dsdin_sys;
 mod fir_convolve;
 mod input;
 mod output;
+mod byte_precalc_decimator;
 
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;

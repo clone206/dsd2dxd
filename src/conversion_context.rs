@@ -1,4 +1,5 @@
 use crate::audio_file::AudioFileFormat;
+use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 use crate::dsd2pcm::Dxd;
 use crate::dsd2pcm::HTAPS_288K_3TO1_EQ;
@@ -9,7 +10,7 @@ use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 
 use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
 use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
 use crate::dsdin_sys::DSD_64_RATE;
-use crate::fir_convolve::{BytePrecalcDecimator, FirConvolve}; // keep
+use crate::fir_convolve::{FirConvolve};
 use crate::input::InputContext;
 use crate::output::OutputContext;
 use std::error::Error;
@@ -36,7 +37,7 @@ pub struct ConversionContext {
     last_samps_clipped_high: i32,
     verbose_mode: bool,
     // ADD: Optional Chebyshev 64:1 decimators (one per channel)
-    cheb64_decims: Option<Vec<Cheb64Decimator>>,
+    cheb64_decims: Option<Vec<BytePrecalcDecimator>>,
     // Generalized equiripple L/M resamplers (covers 5/294, 5/147, 10/147)
     eq_lm_resamplers: Option<Vec<EquiLMResampler>>,
     // Debug flag: dump after first stage (×L -> /decim1), for any L/M
@@ -44,26 +45,6 @@ pub struct ConversionContext {
     total_dsd_bytes_processed: u64, // ADD: accumulate total input DSD bytes read
     upsample_ratio: u32, // NEW: L in L/M fractional (zero‑stuff) paths; 1 for pure integer decim
     decim_ratio: i32,
-}
-
-// Chebyshev 64:1 decimator using BytePrecalcDecimator (byte-level table lookups)
-struct Cheb64Decimator {
-    fast: BytePrecalcDecimator,
-}
-impl Cheb64Decimator {
-    fn new() -> Self {
-        let fast = BytePrecalcDecimator::new(&HTAPS_DDR_64TO1_CHEB, 64)
-            .expect("BytePrecalcDecimator init failed (64:1)");
-        Self { fast }
-    }
-    #[inline]
-    fn process_bytes(&mut self, bytes: &[u8], out: &mut [f64]) -> usize {
-        self.fast.process_bytes(bytes, out)
-    }
-    #[inline]
-    fn reset(&mut self) {
-        self.fast.reset();
-    }
 }
 
 // ====================================================================================
@@ -409,7 +390,12 @@ impl ConversionContext {
         // Chebyshev 64:1 path
         if ctx.filt_type == 'C' && ctx.in_ctx.dsd_rate == 2 && decim_ratio == 64 {
             let ch = ctx.in_ctx.channels_num as usize;
-            ctx.cheb64_decims = Some((0..ch).map(|_| Cheb64Decimator::new()).collect());
+            ctx.cheb64_decims = Some(
+                (0..ch)
+                    .map(|_| BytePrecalcDecimator::new(&HTAPS_DDR_64TO1_CHEB, decim_ratio as u32)
+                        .expect("BytePrecalcDecimator init failed (64:1)"))
+                    .collect(),
+            );
             if ctx.verbose_mode {
                 eprintln!("[DBG] Chebyshev 64:1 direct FIR path enabled.");
             }
@@ -664,7 +650,9 @@ impl ConversionContext {
             // iterate bits in correct order
             if lsb_first {
                 for b in 0..8 {
-                    if produced >= buf_capacity { break; }
+                    if produced >= buf_capacity {
+                        break;
+                    }
                     let bit = (byte >> b) & 1;
                     let got = rs.push_bit_lm(bit, self.lm_dump_stage1);
                     if let Some(y) = got {
@@ -674,7 +662,9 @@ impl ConversionContext {
                 }
             } else {
                 for b in (0..8).rev() {
-                    if produced >= buf_capacity { break; }
+                    if produced >= buf_capacity {
+                        break;
+                    }
                     let bit = (byte >> b) & 1;
                     let got = rs.push_bit_lm(bit, self.lm_dump_stage1);
                     if let Some(y) = got {
@@ -726,10 +716,6 @@ impl ConversionContext {
         } else {
             frame_size as i64
         };
-
-        // Use InputContext’s precomputed per-channel offset and stride (match C++)
-        let chan_offset_base: usize = self.in_ctx.dsd_chan_offset as usize;
-        let dsd_stride: isize = self.in_ctx.dsd_stride as isize;
 
         loop {
             // Read only full frames from file; stdin always reads frame_size
@@ -839,6 +825,7 @@ impl ConversionContext {
                 }
 
                 // Output / packing per channel
+                // TODO: restore float output for stdout (write_float)
                 if self.out_ctx.output == 's' {
                     // Interleave into pcm_data
                     let mut pcm_pos = chan * self.out_ctx.bytes_per_sample as usize;
