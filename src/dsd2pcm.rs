@@ -4414,7 +4414,7 @@ pub const HTAPS_2MHZ_7TO1_EQ: [f64; 42] = [
  * Fpass: 22000, .1db ripple
  * Fstop: 55000, 144db attenuation
  */
-pub const HTAPS_288K_3TO1: [f64; 26] = [
+pub const HTAPS_288K_3TO1_EQ: [f64; 26] = [
     0.2210054509042,
     0.1830837460526,
     0.1199579243371,
