@@ -2,20 +2,20 @@ use clap::Parser;
 use std::error::Error;
 
 mod audio_file;
-mod dsdin_sys;
-mod dsd2pcm;
+mod conversion_context;
+mod dither;
 mod dsd;
+mod dsd2pcm;
+mod dsdin_sys;
+mod fir_convolve;
 mod input;
 mod output;
-mod dither;
-mod conversion_context;
-mod fir_convolve;
 
 pub use conversion_context::ConversionContext;
-pub use input::InputContext;
-pub use output::OutputContext;
 pub use dither::Dither;
 pub use dsd2pcm::Dxd;
+pub use input::InputContext;
+pub use output::OutputContext;
 
 static mut VERBOSE_MODE: bool = false;
 
@@ -51,8 +51,8 @@ struct Cli {
     dither_type: Option<char>,
 
     /// Decimation ratio: 8, 16, 32, or 64
-    #[arg(short = 'r', long = "ratio", default_value = "8")]
-    decimation: i32,
+    #[arg(short = 'r', long = "rate", default_value = "352800")]
+    output_rate: i32,
 
     /// Input DSD rate: 1 (dsd64) or 2 (dsd128)
     #[arg(short = 'i', long = "inrate", default_value = "1")]
@@ -93,7 +93,9 @@ fn verbose(message: &str, new_line: bool) {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    unsafe { VERBOSE_MODE = cli.verbose; }
+    unsafe {
+        VERBOSE_MODE = cli.verbose;
+    }
 
     let inputs = if cli.files.is_empty() {
         vec!["-".to_string()]
@@ -101,27 +103,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli.files.clone()
     };
 
-    let dither_type = cli.dither_type.unwrap_or(
-        if cli.bit_depth == 32 { 'F' } else { 'T' }
-    );
+    let dither_type = cli
+        .dither_type
+        .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
 
-    // Update filter type handling
-    let filter_type = cli.filter_type.unwrap_or_else(|| {
-        match cli.input_rate {
-            2 => 'C',  // DSD128
-            _ => 'X'   // Default/DSD64
-        }
-    }).to_ascii_uppercase();  // Ensure uppercase for validation
+    let filter_type = cli
+        .filter_type
+        .unwrap_or_else(|| match cli.input_rate {
+            2 => 'C',
+            _ => 'X',
+        })
+        .to_ascii_uppercase();
 
     let mut out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
-        cli.decimation,
         cli.level,
         cli.output_file.unwrap_or_default(),
+        cli.output_rate,
     )?;
-
-    out_ctx.set_filter_type(filter_type);
 
     let dither = Dither::new(dither_type)?;
 
@@ -129,8 +129,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         // Check for unexpanded glob patterns
         if input.contains('*') {
             verbose(
-                &format!("Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.", input),
-                true
+                &format!(
+                    "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
+                    input
+                ),
+                true,
             );
             continue;
         }
@@ -153,7 +156,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             in_ctx,
             out_ctx.clone(),
             dither.clone(),
-            cli.verbose
+            filter_type,
+            cli.verbose,
         )?;
         conv_ctx.do_conversion()?;
     }

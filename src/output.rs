@@ -8,13 +8,8 @@ pub struct OutputContext {
     pub bits: i32,
     pub channels_num: i32,
     pub rate: i32,
-    pub decim_ratio: i32,
     pub bytes_per_sample: i32,
-    pub block_size: i32,
-    pub pcm_block_size: i32,
-    pub out_block_size: i32,
     pub output: char,
-    pub filt_type: char,
 
     // Set freely
     pub peak_level: i32,
@@ -31,9 +26,9 @@ impl OutputContext {
     pub fn new(
         out_bits: i32,
         out_type: char,
-        decimation: i32,
         out_vol: f64,
         output_path: String,
+        out_rate: i32
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -53,14 +48,9 @@ impl OutputContext {
         let mut ctx = Self {
             bits: out_bits,
             output,
-            decim_ratio: decimation,
             bytes_per_sample,
-            filt_type: 'n', // Default filter type to 'n' (none)
             channels_num: 0,
-            rate: 0,
-            block_size: 0,
-            pcm_block_size: 0,
-            out_block_size: 0,
+            rate: out_rate,
             peak_level: 0,
             scale_factor: 1.0,
             float_file: None,
@@ -73,11 +63,8 @@ impl OutputContext {
         Ok(ctx)
     }
 
-    pub fn set_block_size(&mut self, block_size_out: i32, chan_num_out: i32) {
+    pub fn set_channels_num(&mut self, chan_num_out: i32) {
         self.channels_num = chan_num_out;
-        self.block_size = block_size_out;
-        self.pcm_block_size = block_size_out / (self.decim_ratio / 8);
-        self.out_block_size = self.pcm_block_size * self.channels_num * self.bytes_per_sample;
     }
 
     pub fn init_file(&mut self) -> Result<(), Box<dyn Error>> {
@@ -152,19 +139,11 @@ impl OutputContext {
         }
     }
 
-    pub fn set_rate(&mut self, new_rate: i32) {
-        self.rate = new_rate;
-    }
-
     pub fn open_output_file(&mut self) -> Result<(), Box<dyn Error>> {
         if self.output != 's' {
             self.file = Some(File::create(&self.output_path)?);
         }
         Ok(())
-    }
-
-    pub fn set_filter_type(&mut self, filt_type: char) {
-        self.filt_type = filt_type;
     }
 }
 
@@ -174,13 +153,8 @@ impl Clone for OutputContext {
             bits: self.bits,
             channels_num: self.channels_num,
             rate: self.rate,
-            decim_ratio: self.decim_ratio,
             bytes_per_sample: self.bytes_per_sample,
-            block_size: self.block_size,
-            pcm_block_size: self.pcm_block_size,
-            out_block_size: self.out_block_size,
             output: self.output,
-            filt_type: self.filt_type,
             peak_level: self.peak_level,
             scale_factor: self.scale_factor,
             float_file: self.float_file.clone(),

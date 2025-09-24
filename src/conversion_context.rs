@@ -15,7 +15,7 @@ use crate::fir_convolve::{FirConvolve, BytePrecalcDecimator}; // ADD BytePrecalc
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Write, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::time::Instant;
 
 // ADD (near top, after use statements)
@@ -26,6 +26,7 @@ pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
     dither: Dither,
+    filt_type: char,
 
     dsd_data: Vec<u8>,
     float_data: Vec<f64>,
@@ -45,6 +46,8 @@ pub struct ConversionContext {
     // NEW: Optional 5/147 (DSD128 -> 192 kHz) cascade resamplers
     eq_5over147_resamplers: Option<Vec<Equi5Over147Resampler>>,
     total_dsd_bytes_processed: u64, // ADD: accumulate total input DSD bytes read
+    upsample_ratio: u32, // NEW: L in L/M fractional (zero‑stuff) paths; 1 for pure integer decim
+    decim_ratio: i32,
 }
 
 // Chebyshev 64:1 decimator using BytePrecalcDecimator (byte-level table lookups)
@@ -371,6 +374,7 @@ impl ConversionContext {
         in_ctx: InputContext,
         out_ctx: OutputContext,
         dither: Dither,
+        filt_type: char,
         verbose_param: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize; // bytes per channel
@@ -378,8 +382,53 @@ impl ConversionContext {
         let bytes_per_sample = out_ctx.bytes_per_sample as usize;
         let lsb_first = in_ctx.lsbit_first != 0;
         let dsd_rate = in_ctx.dsd_rate;
-        let decim_ratio = out_ctx.decim_ratio;
-        let filt_type = out_ctx.filt_type;
+
+        // Determine decimation ratio from desired PCM output rate (Hz).
+        // For fractional cascade paths:
+        //   96 kHz  -> decim 294 (5/294 path, DSD128 -> 96k)
+        //   192 kHz -> decim 147 (5/147 path, DSD128 -> 192k)
+        //   384 kHz -> decim 147 (10/147 path, DSD128 -> 384k)
+        // Otherwise, fall back to deriving an integer ratio if possible, or default 64.
+        let decim_ratio: i32 = if out_ctx.rate == 96_000 {
+            294
+        } else if out_ctx.rate == 192_000 || out_ctx.rate == 384_000 {
+            147
+        } else {
+            // Attempt automatic integer decimation: base DSD rate = 2.8224e6 * input_rate
+            const DSD64_BASE: i32 = 2_822_400;
+            let base = DSD64_BASE * in_ctx.dsd_rate;
+            if out_ctx.rate > 0 && base % out_ctx.rate == 0 {
+                base / out_ctx.rate
+            } else {
+                // Preserve previous behavior (common default integer path)
+                64
+            }
+        };
+        if verbose_param {
+            eprintln!(
+                "Selected decimation ratio: {} (requested output rate: {})",
+                decim_ratio, out_ctx.rate
+            );
+        }
+
+        // Determine upsample_ratio (L in L/M) based on decimation ratio and target output rate.
+        // Logic:
+        //   if decim_ratio < 147 -> L = 1 (pure integer decimation path)
+        //   else if output_rate == 384000 -> L = 10 (10/147 fractional path)
+        //   else -> L = 5 (5/294 or 5/147 fractional path)
+        let upsample_ratio: u32 = if decim_ratio < 147 {
+            1
+        } else if out_ctx.rate == 384_000 {
+            10
+        } else {
+            5
+        };
+        if verbose_param {
+            eprintln!(
+                "Computed upsample_ratio (L): {} (decim_ratio={}, output_rate={})",
+                upsample_ratio, decim_ratio, out_ctx.rate
+            );
+        }
 
         // Decimated PCM samples per channel: 8 DSD bits per byte
         let pcm_samples_per_chan = (dsd_bytes_per_chan * 8) / decim_ratio as usize;
@@ -387,6 +436,7 @@ impl ConversionContext {
             in_ctx,
             out_ctx,
             dither,
+            filt_type,
             // Input buffer: bytes_per_chan * channels
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
             // Per-channel float buffer sized for one channel’s decimated output
@@ -412,12 +462,14 @@ impl ConversionContext {
             eq_5over294_dump_stage1: false,
             eq_5over147_resamplers: None,
             total_dsd_bytes_processed: 0,
+            upsample_ratio: upsample_ratio, // default; may be overridden below
+            decim_ratio: decim_ratio,
         };
 
         // Enable Equiripple 5/294 rational path (DSD128 -> 96k) if requested
-        if ctx.out_ctx.filt_type == 'E'
+        if ctx.filt_type == 'E'
             && ctx.in_ctx.dsd_rate == 2          // DSD128 input
-            && ctx.out_ctx.decim_ratio == 294    // User specified 294:1 decimation
+            && decim_ratio == 294    // User specified 294:1 decimation
         {
             let ch = ctx.in_ctx.channels_num as usize;
             ctx.eq_5over294_resamplers = Some((0..ch).map(|_| Equi5Over294Resampler::new()).collect());
@@ -443,12 +495,13 @@ impl ConversionContext {
                     eprintln!("[DBG] Applied +14 dB makeup to scale_factor (5/294). New scale_factor = {}", ctx.out_ctx.scale_factor);
                 }
             }
+            //ctx.upsample_ratio = 5; // L for this fractional cascade (even when dumping stage1)
         }
 
         // Chebyshev 64:1 path
-        if ctx.out_ctx.filt_type == 'C'
+        if ctx.filt_type == 'C'
             && ctx.in_ctx.dsd_rate == 2
-            && ctx.out_ctx.decim_ratio == 64
+            && decim_ratio == 64
         {
             let ch = ctx.in_ctx.channels_num as usize;
             ctx.cheb64_decims = Some((0..ch).map(|_| Cheb64Decimator::new()).collect());
@@ -459,9 +512,9 @@ impl ConversionContext {
 
         // === PATCH inside impl ConversionContext::new AFTER existing 5/294 enabling block ===
         // (Find the comment "Enable Equiripple 5/294..." and append this right after its block)
-        if ctx.out_ctx.filt_type == 'E'
+        if ctx.filt_type == 'E'
             && ctx.in_ctx.dsd_rate == 2
-            && ctx.out_ctx.decim_ratio == 147
+            && decim_ratio == 147
         {
             let ch = ctx.in_ctx.channels_num as usize;
             ctx.eq_5over147_resamplers = Some((0..ch).map(|_| Equi5Over147Resampler::new()).collect());
@@ -473,37 +526,15 @@ impl ConversionContext {
             if ctx.verbose_mode {
                 eprintln!("[DBG] Applied +14 dB makeup to scale_factor (5/147). New scale_factor = {}", ctx.out_ctx.scale_factor);
             }
+            //ctx.upsample_ratio = 5;
         }
 
-        ctx.out_ctx.set_rate(ctx.calculate_out_rate());
         ctx.out_ctx
-            .set_block_size(ctx.in_ctx.block_size, ctx.in_ctx.channels_num);
+            .set_channels_num(ctx.in_ctx.channels_num);
         ctx.out_ctx.init_file()?;
         ctx.dither.init();
 
         Ok(ctx)
-    }
-
-    fn calculate_out_rate(&self) -> i32 {
-        if self.in_ctx.dsd_rate == 2
-            && self.out_ctx.filt_type == 'E'
-            && self.eq_5over294_resamplers.is_some()
-            && self.out_ctx.decim_ratio == 294
-        {
-            if self.eq_5over294_dump_stage1 {
-                return ((DSD_64_RATE as i64) * (self.in_ctx.dsd_rate as i64) * 5 / 14) as i32;
-            } else {
-                return ((DSD_64_RATE as i64) * (self.in_ctx.dsd_rate as i64) * 5 / 294) as i32;
-            }
-        }
-        if self.in_ctx.dsd_rate == 2
-            && self.out_ctx.filt_type == 'E'
-            && self.eq_5over147_resamplers.is_some()
-            && self.out_ctx.decim_ratio == 147
-        {
-            return ((DSD_64_RATE as i64) * (self.in_ctx.dsd_rate as i64) * 5 / 147) as i32;
-        }
-        ((DSD_64_RATE as i32) * self.in_ctx.dsd_rate / self.out_ctx.decim_ratio) as i32
     }
 
     // Derive output path like the C++ writeFile(): basename + proper extension, or "output.xxx" for stdin
@@ -580,11 +611,11 @@ impl ConversionContext {
                 _ => "unknown",
             }
         );
-        eprintln!("Decimation Ratio: {}", self.out_ctx.decim_ratio);
+        eprintln!("Decimation Ratio: {}", self.decim_ratio);
         eprintln!("Output Sample Rate: {} Hz", self.out_ctx.rate);
         eprintln!(
             "Filter Type: {}",
-            match self.out_ctx.filt_type {
+            match self.filt_type {
                 'X' => "XLD",
                 'D' => "Original",
                 'E' => "Equiripple",
@@ -605,6 +636,7 @@ impl ConversionContext {
         );
         eprintln!("Block Size: {} bytes", self.in_ctx.block_size);
         eprintln!("Scaling Factor: {}", self.out_ctx.scale_factor);
+        eprintln!("Upsample Ratio (L): {}", self.upsample_ratio);
         eprintln!("");
 
         // Process blocks
@@ -880,7 +912,7 @@ impl ConversionContext {
                 } else if self.eq_5over147_resamplers.is_some() {
                     (((bits_in * 5) + 146) / 147, true) // ceiling(bits*5/147)
                 } else {
-                    ((bits_in) / (self.out_ctx.decim_ratio as usize), false)
+                    ((bits_in) / (self.decim_ratio as usize), false)
                 };
             // Add small safety (max +1) to avoid truncation at block boundaries.
             let buf_needed = estimate_frames + if is_rational_5 { 2 } else { 0 };
@@ -941,7 +973,7 @@ impl ConversionContext {
                         self.in_ctx.dsd_stride as isize,
                         &mut self.float_data[..estimate_frames],
                         1,
-                        self.out_ctx.decim_ratio,
+                        self.decim_ratio,
                     )?;
                     frames_used_per_chan = estimate_frames;
                 }
@@ -1031,19 +1063,19 @@ impl ConversionContext {
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         if self.in_ctx.dsd_rate == 2
-            && ![16, 32, 64, 147, 294].contains(&self.out_ctx.decim_ratio)
+            && ![16, 32, 64, 147, 294].contains(&self.decim_ratio)
         {
             return Err("Only decimation value of 16, 32, 64, 147, or 294 allowed with dsd128 input.".into());
-        } else if self.in_ctx.dsd_rate == 1 && ![8, 16, 32].contains(&self.out_ctx.decim_ratio) {
+        } else if self.in_ctx.dsd_rate == 1 && ![8, 16, 32].contains(&self.decim_ratio) {
             return Err("Only decimation value of 8, 16, or 32 allowed with dsd64 input.".into());
         }
-        if self.out_ctx.decim_ratio == 294
-            && !(self.in_ctx.dsd_rate == 2 && self.out_ctx.filt_type == 'E')
+        if self.decim_ratio == 294
+            && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E')
         {
             return Err("294:1 decimation currently only supported for DSD128 with Equiripple filter.".into());
         }
-        if self.out_ctx.decim_ratio == 147
-            && !(self.in_ctx.dsd_rate == 2 && self.out_ctx.filt_type == 'E')
+        if self.decim_ratio == 147
+            && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E')
         {
             return Err("147:1 decimation currently only supported for DSD128 with Equiripple filter.".into());
         }
