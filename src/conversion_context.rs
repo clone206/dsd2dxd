@@ -2,10 +2,14 @@ use crate::audio_file::AudioFileFormat;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 use crate::dsd2pcm::Dxd;
+use crate::dsd2pcm::HTAPS_1MHZ_3TO1_EQ;
 use crate::dsd2pcm::HTAPS_288K_3TO1_EQ;
 use crate::dsd2pcm::HTAPS_2MHZ_7TO1_EQ; // NEW second-stage (7:1)
 use crate::dsd2pcm::HTAPS_4MHZ_7TO1_EQ; // NEW: ~4.032 MHz -> /7
-use crate::dsd2pcm::HTAPS_576K_3TO1_EQ; // NEW: 576 kHz -> /3 (final 192 kHz)
+use crate::dsd2pcm::HTAPS_576K_3TO1_EQ;
+use crate::dsd2pcm::HTAPS_8MHZ_7TO1_EQ;
+use crate::dsd2pcm::HTAPS_DDRX20_7TO1_EQ;
+// NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
 use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
@@ -132,13 +136,26 @@ impl EquiLMResampler {
                 s
             }
             147 => {
-                // Note: first-stage taps here handle ×L -> /7 (used for both L=5 and L=10 paths).
-                let fir1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
-                let fir2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
-                let fir3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
-                let full1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
-                let full2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
-                let full3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
+                // Select taps based on upsample factor L for the M=147 path:
+                // - L=5  -> 192 kHz path (existing taps)
+                // - L=10 -> 384 kHz path (new taps)
+                let (fir1, fir2, fir3, full1, full2, full3) = if l == 10 {
+                    let f1 = FirConvolve::new(&HTAPS_DDRX20_7TO1_EQ);
+                    let f2 = FirConvolve::new(&HTAPS_8MHZ_7TO1_EQ);
+                    let f3 = FirConvolve::new(&HTAPS_1MHZ_3TO1_EQ);
+                    let fl1 = (HTAPS_DDRX20_7TO1_EQ.len() * 2) as u64;
+                    let fl2 = (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64;
+                    let fl3 = (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64;
+                    (f1, f2, f3, fl1, fl2, fl3)
+                } else {
+                    let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
+                    let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
+                    let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
+                    let fl1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
+                    let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
+                    let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
+                    (f1, f2, f3, fl1, fl2, fl3)
+                };
                 let delay1 = (full1 - 1) / 2;
                 let delay2 = (full2 - 1) / 2;
                 let delay3 = (full3 - 1) / 2;
@@ -172,8 +189,9 @@ impl EquiLMResampler {
                         );
                     } else {
                         eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3).",
-                            l
+                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} taps.",
+                            l,
+                            if l == 10 { "384k (DDR×20, 8MHz, 1MHz)" } else { "192k (DDR×5, 4MHz, 576k)" }
                         );
                     }
                 }
@@ -375,12 +393,25 @@ impl ConversionContext {
                     .collect(),
             );
 
-            // Apply ~+14 dB makeup after full cascades (not for stage1 dump)
+            // Apply makeup after full cascades (not for stage1 dump).
+            // Keep the existing +14 dB baseline used for L=5 and add a proportional
+            // correction for other L. For L=10 this is +6.02 dB extra (×2), totaling ~+20 dB.
             if !ctx.lm_dump_stage1 {
-                ctx.out_ctx.scale_factor *= MAKEUP_GAIN_FRAC_PATH_14DB;
+                let l = ctx.upsample_ratio as f64;
+                let l_ref = 5.0;
+                let l_adjust = l / l_ref; // L=5 -> 1.0, L=10 -> 2.0 (+6.02 dB)
+                let makeup = MAKEUP_GAIN_FRAC_PATH_14DB * l_adjust;
+                ctx.out_ctx.scale_factor *= makeup;
                 if ctx.verbose_mode {
+                    let extra_db = 20.0 * l_adjust.log10();
                     eprintln!(
-                        "[DBG] Applied +14 dB makeup to scale_factor (L/M). New scale_factor = {}",
+                        "[DBG] Applied makeup: +14.00 dB {} (L-adjust = {:.3}x). New scale_factor = {}",
+                        if extra_db >= 0.0 {
+                            format!("+{:.2} dB", extra_db)
+                        } else {
+                            format!("{:.2} dB", extra_db)
+                        },
+                        l_adjust,
                         ctx.out_ctx.scale_factor
                     );
                 }
