@@ -152,7 +152,7 @@ impl InputContext {
                                 );
                             }
 
-                            ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), false);
+                            ctx.verbose(&format!("Audio length in bytes: {}", ctx.audio_length), true);
                             ctx.verbose(
                                 &format!(
                                     "Container: sr={}Hz channels={} interleaved={} block_size/ch={} pos={}",

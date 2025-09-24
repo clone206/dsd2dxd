@@ -49,6 +49,10 @@ pub struct ConversionContext {
     total_dsd_bytes_processed: u64, // ADD: accumulate total input DSD bytes read
     upsample_ratio: u32, // NEW: L in L/M fractional (zero‑stuff) paths; 1 for pure integer decim
     decim_ratio: i32,
+    // Diagnostics
+    diag_bits_in: u64,               // total DSD input bits seen
+    diag_expected_frames_floor: u64, // floor(bits * L / M)
+    diag_frames_out: u64,            // actual PCM frames produced (per channel count)
 }
 
 // ====================================================================================
@@ -205,13 +209,14 @@ impl EquiLMResampler {
     #[inline]
     fn push_bit_lm(&mut self, bit: u8, dump_stage1: bool) -> Option<f64> {
         let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
+        let mut out: Option<f64> = None;
         for p in 0..self.up_factor {
             let xi8 = if p == 0 { bit_i8 } else { 0 };
             let y1 = self.fir1.process_sample_i8(xi8);
             let idx_up = self.ups_index;
             self.ups_index += 1;
 
-            // Prime stage 1 delay
+            // Prime stage 1
             if !self.primed1 {
                 if idx_up >= self.delay1 {
                     self.primed1 = true;
@@ -219,16 +224,17 @@ impl EquiLMResampler {
                 }
                 continue;
             }
-            // Stage 1 decimation counter
             self.phase1 += 1;
             if self.phase1 != self.decim1 {
                 continue;
             }
             self.phase1 = 0;
 
-            // If dumping stage 1, return immediately at the boundary
+            // Stage1 dump mode: capture stage1 output but DO NOT early return
+            // (we still must process the remaining zero-stuffed samples for correctness).
             if dump_stage1 {
-                return Some(y1);
+                out = Some(y1);
+                continue;
             }
 
             // Stage 2
@@ -262,10 +268,22 @@ impl EquiLMResampler {
             self.phase3 += 1;
             if self.phase3 == self.decim3 {
                 self.phase3 = 0;
-                return Some(y3);
+                out = Some(y3);
             }
         }
-        None
+        out
+    }
+
+    #[inline]
+    fn output_latency_frames(&self, dump_stage1: bool) -> f64 {
+        if dump_stage1 {
+            return (self.delay1 as f64) / (self.decim1 as f64);
+        }
+        let l1 = (self.delay1 as f64)
+            / (self.decim1 as f64 * self.decim2 as f64 * self.decim3 as f64);
+        let l2 = (self.delay2 as f64) / (self.decim2 as f64 * self.decim3 as f64);
+        let l3 = (self.delay3 as f64) / (self.decim3 as f64);
+        l1 + l2 + l3
     }
 }
 
@@ -358,8 +376,11 @@ impl ConversionContext {
             eq_lm_resamplers: None,
             lm_dump_stage1: false,
             total_dsd_bytes_processed: 0,
-            upsample_ratio: upsample_ratio, // default; may be overridden below
+            upsample_ratio: upsample_ratio,
             decim_ratio: decim_ratio,
+            diag_bits_in: 0,
+            diag_expected_frames_floor: 0,
+            diag_frames_out: 0,
         };
 
         // Enable equiripple L/M cascade path when requested (E) and supported ratios
@@ -589,10 +610,57 @@ impl ConversionContext {
             let m = (total_secs % 3600) / 60;
             let s = total_secs % 60;
             eprintln!(
-                "Conversion Time: {:02}:{:02}:{:02}  (Speed: {:.2}x realtime)",
-                h, m, s, speed
+                "{} bytes processed in {:02}:{:02}:{:02}  (Speed: {:.2}x realtime)",
+                self.total_dsd_bytes_processed, h, m, s, speed
             );
         }
+
+        // ---- Diagnostics: expected vs actual output length (verbose only) ----
+        if self.verbose_mode {
+             let ch = self.in_ctx.channels_num.max(1) as u64;
+             let bps = self.out_ctx.bytes_per_sample as u64;
+             let expected_frames = self.diag_expected_frames_floor;
+             let actual_frames = self.diag_frames_out;
+             // Estimate latency (frames not emitted at start) for rational path
+             let mut latency_frames_est = 0u64;
+             if let Some(ref rvec) = self.eq_lm_resamplers {
+                 if let Some(r0) = rvec.first() {
+                     latency_frames_est = r0.output_latency_frames(self.lm_dump_stage1).round() as u64;
+                 }
+             }
+             let expected_bytes = expected_frames * ch * bps;
+             let actual_bytes = actual_frames * ch * bps;
+             let diff_frames = expected_frames as i64 - actual_frames as i64;
+             let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
+             let pct = if expected_frames > 0 {
+                 (diff_frames as f64) * 100.0 / (expected_frames as f64)
+             } else { 0.0 };
+             eprintln!("\n[DIAG] Output length accounting:");
+             eprintln!(
+                 "[DIAG] DSD bits in: {}  L={}  M={}  stage1_dump={}",
+                 self.diag_bits_in, self.upsample_ratio, self.decim_ratio, self.lm_dump_stage1
+             );
+             eprintln!(
+                 "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
+                 expected_frames, actual_frames, diff_frames, pct
+             );
+             if latency_frames_est > 0 {
+                 let post_latency = expected_frames.saturating_sub(latency_frames_est);
+                 let residual = post_latency as i64 - actual_frames as i64;
+                 eprintln!(
+                     "[DIAG] Est. latency frames: {}  Expected after latency: {}  Residual diff: {}",
+                     latency_frames_est, post_latency, residual
+                 );
+             }
+             eprintln!(
+                 "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
+                 expected_bytes, actual_bytes, diff_bytes
+             );
+             eprintln!(
+                 "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
+No data is lost due to buffer resizing; resizing only adjusts capacity."
+             );
+         }
 
         Ok(())
     }
@@ -780,6 +848,26 @@ impl ConversionContext {
             // Bytes per channel in this read
             let block_remaining: usize = read_size / channels;
 
+            // ---- DIAGNOSTICS: accumulate input bits & recompute expected frames ----
+            // Total DSD bits seen so far (all channels counted per-channel implicitly by later math)
+            self.diag_bits_in += (block_remaining as u64) * 8;
+            if self.eq_lm_resamplers.is_some() {
+                // Rational path: frames ≈ floor(bits * L / M) (or first-stage denominator if dumping)
+                let eff_L = self.upsample_ratio as u64;
+                let eff_M = if self.lm_dump_stage1 {
+                    if self.decim_ratio == 294 { 14 } else { 7 }
+                } else {
+                    self.decim_ratio
+                } as u64;
+                self.diag_expected_frames_floor = (self.diag_bits_in * eff_L) / eff_M;
+            } else {
+                // Integer / Chebyshev / original FIR path
+                if self.decim_ratio > 0 {
+                    self.diag_expected_frames_floor = self.diag_bits_in / (self.decim_ratio as u64);
+                }
+            }
+            // ------------------------------------------------------------------------
+
             // Compute frames per channel for this block:
             // Normal path: floor(bits / decim_ratio)
             // 5/294 path: dynamic; we allocate a ceiling estimate + safety and then use actual produced count.
@@ -895,6 +983,9 @@ impl ConversionContext {
             // Derive actual byte count (may differ from estimate in rational path)
             let pcm_block_bytes =
                 frames_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
+
+            // Diagnostics: add actual produced frames (per channel)
+            self.diag_frames_out += frames_used_per_chan as u64;
 
             if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
                 self.write_block(pcm_block_bytes)?;
