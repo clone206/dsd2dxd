@@ -152,14 +152,10 @@ impl EquiLMResampler {
                 s
             }
             147 => {
-                // Select taps for M=147:
-                // - L=5,  target=96k  -> NEW DSD64 -> 96k path (×5 -> /7 using HTAPS_DSDX5_7TO1_EQ,
-                //                               then /7 (2MHz) and /3 (288k) to 96k)
-                // - L=5,  target=192k -> existing DDR×5 -> 4MHz -> 576k taps
-                // - L=10, target=384k -> DDR×10 -> 8MHz -> 1MHz taps
-                // - L=10, target=192k -> reuse DDR×5 -> 4MHz -> 576k taps
-                let (fir1, fir2, fir3, full1, full2, full3) = if l == 10 {
-                    if target_rate_hz == 384_000 {
+                // Select taps for M=147
+                let (fir1, fir2, fir3, full1, full2, full3) =
+                    if (l == 10 || l == 20) && target_rate_hz == 384_000 {
+                        // 384k: reuse DDR×10 first-stage taps for both L=10 (DSD128) and L=20 (DSD64)
                         let f1 = FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ);
                         let f2 = FirConvolve::new(&HTAPS_8MHZ_7TO1_EQ);
                         let f3 = FirConvolve::new(&HTAPS_1MHZ_3TO1_EQ);
@@ -167,18 +163,8 @@ impl EquiLMResampler {
                         let fl2 = (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64;
                         let fl3 = (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64;
                         (f1, f2, f3, fl1, fl2, fl3)
-                    } else {
-                        let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
-                        let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
-                        let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
-                        let fl1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
-                        let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
-                        let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
-                        (f1, f2, f3, fl1, fl2, fl3)
-                    }
-                } else {
-                    if target_rate_hz == 96_000 {
-                        // NEW: DSD64 -> 96 kHz path (×5 -> /7 using DSDX5 taps, /7 at ~2.016 MHz, /3 at 288 kHz)
+                    } else if l == 5 && target_rate_hz == 96_000 {
+                        // 96k: DSD×5 -> /7 (DSDX5 taps), then /7 (2MHz), then /3 (288k)
                         let f1 = FirConvolve::new(&HTAPS_DSDX5_7TO1_EQ);
                         let f2 = FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ);
                         let f3 = FirConvolve::new(&HTAPS_288K_3TO1_EQ);
@@ -186,8 +172,8 @@ impl EquiLMResampler {
                         let fl2 = (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64;
                         let fl3 = (HTAPS_288K_3TO1_EQ.len() * 2) as u64;
                         (f1, f2, f3, fl1, fl2, fl3)
-                    } else {
-                        // Existing DSD128 -> 192 kHz path
+                    } else if l == 10 && target_rate_hz == 192_000 {
+                        // 192k: DDR×5 -> 4MHz -> 576k taps (existing)
                         let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
                         let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
                         let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
@@ -195,23 +181,31 @@ impl EquiLMResampler {
                         let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
                         let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
                         (f1, f2, f3, fl1, fl2, fl3)
-                    }
-                };
+                    } else {
+                        // Default to 192k cascade for other L/M=147 requests
+                        let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
+                        let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
+                        let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
+                        let fl1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
+                        let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
+                        let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
+                        (f1, f2, f3, fl1, fl2, fl3)
+                    };
                 let delay1 = (full1 - 1) / 2;
                 let delay2 = (full2 - 1) / 2;
                 let delay3 = (full3 - 1) / 2;
                 let s = Self {
-                    fir1, up_factor: l, decim1: 7,  delay1, ups_index: 0, phase1: 0, primed1: false,
-                    fir2, decim2: 7,  delay2, mid_index2: 0, phase2: 0, primed2: false,
-                    fir3, decim3: 3,  delay3, mid_index3: 0, phase3: 0, primed3: false,
+                    fir1, up_factor: l, decim1: 7, delay1, ups_index: 0, phase1: 0, primed1: false,
+                    fir2, decim2: 7, delay2, mid_index2: 0, phase2: 0, primed2: false,
+                    fir3, decim3: 3, delay3, mid_index3: 0, phase3: 0, primed3: false,
                     m_total: 147,
                 };
                 if verbose && print_config {
                     if dump_stage1 {
                         eprintln!("[DBG] Equiripple L/M path: L={} M=147 — STAGE1 DUMP (×L -> /7).", l);
                     } else {
-                        let taps_label = if l == 10 && target_rate_hz == 384_000 {
-                            "384k (DDR×10, 8MHz, 1MHz)"
+                        let taps_label = if (l == 10 || l == 20) && target_rate_hz == 384_000 {
+                            "384k (DDRx10 taps, 8MHz, 1MHz)"
                         } else if l == 5 && target_rate_hz == 96_000 {
                             "96k (DSD×5, 2MHz, 288k)"
                         } else {
@@ -367,11 +361,13 @@ impl ConversionContext {
         }
 
         // Determine upsample_ratio (L in L/M).
-        // For 96k (both DSD64 and DSD128) we use L = 5.
+        // 384k: DSD64 -> L=20, DSD128 -> L=10
+        // 192k: DSD64 -> L=10, DSD128 -> L=5
+        // 96k : L=5
         let upsample_ratio: u32 = if decim_ratio < 147 {
             1
         } else if out_ctx.rate == 384_000 {
-            10
+            if in_ctx.dsd_rate == 1 { 20 } else { 10 }
         } else if out_ctx.rate == 192_000 {
             if in_ctx.dsd_rate == 1 { 10 } else { 5 }
         } else if out_ctx.rate == 96_000 {
@@ -423,30 +419,48 @@ impl ConversionContext {
             && ctx.in_ctx.dsd_rate >= 1
             && (decim_ratio == 294 || decim_ratio == 147)
         {
-             let ch = ctx.in_ctx.channels_num as usize;
-             // Stage1 dump flag (unchanged)
-             let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
-                 .map(|v| {
-                     let vl = v.to_ascii_lowercase();
-                     vl == "1" || vl == "true" || vl == "yes" || vl == "on"
-                 })
-                 .unwrap_or(false);
-             ctx.lm_dump_stage1 = dump_stage1;
+            let ch = ctx.in_ctx.channels_num as usize;
 
-             // Build one resampler per channel; print config once (chan 0)
-             ctx.eq_lm_resamplers = Some(
-                 (0..ch)
-                     .map(|i| EquiLMResampler::new(
-                         ctx.upsample_ratio,
-                         decim_ratio,
-                         ctx.verbose_mode,
-                         ctx.lm_dump_stage1,
-                         i == 0,
-                         ctx.out_ctx.rate, // guide tap selection (96k vs 192k vs 384k)
-                     ))
-                     .collect(),
-             );
-         }
+            // Stage1 dump flag (unchanged)
+            let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
+                .map(|v| {
+                    let vl = v.to_ascii_lowercase();
+                    vl == "1" || vl == "true" || vl == "yes" || vl == "on"
+                })
+                .unwrap_or(false);
+            ctx.lm_dump_stage1 = dump_stage1;
+
+            // Build one resampler per channel; print config once (chan 0)
+            ctx.eq_lm_resamplers = Some(
+                (0..ch)
+                    .map(|i| EquiLMResampler::new(
+                        ctx.upsample_ratio,
+                        decim_ratio,
+                        ctx.verbose_mode,
+                        ctx.lm_dump_stage1,
+                        i == 0,
+                        ctx.out_ctx.rate, // guide tap selection (96k vs 192k vs 384k)
+                    ))
+                    .collect(),
+            );
+
+            // Apply makeup gain for fractional L/M paths by increasing the global scaling factor.
+            // This mirrors existing practice for other L/M paths: scale by L (zero-stuff factor).
+            // Examples:
+            //   L=5  -> +14.0 dB (≈ ×5.012) ~ ×5
+            //   L=10 -> +20.0 dB (×10)
+            //   L=20 -> +26.02 dB (×20)
+            if ctx.upsample_ratio > 1 {
+                let l = ctx.upsample_ratio as f64;
+                ctx.out_ctx.scale_factor *= l;
+                if ctx.verbose_mode {
+                    eprintln!(
+                        "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
+                        ctx.upsample_ratio, ctx.out_ctx.scale_factor
+                    );
+                }
+            }
+        }
 
         // Chebyshev 64:1 path
         if ctx.filt_type == 'C' && ctx.in_ctx.dsd_rate == 2 && decim_ratio == 64 {
