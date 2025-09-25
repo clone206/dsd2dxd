@@ -1,4 +1,5 @@
 use crate::audio_file::AudioFileFormat;
+use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 use crate::dsd2pcm::Dxd;
@@ -13,6 +14,7 @@ use crate::dsd2pcm::HTAPS_DDRX10_7TO1_EQ;
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
 use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
+use crate::dsd2pcm::HTAPS_DSD64_32TO1_EQ; // NEW: Equiripple 32:1 half taps for DSD64 -> 88.2 kHz
 use crate::dsdin_sys::DSD_64_RATE;
 use crate::fir_convolve::{FirConvolve};
 use crate::input::InputContext;
@@ -42,6 +44,8 @@ pub struct ConversionContext {
     verbose_mode: bool,
     // ADD: Optional Chebyshev 64:1 decimators (one per channel)
     cheb64_decims: Option<Vec<BytePrecalcDecimator>>,
+    // NEW: Optional Equiripple 32:1 decimators (DSD64 -> 88.2 kHz) using BytePrecalcDecimator
+    eq32_decims: Option<Vec<BytePrecalcDecimator>>,
     // Generalized equiripple L/M resamplers (covers 5/294, 5/147, 10/147)
     eq_lm_resamplers: Option<Vec<EquiLMResampler>>,
     // Debug flag: dump after first stage (×L -> /decim1), for any L/M
@@ -401,6 +405,7 @@ impl ConversionContext {
             last_samps_clipped_high: 0,
             verbose_mode: verbose_param,
             cheb64_decims: None,
+            eq32_decims: None,
             eq_lm_resamplers: None,
             lm_dump_stage1: false,
             total_dsd_bytes_processed: 0,
@@ -477,6 +482,22 @@ impl ConversionContext {
             );
             if ctx.verbose_mode {
                 eprintln!("[DBG] Chebyshev 64:1 direct FIR path enabled.");
+            }
+        }
+
+        // NEW: Equiripple 32:1 path (DSD64 -> 88.2 kHz) using BytePrecalcDecimator
+        if ctx.filt_type == 'E' && ctx.in_ctx.dsd_rate == 1 && decim_ratio == 32 {
+            let ch = ctx.in_ctx.channels_num as usize;
+            ctx.eq32_decims = Some(
+                (0..ch)
+                    .map(|_| {
+                        BytePrecalcDecimator::new(&HTAPS_DSD64_32TO1_EQ, 32)
+                            .expect("BytePrecalcDecimator init failed (32:1 EQ)")
+                    })
+                    .collect(),
+            );
+            if ctx.verbose_mode {
+                eprintln!("[DBG] Equiripple 32:1 path enabled (DSD64 -> 88.2 kHz) using BytePrecalcDecimator.");
             }
         }
 
@@ -806,6 +827,37 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         produced
     }
 
+    // NEW: Produce one channel via Equiripple 32:1 integer path (BytePrecalcDecimator)
+    fn process_eq32_channel(
+        &mut self,
+        chan: usize,
+        block_remaining: usize,
+        dsd_chan_offset: usize,
+        dsd_stride: isize,
+        buf_capacity: usize,
+    ) -> usize {
+        let Some(decs) = self.eq32_decims.as_mut() else { return 0; };
+        let dec = &mut decs[chan];
+        let stride = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
+        let mut produced = 0usize;
+        let lsb_first = self.in_ctx.lsbit_first != 0;
+
+        // Gather this channel's bytes (respect stride). BytePrecalcDecimator expects LSB-first bits.
+        let mut chan_bytes = Vec::with_capacity(block_remaining);
+        for i in 0..block_remaining {
+            let byte_index = if stride == 0 { dsd_chan_offset + i } else { dsd_chan_offset + i * stride };
+            if byte_index >= self.dsd_data.len() { break; }
+            let b = self.dsd_data[byte_index];
+            chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
+        }
+        // Process in one shot into float_data (bounded by buf_capacity)
+        produced = dec.process_bytes(&chan_bytes, &mut self.float_data[..buf_capacity]);
+        if produced < buf_capacity {
+            self.float_data[produced..buf_capacity].fill(0.0);
+        }
+        produced
+    }
+
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
@@ -900,18 +952,21 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             // 5/294 path: dynamic; we allocate a ceiling estimate + safety and then use actual produced count.
             let bits_in = block_remaining * 8;
             let (estimate_frames, is_rational_lm) = if self.eq_lm_resamplers.is_some() {
-                let l = self.upsample_ratio as usize;
-                if self.lm_dump_stage1 {
-                    // Stage1 dump after first decimator (14 for M=294, 7 for M=147)
-                    let d1 = if self.decim_ratio == 294 { 14 } else { 7 };
-                    ((bits_in * l + (d1 - 1)) / d1, true) // ceil(bits*L/d1)
-                } else {
-                    let m = self.decim_ratio as usize; // 294 or 147
-                    ((bits_in * l + (m - 1)) / m, true) // ceil(bits*L/M)
-                }
-            } else {
-                ((bits_in) / (self.decim_ratio as usize), false)
-            };
+                 let l = self.upsample_ratio as usize;
+                 if self.lm_dump_stage1 {
+                     // Stage1 dump after first decimator (14 for M=294, 7 for M=147)
+                     let d1 = if self.decim_ratio == 294 { 14 } else { 7 };
+                     ((bits_in * l + (d1 - 1)) / d1, true) // ceil(bits*L/d1)
+                 } else {
+                     let m = self.decim_ratio as usize; // 294 or 147
+                     ((bits_in * l + (m - 1)) / m, true) // ceil(bits*L/M)
+                 }
+             } else if self.eq32_decims.is_some() {
+                // Integer 32:1 equiripple path
+                (bits_in / 32, false)
+             } else {
+                 ((bits_in) / (self.decim_ratio as usize), false)
+             };
             // Add small safety (max +1) to avoid truncation at block boundaries.
             let buf_needed = estimate_frames + if is_rational_lm { 2 } else { 0 };
             if self.float_data.len() < buf_needed {
@@ -952,6 +1007,19 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                         dsd_chan_offset,
                         self.in_ctx.dsd_stride as isize,
                         buf_needed,
+                    );
+                    if chan == 0 {
+                        frames_used_per_chan = produced;
+                    } else {
+                        debug_assert_eq!(frames_used_per_chan, produced);
+                    }
+                } else if self.eq32_decims.is_some() {
+                    let produced = self.process_eq32_channel(
+                        chan,
+                        block_remaining,
+                        dsd_chan_offset,
+                        self.in_ctx.dsd_stride as isize,
+                        estimate_frames,
                     );
                     if chan == 0 {
                         frames_used_per_chan = produced;
@@ -1154,11 +1222,3 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     }
 }
 
-// ---- ADD local bit reversal helper (LSB <-> MSB) if not already imported -------------
-#[inline]
-fn bit_reverse_u8(mut b: u8) -> u8 {
-    b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
-    b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
-    b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
-    b
-}
