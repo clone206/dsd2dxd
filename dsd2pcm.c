@@ -208,7 +208,7 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
             ptr->decimation = 32;
             ptr->delay = 8;
         }
-        else
+        else if (decimation != 147)
         {
             err = 1;
         }

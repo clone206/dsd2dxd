@@ -8,7 +8,7 @@ use crate::dsd2pcm::HTAPS_2MHZ_7TO1_EQ; // NEW second-stage (7:1)
 use crate::dsd2pcm::HTAPS_4MHZ_7TO1_EQ; // NEW: ~4.032 MHz -> /7
 use crate::dsd2pcm::HTAPS_576K_3TO1_EQ;
 use crate::dsd2pcm::HTAPS_8MHZ_7TO1_EQ;
-use crate::dsd2pcm::HTAPS_DDRX20_7TO1_EQ;
+use crate::dsd2pcm::HTAPS_DDRX10_7TO1_EQ;
 // NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
@@ -90,7 +90,14 @@ struct EquiLMResampler {
 }
 
 impl EquiLMResampler {
-    fn new(l: u32, m: i32, verbose: bool, dump_stage1: bool, print_config: bool) -> Self {
+    fn new(
+        l: u32,
+        m: i32,
+        verbose: bool,
+        dump_stage1: bool,
+        print_config: bool,
+        target_rate_hz: i32, // NEW: guide tap selection for L=10, M=147 (384k vs 192k)
+    ) -> Self {
         match m {
             294 => {
                 let fir1 = FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ);
@@ -140,17 +147,29 @@ impl EquiLMResampler {
                 s
             }
             147 => {
-                // Select taps based on upsample factor L for the M=147 path:
-                // - L=5  -> 192 kHz path (existing taps)
-                // - L=10 -> 384 kHz path (new taps)
+                // Select taps for M=147:
+                // - L=5 -> 192 kHz (existing taps)
+                // - L=10:
+                //     - 384 kHz path uses DDR×10 / 8MHz / 1MHz taps
+                //     - 192 kHz path (DSD64) reuses the 192k tapset (DDR×5 / 4MHz / 576k)
                 let (fir1, fir2, fir3, full1, full2, full3) = if l == 10 {
-                    let f1 = FirConvolve::new(&HTAPS_DDRX20_7TO1_EQ);
-                    let f2 = FirConvolve::new(&HTAPS_8MHZ_7TO1_EQ);
-                    let f3 = FirConvolve::new(&HTAPS_1MHZ_3TO1_EQ);
-                    let fl1 = (HTAPS_DDRX20_7TO1_EQ.len() * 2) as u64;
-                    let fl2 = (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64;
-                    let fl3 = (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64;
-                    (f1, f2, f3, fl1, fl2, fl3)
+                    if target_rate_hz == 384_000 {
+                        let f1 = FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ);
+                        let f2 = FirConvolve::new(&HTAPS_8MHZ_7TO1_EQ);
+                        let f3 = FirConvolve::new(&HTAPS_1MHZ_3TO1_EQ);
+                        let fl1 = (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64;
+                        let fl2 = (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64;
+                        let fl3 = (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64;
+                        (f1, f2, f3, fl1, fl2, fl3)
+                    } else {
+                        let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
+                        let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
+                        let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
+                        let fl1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
+                        let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
+                        let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
+                        (f1, f2, f3, fl1, fl2, fl3)
+                    }
                 } else {
                     let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
                     let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
@@ -192,10 +211,14 @@ impl EquiLMResampler {
                             l
                         );
                     } else {
+                        let taps_label = if l == 10 && target_rate_hz == 384_000 {
+                            "384k (DDR×10, 8MHz, 1MHz)"
+                        } else {
+                            "192k (DDR×5, 4MHz, 576k)"
+                        };
                         eprintln!(
                             "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} taps.",
-                            l,
-                            if l == 10 { "384k (DDR×20, 8MHz, 1MHz)" } else { "192k (DDR×5, 4MHz, 576k)" }
+                            l, taps_label
                         );
                     }
                 }
@@ -337,11 +360,16 @@ impl ConversionContext {
         // Logic:
         //   if decim_ratio < 147 -> L = 1 (pure integer decimation path)
         //   else if output_rate == 384000 -> L = 10 (10/147 fractional path)
-        //   else -> L = 5 (5/294 or 5/147 fractional path)
+        //   else if output_rate == 192000:
+        //       - DSDx2 (DSD128) -> L = 5
+        //       - DSDx1 (DSD64)  -> L = 10 (reuse 192k tapset)
+        //   else -> L = 5 (default fractional path)
         let upsample_ratio: u32 = if decim_ratio < 147 {
             1
         } else if out_ctx.rate == 384_000 {
             10
+        } else if out_ctx.rate == 192_000 {
+            if in_ctx.dsd_rate == 1 { 10 } else { 5 }
         } else {
             5
         };
@@ -385,12 +413,12 @@ impl ConversionContext {
 
         // Enable equiripple L/M cascade path when requested (E) and supported ratios
         if ctx.filt_type == 'E'
-            && ctx.in_ctx.dsd_rate == 2
+            && ctx.in_ctx.dsd_rate >= 1
             && (decim_ratio == 294 || decim_ratio == 147)
         {
             let ch = ctx.in_ctx.channels_num as usize;
 
-            // Stage1 dump (env DSD2DXD_DUMP_STAGE1=1/true) generalized for any M
+            // Stage1 dump flag (unchanged)
             let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
                 .map(|v| {
                     let vl = v.to_ascii_lowercase();
@@ -402,16 +430,15 @@ impl ConversionContext {
             // Build one resampler per channel; print config once (chan 0)
             ctx.eq_lm_resamplers = Some(
                 (0..ch)
-                    .map(|i| {
-                        EquiLMResampler::new(
-                            ctx.upsample_ratio,
-                            decim_ratio,
-                            ctx.verbose_mode,
-                            ctx.lm_dump_stage1,
-                            i == 0,
-                        )
-                    })
-                    .collect(),
+                    .map(|i| EquiLMResampler::new(
+                        ctx.upsample_ratio,
+                        decim_ratio,
+                        ctx.verbose_mode,
+                        ctx.lm_dump_stage1,
+                        i == 0,
+                        ctx.out_ctx.rate, // NEW: choose tapsets for L=10 M=147
+                    ))
+                     .collect(),
             );
 
             // Apply makeup after full cascades (not for stage1 dump).
@@ -1039,8 +1066,14 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 "Only decimation value of 16, 32, 64, 147, or 294 allowed with dsd128 input."
                     .into(),
             );
-        } else if self.in_ctx.dsd_rate == 1 && ![8, 16, 32].contains(&self.decim_ratio) {
-            return Err("Only decimation value of 8, 16, or 32 allowed with dsd64 input.".into());
+        } else if self.in_ctx.dsd_rate == 1
+            && !([8, 16, 32].contains(&self.decim_ratio)
+                || (self.decim_ratio == 147 && self.filt_type == 'E'))
+        {
+            return Err(
+                "With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter)."
+                    .into(),
+            );
         }
         if self.decim_ratio == 294 && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E') {
             return Err(
@@ -1048,9 +1081,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     .into(),
             );
         }
-        if self.decim_ratio == 147 && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E') {
+        if self.decim_ratio == 147
+            && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 1 || self.in_ctx.dsd_rate == 2))
+        {
             return Err(
-                "147:1 decimation currently only supported for DSD128 with Equiripple filter."
+                "147:1 decimation is only supported with the Equiripple filter for DSD64 or DSD128 input."
                     .into(),
             );
         }

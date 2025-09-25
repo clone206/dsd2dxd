@@ -119,7 +119,7 @@ impl Dxd {
     }
 }
 
-pub const HTAPS_DDRX20_7TO1_EQ: [f64; 26] = [
+pub const HTAPS_DDRX10_7TO1_EQ: [f64; 26] = [
     0.06587603211871,
     0.06415828036226,
     0.06084943780377,
