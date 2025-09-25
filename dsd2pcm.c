@@ -164,6 +164,9 @@ extern dsd2pcm_ctx *dsd2pcm_init(char filtType, int lsbf, int decimation, int ds
                     ptr->decimation = 64;
                     ptr->delay = 8;
                     break;
+                case 'e':
+                case 'E':
+                    break;
                 default:
                     err = 1;
                 }
