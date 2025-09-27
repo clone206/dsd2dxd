@@ -10,6 +10,8 @@ use crate::dsd2pcm::HTAPS_DSDX5_7TO1_EQ;
 // NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
+use crate::dsd2pcm::HTAPS_DSDX10_21TO1_EQ;    // NEW: Stage1 (10 -> /21) half taps
+use crate::dsd2pcm::HTAPS_1_34MHZ_7TO1_EQ;    // NEW: Stage2 ( -> /7 ) half taps
 
 // --- Add direct single-stage polyphase path for L=5, M=294 using HTAPS_DDRX5_294TO1_EQ ---
 // Enable with env: DSD2DXD_POLY294=1  (falls back to existing 3‑stage cascade if unset)
@@ -32,22 +34,20 @@ pub struct EquiLMResampler {
     ups_index: u64,
     phase1: u32,
     primed1: bool,
-    // Stage 2
-    fir2: FirConvolve,
-    decim2: u32, // 7
-    delay2: u64,
-    mid_index2: u64,
-    phase2: u32,
-    primed2: bool,
-    // Stage 3
-    fir3: FirConvolve,
-    decim3: u32, // 3
+    // Stage 2 (polyphase decimator by 7)
+    poly2: DecimFIRSym,
+    delay2: u64,     // original full-filter group delay (for latency calc)
+    decim2: u32,     // 7 (kept for latency formula)
+    // Stage 3 (polyphase decimator by 3)
+    poly3: DecimFIRSym,
     delay3: u64,
-    mid_index3: u64,
-    phase3: u32,
-    primed3: bool,
+    decim3: u32,     // 3
     // NEW: optional single-stage polyphase path for L=5, M=294
     poly294: Option<PolyPhaseL5M294>, // when Some => single-stage L=5/M=294 direct path
+    // --- ADD: Stage1 rational polyphase (only used when L <= decim1 and env enables) ---
+    stage1_poly: Option<Stage1PolyL>,
+    // NEW two-phase L=10/M=147 path (DSD64 -> 192k)
+    two_phase_l10_m147: Option<TwoPhaseL10M147>,
 }
 
 // NEW: PolyPhase294 struct for direct single-stage path
@@ -161,6 +161,215 @@ impl PolyPhaseL5M294 {
     }
 }
 
+// --- ADD: Stage1 rational polyphase (only used when L <= decim1 and env enables) ---
+#[derive(Debug)]
+struct Stage1PolyL {
+    // L-phase polyphase: phases[r][k] = h[r + k*L]
+    phases: Vec<Vec<f64>>,
+    l: u32,
+    m: u32,              // decim1
+    ring: Vec<f64>,
+    mask: usize,
+    w: usize,
+    input_count: u64,
+    // Rational time accumulator: acc += l; while acc >= m produce output; acc -= m.
+    acc: u32,
+    // Phase (n*M mod L): updated only when we emit an output
+    phase_mod: u32,
+    // Base input delay (ceil( (N-1)/2 / L )) to approximate group delay before first output
+    input_delay: u64,
+    primed: bool,
+}
+
+impl Stage1PolyL {
+    fn new(right_half: &[f64], l: u32, m: u32) -> Self {
+        // Full symmetric taps
+        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+        full.extend_from_slice(right_half);
+        let n = full.len();
+        let l_usize = l as usize;
+
+        // Build L phases
+        let mut phases = vec![Vec::<f64>::new(); l_usize];
+        for (i, &c) in full.iter().enumerate() {
+            phases[i % l_usize].push(c);
+        }
+
+        // Group delay in high-rate domain
+        let gd_high = (n as u64 - 1) / 2;
+        // Convert to input sample delay (ceil)
+        let input_delay = (gd_high + (l as u64 - 1)) / l as u64;
+
+        let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
+        let cap = max_len.next_power_of_two().max(64);
+        Self {
+            phases,
+            l,
+            m,
+            ring: vec![0.0; cap],
+            mask: cap - 1,
+            w: 0,
+            input_count: 0,
+            acc: 0,
+            phase_mod: 0,
+            input_delay,
+            primed: false,
+        }
+    }
+
+    #[inline]
+    fn push_bit(&mut self, bit: u8) -> Option<f64> {
+        let s = if bit != 0 { 1.0 } else { -1.0 };
+        self.ring[self.w] = s;
+        self.w = (self.w + 1) & self.mask;
+        self.input_count += 1;
+
+        self.acc += self.l;
+        if self.acc < self.m {
+            return None;
+        }
+        self.acc -= self.m;
+
+        if !self.primed {
+            if self.input_count >= self.input_delay {
+                self.primed = true;
+            } else {
+                return None;
+            }
+        }
+
+        // Phase r sequence (n_out * M) mod L tracked via phase_mod advance
+        let phase = self.phase_mod as usize;
+        let taps = &self.phases[phase];
+
+        // IMPORTANT FIX:
+        // For correct L-phase rational polyphase, taps with lower high‑rate indices
+        // correspond to OLDER input samples. We were previously multiplying them
+        // against NEWER samples, inverting time and destroying the response
+        // (white noise / aliasing). Iterate taps in REVERSE so the largest
+        // index (latest in impulse) multiplies newest sample first.
+        let mut acc_sum = 0.0;
+        let mut idx = (self.w + self.ring.len() - 1) & self.mask; // newest
+        for &c in taps.iter().rev() {
+            acc_sum += c * self.ring[idx];
+            idx = (idx + self.ring.len() - 1) & self.mask; // older sample
+        }
+
+        // Advance phase_mod
+        let step = (self.m % self.l) as u32;
+        self.phase_mod = (self.phase_mod + step) % self.l;
+
+        Some(acc_sum)
+    }
+
+    #[inline]
+    fn input_delay(&self) -> u64 {
+        self.input_delay
+    }
+}
+
+fn stage1_poly_enabled() -> bool {
+    std::env::var("DSD2DXD_STAGE1_POLY")
+        .map(|v| {
+            let v = v.to_ascii_lowercase();
+            v == "1" || v == "true" || v == "yes" || v == "on"
+        })
+        .unwrap_or(false)
+}
+
+// --- ADD: Two-phase L=10/M=147 (21 * 7) path for DSD64 -> 192 kHz --------------------
+// Custom Debug impl below (omit fir1) so do not derive Debug here.
+struct TwoPhaseL10M147 {
+    // Stage1: conventional zero-stuff + FIR (same model as original cascade)
+    fir1: FirConvolve,
+    up_factor: u32,   // L = 10
+    decim1: u32,      // 21
+    delay1: u64,
+    ups_index: u64,
+    phase1: u32,
+    primed1: bool,
+    // Stage2: integer symmetric decimator /7 with provided taps
+    stage2: DecimFIRSym,
+}
+
+impl std::fmt::Debug for TwoPhaseL10M147 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // fir1 omitted because FirConvolve does not implement Debug
+        f.debug_struct("TwoPhaseL10M147")
+            .field("up_factor", &self.up_factor)
+            .field("decim1", &self.decim1)
+            .field("delay1", &self.delay1)
+            .field("ups_index", &self.ups_index)
+            .field("phase1", &self.phase1)
+            .field("primed1", &self.primed1)
+            .field("stage2", &self.stage2)
+            .finish()
+    }
+}
+
+impl TwoPhaseL10M147 {
+    fn new() -> Self {
+        // Reconstruct full length of stage1 filter from half taps
+        let full1 = (HTAPS_DSDX10_21TO1_EQ.len() * 2) as u64;
+        let delay1 = (full1 - 1) / 2;
+        Self {
+            fir1: FirConvolve::new(&HTAPS_DSDX10_21TO1_EQ),
+            up_factor: 10,
+            decim1: 21,
+            delay1,
+            ups_index: 0,
+            phase1: 0,
+            primed1: false,
+            stage2: DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ, 7),
+        }
+    }
+
+    #[inline]
+    fn push_bit(&mut self, bit: u8) -> Option<f64> {
+        let mut out: Option<f64> = None;
+        let xi_base: i8 = if bit != 0 { 1 } else { -1 };
+        for up in 0..self.up_factor {
+            let sample = if up == 0 { xi_base } else { 0 };
+            let y1 = self.fir1.process_sample_i8(sample);
+            let idx_up = self.ups_index;
+            self.ups_index += 1;
+
+            // Prime stage1 (wait for group delay)
+            if !self.primed1 {
+                if idx_up >= self.delay1 {
+                    self.primed1 = true;
+                    self.phase1 = 0;
+                }
+                continue;
+            }
+
+            self.phase1 += 1;
+            if self.phase1 != self.decim1 {
+                continue;
+            }
+            self.phase1 = 0;
+
+            // Feed Stage2 decimator
+            if let Some(y2) = self.stage2.push(y1) {
+                out = Some(y2);
+            }
+        }
+        out
+    }
+
+    #[inline]
+    fn output_latency_frames(&self) -> f64 {
+        // Latency contributions:
+        // Stage1 delay (input samples) scaled by final rate factor L/(21*7)
+        let d1 = (self.delay1 as f64) * (self.up_factor as f64) / (self.decim1 as f64 * 7.0);
+        // Stage2 center delay (in its input domain) divided by its decimation
+        let d2 = (self.stage2.center_delay() as f64) / 7.0;
+        d1 + d2
+    }
+}
+// -------------------------------------------------------------------------------------
+
+// ====================================================================================
 impl EquiLMResampler {
     pub fn new(
         l: u32,
@@ -185,7 +394,6 @@ impl EquiLMResampler {
                         eprintln!("[DBG] Polyphase L=5/M=294 single-stage path enabled (HTAPS_DDRX5_294TO1_EQ).");
                     }
                     return Self {
-                        // Stub unused cascade fields with minimal objects (small filters)
                         fir1: FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ),
                         up_factor: l,
                         decim1: 14,
@@ -193,31 +401,42 @@ impl EquiLMResampler {
                         ups_index: 0,
                         phase1: 0,
                         primed1: true,
-                        fir2: FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ),
-                        decim2: 7,
+                        // Stage 2 (polyphase decimator by 7)
+                        poly2: DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7),
                         delay2: 0,
-                        mid_index2: 0,
-                        phase2: 0,
-                        primed2: true,
-                        fir3: FirConvolve::new(&HTAPS_288K_3TO1_EQ),
-                        decim3: 3,
+                        decim2: 7,
+                        // Stage 3 (polyphase decimator by 3)
+                        poly3: DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3),
                         delay3: 0,
-                        mid_index3: 0,
-                        phase3: 0,
-                        primed3: true,
+                        decim3: 3,
                         poly294: Some(poly),
+                        stage1_poly: None,
+                        two_phase_l10_m147: None,
                     };
                 }
-                // existing cascade path:
+                // Original cascade Stage1 definitions
                 let fir1 = FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ);
-                let fir2 = FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ);
-                let fir3 = FirConvolve::new(&HTAPS_288K_3TO1_EQ);
                 let full1 = (HTAPS_DDRX5_14TO1_EQ.len() * 2) as u64;
                 let full2 = (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64;
                 let full3 = (HTAPS_288K_3TO1_EQ.len() * 2) as u64;
                 let delay1 = (full1 - 1) / 2;
                 let delay2 = (full2 - 1) / 2;
                 let delay3 = (full3 - 1) / 2;
+                let poly2 = DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7);
+                let poly3 = DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3);
+                let use_stage1_poly = l < 14 && !dump_stage1;
+                let stage1_poly = if use_stage1_poly {
+                    if verbose && print_config {
+                        eprintln!(
+                            "[DBG] Stage1 polyphase (L-phase) enabled by default (L={} decim1=14)",
+                            l
+                        );
+                    }
+                    Some(Stage1PolyL::new(&HTAPS_DDRX5_14TO1_EQ, l, 14))
+                } else {
+                    None
+                };
+
                 let s = Self {
                     fir1,
                     up_factor: l,
@@ -226,19 +445,17 @@ impl EquiLMResampler {
                     ups_index: 0,
                     phase1: 0,
                     primed1: false,
-                    fir2,
-                    decim2: 7,
+                    // Stage 2 (polyphase decimator by 7)
+                    poly2,
                     delay2,
-                    mid_index2: 0,
-                    phase2: 0,
-                    primed2: false,
-                    fir3,
-                    decim3: 3,
+                    decim2: 7,
+                    // Stage 3 (polyphase decimator by 3)
+                    poly3,
                     delay3,
-                    mid_index3: 0,
-                    phase3: 0,
-                    primed3: false,
+                    decim3: 3,
                     poly294: None,
+                    stage1_poly,
+                    two_phase_l10_m147: None,
                 };
                 if verbose && print_config {
                     if dump_stage1 {
@@ -248,7 +465,7 @@ impl EquiLMResampler {
                         );
                     } else {
                         eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3).",
+                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 polyphase].",
                             l
                         );
                     }
@@ -256,48 +473,95 @@ impl EquiLMResampler {
                 s
             }
             147 => {
-                // Select taps for M=147
-                let (fir1, fir2, fir3, full1, full2, full3) =
-                    if (l == 10 || l == 20) && target_rate_hz == 384_000 {
-                        // 384k: reuse DDR×10 first-stage taps for both L=10 (DSD128) and L=20 (DSD64)
-                        let f1 = FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ);
-                        let f2 = FirConvolve::new(&HTAPS_8MHZ_7TO1_EQ);
-                        let f3 = FirConvolve::new(&HTAPS_1MHZ_3TO1_EQ);
-                        let fl1 = (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64;
-                        let fl2 = (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64;
-                        let fl3 = (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64;
-                        (f1, f2, f3, fl1, fl2, fl3)
-                    } else if l == 5 && target_rate_hz == 96_000 {
-                        // 96k: DSD×5 -> /7 (DSDX5 taps), then /7 (2MHz), then /3 (288k)
-                        let f1 = FirConvolve::new(&HTAPS_DSDX5_7TO1_EQ);
-                        let f2 = FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ);
-                        let f3 = FirConvolve::new(&HTAPS_288K_3TO1_EQ);
-                        let fl1 = (HTAPS_DSDX5_7TO1_EQ.len() * 2) as u64;
-                        let fl2 = (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64;
-                        let fl3 = (HTAPS_288K_3TO1_EQ.len() * 2) as u64;
-                        (f1, f2, f3, fl1, fl2, fl3)
-                    } else if l == 10 && target_rate_hz == 192_000 {
-                        // 192k: DDR×5 -> 4MHz -> 576k taps (existing)
-                        let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
-                        let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
-                        let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
-                        let fl1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
-                        let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
-                        let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
-                        (f1, f2, f3, fl1, fl2, fl3)
-                    } else {
-                        // Default to 192k cascade for other L/M=147 requests
-                        let f1 = FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ);
-                        let f2 = FirConvolve::new(&HTAPS_4MHZ_7TO1_EQ);
-                        let f3 = FirConvolve::new(&HTAPS_576K_3TO1_EQ);
-                        let fl1 = (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64;
-                        let fl2 = (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64;
-                        let fl3 = (HTAPS_576K_3TO1_EQ.len() * 2) as u64;
-                        (f1, f2, f3, fl1, fl2, fl3)
+                // NEW: two-phase L=10 / (21*7) path for DSD64 -> 192k
+                if l == 10 && target_rate_hz == 192_000 && !dump_stage1 {
+                    if verbose && print_config {
+                        eprintln!(
+                            "[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 -> /7) reference Stage1 FIR + optimized Stage2"
+                        );
+                    }
+                    let two_phase = TwoPhaseL10M147::new();
+                    // Provide placeholders for fields required by struct but unused in this mode
+                    let fir1 = FirConvolve::new(&HTAPS_DSDX10_21TO1_EQ); // not used directly (internal handled in two_phase)
+                    let poly2 = DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ, 7);
+                    let poly3 = DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ, 7);
+                    return Self {
+                        fir1,
+                        up_factor: l,
+                        decim1: 21,
+                        delay1: 0,
+                        ups_index: 0,
+                        phase1: 0,
+                        primed1: true,
+                        poly2,
+                        delay2: 0,
+                        decim2: 7,
+                        poly3,
+                        delay3: 0,
+                        decim3: 3,
+                        poly294: None,
+                        stage1_poly: None,
+                        two_phase_l10_m147: Some(two_phase),
                     };
+                }
+                // (Existing selection logic unchanged, just swap Stage2/3 construction)
+                let (fir1, full1, right2, full2, right3, full3, label) =
+                    if (l == 10 || l == 20) && target_rate_hz == 384_000 {
+                        (
+                             FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ),
+                             (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64,
+                             &HTAPS_8MHZ_7TO1_EQ[..],
+                             (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64,
+                             &HTAPS_1MHZ_3TO1_EQ[..],
+                             (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64,
+                             "384k (DDRx10, 8MHz, 1MHz)",
+                         )
+                    } else if l == 5 && target_rate_hz == 96_000 {
+                        (
+                             FirConvolve::new(&HTAPS_DSDX5_7TO1_EQ),
+                             (HTAPS_DSDX5_7TO1_EQ.len() * 2) as u64,
+                             &HTAPS_2MHZ_7TO1_EQ[..],
+                             (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64,
+                             &HTAPS_288K_3TO1_EQ[..],
+                             (HTAPS_288K_3TO1_EQ.len() * 2) as u64,
+                             "96k (DSD×5, 2MHz, 288k)",
+                         )
+                    } else {
+                         (
+                             FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ),
+                             (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64,
+                             &HTAPS_4MHZ_7TO1_EQ[..],
+                             (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64,
+                             &HTAPS_576K_3TO1_EQ[..],
+                             (HTAPS_576K_3TO1_EQ.len() * 2) as u64,
+                             "192k (DDR×5, 4MHz, 576k)",
+                         )
+                    };
+                let stage1_half: &[f64] = if (l == 10 || l == 20) && target_rate_hz == 384_000 {
+                    &HTAPS_DDRX10_7TO1_EQ
+                } else if l == 5 && target_rate_hz == 96_000 {
+                    &HTAPS_DSDX5_7TO1_EQ
+                } else {
+                    &HTAPS_DDRX5_7TO_1_EQ
+                };
                 let delay1 = (full1 - 1) / 2;
                 let delay2 = (full2 - 1) / 2;
                 let delay3 = (full3 - 1) / 2;
+                let poly2 = DecimFIRSym::new_from_half(right2, 7);
+                let poly3 = DecimFIRSym::new_from_half(right3, 3);
+                let use_stage1_poly = l < 7 && !dump_stage1; // only L=5 benefits
+                let stage1_poly = if use_stage1_poly {
+                    if verbose && print_config {
+                        eprintln!(
+                            "[DBG] Stage1 polyphase (L-phase) enabled by default (L={} decim1=7)",
+                            l
+                        );
+                    }
+                    Some(Stage1PolyL::new(stage1_half, l, 7))
+                } else {
+                    None
+                };
+
                 let s = Self {
                     fir1,
                     up_factor: l,
@@ -306,19 +570,17 @@ impl EquiLMResampler {
                     ups_index: 0,
                     phase1: 0,
                     primed1: false,
-                    fir2,
-                    decim2: 7,
+                    // Stage 2 (polyphase decimator by 7)
+                    poly2,
                     delay2,
-                    mid_index2: 0,
-                    phase2: 0,
-                    primed2: false,
-                    fir3,
-                    decim3: 3,
+                    decim2: 7,
+                    // Stage 3 (polyphase decimator by 3)
+                    poly3,
                     delay3,
-                    mid_index3: 0,
-                    phase3: 0,
-                    primed3: false,
+                    decim3: 3,
                     poly294: None,
+                    stage1_poly,
+                    two_phase_l10_m147: None,
                 };
                 if verbose && print_config {
                     if dump_stage1 {
@@ -327,16 +589,9 @@ impl EquiLMResampler {
                             l
                         );
                     } else {
-                        let taps_label = if (l == 10 || l == 20) && target_rate_hz == 384_000 {
-                            "384k (DDRx10 taps, 8MHz, 1MHz)"
-                        } else if l == 5 && target_rate_hz == 96_000 {
-                            "96k (DSD×5, 2MHz, 288k)"
-                        } else {
-                            "192k (DDR×5, 4MHz, 576k)"
-                        };
                         eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} taps.",
-                            l, taps_label
+                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} [Stage2/3 polyphase].",
+                            l, label
                         );
                     }
                 }
@@ -352,7 +607,9 @@ impl EquiLMResampler {
         if let Some(poly) = self.poly294.as_mut() {
             return poly.push_bit(bit);
         }
-
+        if let Some(tp) = self.two_phase_l10_m147.as_mut() {
+            return tp.push_bit(bit);
+        }
         let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
         let mut out: Option<f64> = None;
         for p in 0..self.up_factor {
@@ -382,38 +639,12 @@ impl EquiLMResampler {
                 continue;
             }
 
-            // Stage 2
-            let y2 = self.fir2.process_sample(y1);
-            let idx2 = self.mid_index2;
-            self.mid_index2 += 1;
-            if !self.primed2 {
-                if idx2 >= self.delay2 {
-                    self.primed2 = true;
-                    self.phase2 = 0;
+            // Stage 2 polyphase decimation
+            if let Some(y2) = self.poly2.push(y1) {
+                // Stage 3 polyphase decimation
+                if let Some(y3) = self.poly3.push(y2) {
+                    out = Some(y3);
                 }
-                continue;
-            }
-            self.phase2 += 1;
-            if self.phase2 != self.decim2 {
-                continue;
-            }
-            self.phase2 = 0;
-
-            // Stage 3
-            let y3 = self.fir3.process_sample(y2);
-            let idx3 = self.mid_index3;
-            self.mid_index3 += 1;
-            if !self.primed3 {
-                if idx3 >= self.delay3 {
-                    self.primed3 = true;
-                    self.phase3 = 0;
-                }
-                continue;
-            }
-            self.phase3 += 1;
-            if self.phase3 == self.decim3 {
-                self.phase3 = 0;
-                out = Some(y3);
             }
         }
         out
@@ -424,13 +655,236 @@ impl EquiLMResampler {
         if let Some(poly) = self.poly294.as_ref() {
             return poly.output_latency_frames();
         }
+        if let Some(tp) = self.two_phase_l10_m147.as_ref() {
+            return tp.output_latency_frames();
+        }
+        if let Some(stage1p) = self.stage1_poly.as_ref() {
+            if dump_stage1 {
+                // Stage1 outputs are at rate: input * L / decim1
+                return (stage1p.input_delay() as f64) * (self.up_factor as f64) / (self.decim1 as f64);
+            }
+            // Cascade: stage1 delay (in input samples) converted to final output frames
+            let d1_out = (stage1p.input_delay() as f64)
+                * (self.up_factor as f64)
+                / (self.decim1 as f64 * self.decim2 as f64 * self.decim3 as f64);
+            let d2 = (self.poly2.center_delay() as f64) / (self.decim2 as f64 * self.decim3 as f64);
+            let d3 = (self.poly3.center_delay() as f64) / (self.decim3 as f64);
+            return d1_out + d2 + d3;
+        }
         if dump_stage1 {
             return (self.delay1 as f64) / (self.decim1 as f64);
         }
-        let l1 =
-            (self.delay1 as f64) / (self.decim1 as f64 * self.decim2 as f64 * self.decim3 as f64);
-        let l2 = (self.delay2 as f64) / (self.decim2 as f64 * self.decim3 as f64);
-        let l3 = (self.delay3 as f64) / (self.decim3 as f64);
+        // delay1 at Stage1 input rate contributes divided by (decim1 * decim2 * decim3)
+        let l1 = (self.delay1 as f64)
+            / (self.decim1 as f64 * self.decim2 as f64 * self.decim3 as f64);
+        // Stage2 center delay (in Stage2 input samples) divided by (decim2 * decim3)
+        let l2 = (self.poly2.center_delay() as f64)
+            / (self.decim2 as f64 * self.decim3 as f64);
+        // Stage3 center delay divided by decim3
+        let l3 = (self.poly3.center_delay() as f64) / (self.decim3 as f64);
         l1 + l2 + l3
+    }
+}
+
+// Lightweight integer polyphase decimator structure (D=7 or 3)
+#[derive(Debug)]
+struct DecimFIRSym {
+    full: Vec<f64>,    // full symmetric taps
+    len: usize,
+    half: usize,
+    has_center: bool,
+    center: usize,     // (len-1)/2
+    decim: usize,      // decimation factor D
+    ring: Vec<f64>,
+    mask: usize,
+    w: usize,          // next write index
+    count: usize,      // total samples seen
+    left_half: Vec<f64>, // first half taps (outer->inner) for fast SIMD load
+    kind: SimdKind,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum SimdKind {
+    Scalar,
+    Avx2,
+    Neon,
+}
+
+impl DecimFIRSym {
+    fn new_from_half(right_half: &[f64], decim: usize) -> Self {
+        // Reconstruct full taps (mirror right_half)
+        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+        full.extend_from_slice(right_half);
+        let len = full.len();
+        let center = (len - 1) / 2;
+        let has_center = len % 2 == 1;
+        let half = if has_center { (len - 1) / 2 } else { len / 2 };
+        // Ring capacity: next power of two >= len + decim (margin)
+        let cap = (len + decim).next_power_of_two();
+        let left_half = full[..half].to_vec();
+        let kind = Self::detect_kind();
+        Self {
+            full,
+            len,
+            half,
+            has_center,
+            center,
+            decim,
+            ring: vec![0.0; cap],
+            mask: cap - 1,
+            w: 0,
+            count: 0,
+            left_half,
+            kind,
+        }
+    }
+
+    #[inline]
+    fn detect_kind() -> SimdKind {
+        #[cfg(all(target_arch="x86_64"))]
+        {
+            if std::is_x86_feature_detected!("avx2") {
+                return SimdKind::Avx2;
+            }
+        }
+        #[cfg(all(target_arch="aarch64"))]
+        {
+            return SimdKind::Neon;
+        }
+        SimdKind::Scalar
+    }
+
+    #[inline]
+    fn push(&mut self, x: f64) -> Option<f64> {
+        // Write newest sample
+        self.ring[self.w] = x;
+        self.w = (self.w + 1) & self.mask;
+        let t = self.count;
+        self.count += 1;
+
+        // Need at least center samples of history
+        if t < self.center {
+            return None;
+        }
+        // Output only when (t - center) aligned to decimation grid
+        if (t - self.center) % self.decim != 0 {
+            return None;
+        }
+
+        let acc = match self.kind {
+            SimdKind::Scalar => unsafe { self.convolve_scalar() },
+            SimdKind::Avx2 => {
+                #[cfg(all(target_arch="x86_64"))] unsafe { self.convolve_avx2() }
+                #[cfg(not(all(target_arch="x86_64")))] unsafe { self.convolve_scalar() }
+            }
+            SimdKind::Neon => {
+                #[cfg(all(target_arch="aarch64"))] unsafe { self.convolve_neon() }
+                #[cfg(not(all(target_arch="aarch64")))] unsafe { self.convolve_scalar() }
+            }
+        };
+        Some(acc)
+    }
+
+    #[inline]
+    fn center_delay(&self) -> usize {
+        self.center
+    }
+
+    // ----- Convolution implementations -----
+    #[inline(always)]
+    unsafe fn convolve_scalar(&self) -> f64 {
+        let newest = (self.w + self.ring.len() - 1) & self.mask;
+        let mut acc = 0.0;
+        for i in 0..self.half {
+            let tap = self.left_half[i];
+            let left_idx = (newest + self.ring.len() - (self.len - 1 - i)) & self.mask;
+            let right_idx = (newest + self.ring.len() - i) & self.mask;
+            acc += tap * (self.ring[left_idx] + self.ring[right_idx]);
+        }
+        if self.has_center {
+            let center_idx = (newest + self.ring.len() - (self.len - 1 - self.half)) & self.mask;
+            acc += self.full[self.half] * self.ring[center_idx];
+        }
+        acc
+    }
+
+    #[cfg(all(target_arch="x86_64"))]
+    #[target_feature(enable="avx2")]
+    unsafe fn convolve_avx2(&self) -> f64 {
+        use std::arch::x86_64::*;
+        if self.half < 4 {
+            return self.convolve_scalar();
+        }
+        let newest = (self.w + self.ring.len() - 1) & self.mask;
+        let mut acc_v = _mm256_setzero_pd();
+        let mut i = 0usize;
+        let limit = self.half & !3;
+        while i < limit {
+            let mut pair_sum = [0.0f64; 4];
+            // Gather pairwise sums scalar (cheap vs gather instr)
+            for lane in 0..4 {
+                let k = i + lane;
+                let left_idx = (newest + self.ring.len() - (self.len - 1 - k)) & self.mask;
+                let right_idx = (newest + self.ring.len() - k) & self.mask;
+                pair_sum[lane] = self.ring[left_idx] + self.ring[right_idx];
+            }
+            let taps = _mm256_loadu_pd(self.left_half.as_ptr().add(i));
+            let sums = _mm256_loadu_pd(pair_sum.as_ptr());
+            acc_v = _mm256_fmadd_pd(taps, sums, acc_v);
+            i += 4;
+        }
+        let mut tmp = [0.0f64; 4];
+        _mm256_storeu_pd(tmp.as_mut_ptr(), acc_v);
+        let mut acc = tmp.iter().sum::<f64>();
+        // Remainder
+        while i < self.half {
+            let left_idx = (newest + self.ring.len() - (self.len - 1 - i)) & self.mask;
+            let right_idx = (newest + self.ring.len() - i) & self.mask;
+            acc += self.left_half[i] * (self.ring[left_idx] + self.ring[right_idx]);
+            i += 1;
+        }
+        if self.has_center {
+            let center_idx = (newest + self.ring.len() - (self.len - 1 - self.half)) & self.mask;
+            acc += self.full[self.half] * self.ring[center_idx];
+        }
+        acc
+    }
+
+    #[cfg(all(target_arch="aarch64"))]
+    #[target_feature(enable="neon")]
+    unsafe fn convolve_neon(&self) -> f64 {
+        use core::arch::aarch64::*;
+        if self.half < 2 {
+            return self.convolve_scalar();
+        }
+        let newest = (self.w + self.ring.len() - 1) & self.mask;
+        let mut acc_v = vdupq_n_f64(0.0);
+        let mut i = 0usize;
+        let limit = self.half & !1;
+        while i < limit {
+            let mut pair = [0.0f64; 2];
+            for lane in 0..2 {
+                let k = i + lane;
+                let left_idx = (newest + self.ring.len() - (self.len - 1 - k)) & self.mask;
+                let right_idx = (newest + self.ring.len() - k) & self.mask;
+                pair[lane] = self.ring[left_idx] + self.ring[right_idx];
+            }
+            let taps = vld1q_f64(self.left_half.as_ptr().add(i));
+            let sums = vld1q_f64(pair.as_ptr());
+            acc_v = vfmaq_f64(acc_v, taps, sums);
+            i += 2;
+        }
+        let mut acc = vaddvq_f64(acc_v);
+        while i < self.half {
+            let left_idx = (newest + self.ring.len() - (self.len - 1 - i)) & self.mask;
+            let right_idx = (newest + self.ring.len() - i) & self.mask;
+            acc += self.left_half[i] * (self.ring[left_idx] + self.ring[right_idx]);
+            i += 1;
+        }
+        if self.has_center {
+            let center_idx = (newest + self.ring.len() - (self.len - 1 - self.half)) & self.mask;
+            acc += self.full[self.half] * self.ring[center_idx];
+        }
+        acc
     }
 }
