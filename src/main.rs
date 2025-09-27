@@ -2,6 +2,7 @@ use clap::Parser;
 use std::error::Error;
 
 mod audio_file;
+mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
 mod dsd;
@@ -10,7 +11,6 @@ mod dsdin_sys;
 mod fir_convolve;
 mod input;
 mod output;
-mod byte_precalc_decimator;
 
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
@@ -108,14 +108,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .dither_type
         .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
 
-    let filter_type = cli
-        .filter_type
-        .unwrap_or_else(|| match cli.input_rate {
-            2 => 'C',
-            _ => 'X',
-        })
-        .to_ascii_uppercase();
-
     let mut out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
@@ -151,6 +143,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             cli.channels.unwrap_or(2),
             cli.verbose,
         )?;
+
+        let filter_type = if cli.filter_type.is_some() {
+            cli.filter_type.unwrap().to_ascii_uppercase()
+        } else {
+            match in_ctx.dsd_rate {
+                2 => 'E',
+                _ => 'X',
+            }
+        };
 
         // Create conversion context
         let mut conv_ctx = ConversionContext::new(
