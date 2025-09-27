@@ -11,6 +11,11 @@ use crate::dsd2pcm::HTAPS_DSDX5_7TO1_EQ;
 use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
 
+// --- Add direct single-stage polyphase path for L=5, M=294 using HTAPS_DDRX5_294TO1_EQ ---
+// Enable with env: DSD2DXD_POLY294=1  (falls back to existing 3‑stage cascade if unset)
+
+use crate::dsd2pcm::HTAPS_DDRX5_294TO1_EQ; // ADD (full-rate (right) half taps for 5x / 294 path)
+
 // ====================================================================================
 // Generalized equiripple L/M resampler covering:
 //   - L=5,  M=294: (×5 -> /14) -> /7 -> /3  -> 96 kHz
@@ -41,6 +46,119 @@ pub struct EquiLMResampler {
     mid_index3: u64,
     phase3: u32,
     primed3: bool,
+    // NEW: optional single-stage polyphase path for L=5, M=294
+    poly294: Option<PolyPhaseL5M294>, // when Some => single-stage L=5/M=294 direct path
+}
+
+// NEW: PolyPhase294 struct for direct single-stage path
+#[derive(Debug)]
+struct PolyPhaseL5M294 {
+    // L-phase subfilters: sub[r] holds taps where original high-rate index m % L == r
+    sub: [Vec<f64>; 5],
+    max_len: usize,
+    // Circular delay of input (original rate) samples (±1.0)
+    delay: Vec<f64>,
+    mask: usize,
+    write: usize,          // points to next write position
+    acc: i32,              // phase accumulator (adds L each input, subtract M when >= M)
+    phase_mod: i32,        // (n_out * M) mod L
+    input_count: usize,    // number of input samples ingested
+    delay_input: usize,    // input samples required before first valid output (group delay in input units)
+    l: i32,
+    m: i32,
+}
+
+impl PolyPhaseL5M294 {
+    fn new(half_taps_right: &[f64]) -> Self {
+        let l = 5;
+        let m = 294;
+        // Reconstruct full symmetric taps at HIGH (post-upsampling) rate
+        let mut full: Vec<f64> = half_taps_right.iter().rev().cloned().collect();
+        full.extend_from_slice(half_taps_right);
+        let full_len = full.len();
+
+        // Split into L polyphase branches (index mod L)
+        let mut sub: [Vec<f64>; 5] = [
+            Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()
+        ];
+        for (i, &c) in full.iter().enumerate() {
+            sub[i % l as usize].push(c);
+        }
+        let max_len = sub.iter().map(|v| v.len()).max().unwrap_or(0);
+
+        // Convert group delay ( (N-1)/2 high-rate samples ) into input (original) sample units:
+        // Each input sample corresponds to L high-rate slots; only one is non-zero.
+        // So integer floor conversion is acceptable; add 1 for safety to ensure full support.
+        let group_delay_high = (full_len as u64 - 1) / 2;
+        let delay_input = (group_delay_high / l as u64) as usize + 1;
+
+        // Ring buffer size: next power-of-two >= max_len
+        let cap = max_len.next_power_of_two().max(64);
+        let delay = vec![0.0f64; cap];
+
+        Self {
+            sub,
+            max_len,
+            delay,
+            mask: cap - 1,
+            write: 0,
+            acc: 0,
+            phase_mod: 0,
+            input_count: 0,
+            delay_input,
+            l,
+            m,
+        }
+    }
+
+    #[inline]
+    fn push_bit(&mut self, bit: u8) -> Option<f64> {
+        // Store input sample (±1.0)
+        let s = if bit != 0 { 1.0 } else { -1.0 };
+        self.delay[self.write & self.mask] = s;
+        self.write = (self.write + 1) & self.mask;
+        self.input_count += 1;
+
+        // Accumulate phase (rational time): add L per input, produce one output when >= M
+        self.acc += self.l;
+        if self.acc < self.m {
+            return None;
+        }
+        self.acc -= self.m;
+
+        // Not enough latency yet: consume but do not output
+        if self.input_count <= self.delay_input {
+            // Update phase_mod (n_out*M mod L) even if we suppress output
+            self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+            return None;
+        }
+
+        // Phase for this output: r = (n_out * M) mod L
+        let phase = self.phase_mod as usize;
+        let taps = &self.sub[phase];
+
+        // Convolution over input samples (most recent at write-1)
+        let mut acc = 0.0;
+        let mut idx = (self.write.wrapping_sub(1)) & self.mask;
+        for &c in taps {
+            acc += c * self.delay[idx];
+            if taps.len() == 0 { break; }
+            idx = idx.wrapping_sub(1) & self.mask;
+        }
+
+        // Advance (n_out*M mod L): add M % L
+        self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+
+        Some(acc)
+    }
+
+    #[inline]
+    fn output_latency_frames(&self) -> f64 {
+        // Approximate output latency in final-rate frames:
+        // Output rate = input_rate * L / M
+        // Latency (input samples) => input_delay * (output_rate / input_rate) = delay_input * L / M
+        (self.delay_input as f64) * (self.l as f64) / (self.m as f64)
+    }
 }
 
 impl EquiLMResampler {
@@ -52,8 +170,45 @@ impl EquiLMResampler {
         print_config: bool,
         target_rate_hz: i32,
     ) -> Self {
+        let use_poly294 = std::env::var("DSD2DXD_POLY294")
+            .map(|v| {
+                let v = v.to_ascii_lowercase();
+                v == "1" || v == "true" || v == "yes" || v == "on"
+            })
+            .unwrap_or(false);
+
         match m {
             294 => {
+                if use_poly294 && l == 5 && !dump_stage1 {
+                    let poly = PolyPhaseL5M294::new(&HTAPS_DDRX5_294TO1_EQ);
+                    if verbose && print_config {
+                        eprintln!("[DBG] Polyphase L=5/M=294 single-stage path enabled (HTAPS_DDRX5_294TO1_EQ).");
+                    }
+                    return Self {
+                        // Stub unused cascade fields with minimal objects (small filters)
+                        fir1: FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ),
+                        up_factor: l,
+                        decim1: 14,
+                        delay1: 0,
+                        ups_index: 0,
+                        phase1: 0,
+                        primed1: true,
+                        fir2: FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ),
+                        decim2: 7,
+                        delay2: 0,
+                        mid_index2: 0,
+                        phase2: 0,
+                        primed2: true,
+                        fir3: FirConvolve::new(&HTAPS_288K_3TO1_EQ),
+                        decim3: 3,
+                        delay3: 0,
+                        mid_index3: 0,
+                        phase3: 0,
+                        primed3: true,
+                        poly294: Some(poly),
+                    };
+                }
+                // existing cascade path:
                 let fir1 = FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ);
                 let fir2 = FirConvolve::new(&HTAPS_2MHZ_7TO1_EQ);
                 let fir3 = FirConvolve::new(&HTAPS_288K_3TO1_EQ);
@@ -83,6 +238,7 @@ impl EquiLMResampler {
                     mid_index3: 0,
                     phase3: 0,
                     primed3: false,
+                    poly294: None,
                 };
                 if verbose && print_config {
                     if dump_stage1 {
@@ -162,6 +318,7 @@ impl EquiLMResampler {
                     mid_index3: 0,
                     phase3: 0,
                     primed3: false,
+                    poly294: None,
                 };
                 if verbose && print_config {
                     if dump_stage1 {
@@ -192,6 +349,10 @@ impl EquiLMResampler {
     // Unified push: handles both full cascade and stage1-dump. Breaks early once an output is produced.
     #[inline]
     pub fn push_bit_lm(&mut self, bit: u8, dump_stage1: bool) -> Option<f64> {
+        if let Some(poly) = self.poly294.as_mut() {
+            return poly.push_bit(bit);
+        }
+
         let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
         let mut out: Option<f64> = None;
         for p in 0..self.up_factor {
@@ -260,6 +421,9 @@ impl EquiLMResampler {
 
     #[inline]
     pub fn output_latency_frames(&self, dump_stage1: bool) -> f64 {
+        if let Some(poly) = self.poly294.as_ref() {
+            return poly.output_latency_frames();
+        }
         if dump_stage1 {
             return (self.delay1 as f64) / (self.decim1 as f64);
         }

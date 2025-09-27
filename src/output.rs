@@ -2,6 +2,7 @@ use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 
 pub struct OutputContext {
     // Init'd via input params
@@ -110,7 +111,16 @@ impl OutputContext {
         }
     }
 
+    /// Save audio file, forcibly overwriting any existing file at the target path
+    /// without relying on backend error strings. Safe for all formats.
     pub fn save_and_print_file(&self, file_name: &str, fmt: AudioFileFormat) -> Result<(), String> {
+        let path = Path::new(file_name);
+        if path.exists() {
+            // Best effort remove; propagate error if it fails (e.g. permission issues)
+            std::fs::remove_file(path)
+                .map_err(|e| format!("Failed to remove existing file '{}': {}", file_name, e))?;
+        }
+
         match (self.bits == 32, &self.float_file, &self.int_file) {
             (true, Some(file), _) => {
                 file.save(file_name, fmt).map_err(|e| e.to_string())?;
@@ -122,7 +132,7 @@ impl OutputContext {
             }
             _ => return Err("No file initialized".to_string()),
         }
-        
+
         eprintln!("Wrote to file: {}", file_name);
         Ok(())
     }

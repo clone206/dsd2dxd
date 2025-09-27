@@ -274,7 +274,7 @@ impl ConversionContext {
         eprintln!(
             "Output Format: {} bit{}",
             self.out_ctx.bits,
-            if self.out_ctx.output == 'f' {
+            if self.out_ctx.bits == 32 {
                 " float"
             } else {
                 ""
