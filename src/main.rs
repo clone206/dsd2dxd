@@ -11,6 +11,7 @@ mod dsdin_sys;
 mod fir_convolve;
 mod input;
 mod output;
+mod lm_resampler;
 
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
