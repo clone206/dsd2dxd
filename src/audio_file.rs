@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::io::{self, Write};
+use std::io::{self, Write, BufWriter}; // add BufWriter
 use std::fs::File;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,8 +18,9 @@ pub struct AudioFile<T> {
     num_channels: usize,
 }
 
-impl<T> AudioFile<T> 
-where T: AudioSample
+impl<T> AudioFile<T>
+where
+    T: AudioSample,
 {
     pub fn new() -> Self {
         Self {
@@ -59,115 +60,202 @@ where T: AudioSample
     }
 
     fn save_wave_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        let mut file = File::create(path)?;
+        let file = File::create(path)?;
+        // Use a large buffered writer (1 MiB); adjust if desired
+        let mut w = BufWriter::with_capacity(1 << 20, file);
+
         let channels = self.num_channels as u16;
         let bytes_per_sample = (self.bit_depth / 8) as u16;
-        let _block_align = channels * bytes_per_sample;
-        let data_size = (self.get_num_samples_per_channel() * 
-            self.num_channels * bytes_per_sample as usize) as u32;
-        let file_size = data_size + 36; // 36 = size of WAV header
+        let block_align = channels * bytes_per_sample;
+        let frames = self.get_num_samples_per_channel();
+        let data_size = (frames * self.num_channels * bytes_per_sample as usize) as u32;
+        let file_size = data_size + 36;
 
         // RIFF header
-        file.write_all(b"RIFF")?;
-        file.write_all(&file_size.to_le_bytes())?;
-        file.write_all(b"WAVE")?;
+        w.write_all(b"RIFF")?;
+        w.write_all(&file_size.to_le_bytes())?;
+        w.write_all(b"WAVE")?;
 
         // fmt chunk
-        file.write_all(b"fmt ")?;
-        file.write_all(&(16u32.to_le_bytes()))?; // chunk size
-        let format_tag = if T::is_float() { 3u16 } else { 1u16 }; // 3 = float, 1 = PCM
-        file.write_all(&format_tag.to_le_bytes())?;
-        file.write_all(&channels.to_le_bytes())?;
-        file.write_all(&self.sample_rate.to_le_bytes())?;
-        let byte_rate = self.sample_rate as u32 * _block_align as u32;
-        file.write_all(&byte_rate.to_le_bytes())?;
-        file.write_all(&_block_align.to_le_bytes())?;
-        file.write_all(&(self.bit_depth as u16).to_le_bytes())?;
+        w.write_all(b"fmt ")?;
+        w.write_all(&16u32.to_le_bytes())?;
+        let format_tag = if T::is_float() { 3u16 } else { 1u16 };
+        w.write_all(&format_tag.to_le_bytes())?;
+        w.write_all(&channels.to_le_bytes())?;
+        w.write_all(&self.sample_rate.to_le_bytes())?;
+        let byte_rate = self.sample_rate as u32 * block_align as u32;
+        w.write_all(&byte_rate.to_le_bytes())?;
+        w.write_all(&block_align.to_le_bytes())?;
+        w.write_all(&(self.bit_depth as u16).to_le_bytes())?;
 
         // data chunk
-        file.write_all(b"data")?;
-        file.write_all(&data_size.to_le_bytes())?;
+        w.write_all(b"data")?;
+        w.write_all(&data_size.to_le_bytes())?;
 
-        // Write samples
-        for i in 0..self.get_num_samples_per_channel() {
-            for channel in 0..self.num_channels {
-                let sample = self.samples[channel][i];
-                match self.bit_depth {
-                    16 => file.write_all(&sample.to_i16().to_le_bytes())?,
-                    24 => {
-                        let value = sample.to_i24();
-                        file.write_all(&[
-                            (value & 0xFF) as u8,
-                            ((value >> 8) & 0xFF) as u8,
-                            ((value >> 16) & 0xFF) as u8,
-                        ])?
-                    },
-                    32 if T::is_float() => file.write_all(&sample.to_f32().to_le_bytes())?,
-                    32 => file.write_all(&sample.to_i32().to_le_bytes())?,
-                    _ => return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Unsupported bit depth"
-                    )),
+        // Stream samples in blocks to reduce temporary allocation
+        // Choose a frame block size that stays cache friendly
+        const FRAME_BLOCK: usize = 16_384;
+        let mut buf: Vec<u8> = Vec::with_capacity(FRAME_BLOCK * block_align as usize);
+
+        match self.bit_depth {
+            16 => {
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let s = self.samples[ch][i].to_i16().to_le_bytes();
+                            buf.extend_from_slice(&s);
+                        }
+                    }
+                    w.write_all(&buf)?;
                 }
             }
+            24 => {
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let v = self.samples[ch][i].to_i24();
+                            buf.extend_from_slice(&[
+                                (v & 0xFF) as u8,
+                                ((v >> 8) & 0xFF) as u8,
+                                ((v >> 16) & 0xFF) as u8,
+                            ]);
+                        }
+                    }
+                    w.write_all(&buf)?;
+                }
+            }
+            32 if T::is_float() => {
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let b = self.samples[ch][i].to_f32().to_le_bytes();
+                            buf.extend_from_slice(&b);
+                        }
+                    }
+                    w.write_all(&buf)?;
+                }
+            }
+            32 => {
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let b = self.samples[ch][i].to_i32().to_le_bytes();
+                            buf.extend_from_slice(&b);
+                        }
+                    }
+                    w.write_all(&buf)?;
+                }
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Unsupported bit depth",
+                ))
+            }
         }
+
+        w.flush()?;
         Ok(())
     }
 
     fn save_aiff_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        let mut file = File::create(path)?;
+        let file = File::create(path)?;
+        let mut w = BufWriter::with_capacity(1 << 20, file);
+
         let channels = self.num_channels as u16;
         let bytes_per_sample = (self.bit_depth / 8) as u16;
         let block_align = channels * bytes_per_sample;
-        let data_size = (self.get_num_samples_per_channel() * 
-            self.num_channels * bytes_per_sample as usize) as u32;
+        let frames = self.get_num_samples_per_channel();
+        let data_size = (frames * self.num_channels * bytes_per_sample as usize) as u32;
 
         // FORM chunk
-        file.write_all(b"FORM")?;
-        file.write_all(&(data_size + 46).to_be_bytes())?; // +46 for header size
-        file.write_all(b"AIFF")?;
+        w.write_all(b"FORM")?;
+        w.write_all(&(data_size + 46).to_be_bytes())?;
+        w.write_all(b"AIFF")?;
 
-        // Common chunk
-        file.write_all(b"COMM")?;
-        file.write_all(&18u32.to_be_bytes())?; // Common chunk size
-        file.write_all(&channels.to_be_bytes())?;
-        file.write_all(&(self.get_num_samples_per_channel() as u32).to_be_bytes())?;
-        file.write_all(&(self.bit_depth as u16).to_be_bytes())?;
-        
-        // Sample rate as 80-bit extended
+        // COMM chunk
+        w.write_all(b"COMM")?;
+        w.write_all(&18u32.to_be_bytes())?;
+        w.write_all(&channels.to_be_bytes())?;
+        w.write_all(&(frames as u32).to_be_bytes())?;
+        w.write_all(&(self.bit_depth as u16).to_be_bytes())?;
+
         let sample_rate = self.sample_rate as f64;
         let mut extended = [0u8; 10];
         self.encode_extended(sample_rate, &mut extended);
-        file.write_all(&extended)?;
+        w.write_all(&extended)?;
 
-        // Sound data chunk
-        file.write_all(b"SSND")?;
-        file.write_all(&data_size.to_be_bytes())?;
-        file.write_all(&0u32.to_be_bytes())?; // offset
-        file.write_all(&0u32.to_be_bytes())?; // block size
+        // SSND chunk
+        w.write_all(b"SSND")?;
+        w.write_all(&data_size.to_be_bytes())?;
+        w.write_all(&0u32.to_be_bytes())?; // offset
+        w.write_all(&0u32.to_be_bytes())?; // block size
 
-        // Write samples in big-endian
-        for i in 0..self.get_num_samples_per_channel() {
-            for channel in 0..self.num_channels {
-                let sample = self.samples[channel][i];
-                match self.bit_depth {
-                    16 => file.write_all(&sample.to_i16().to_be_bytes())?,
-                    24 => {
-                        let value = sample.to_i24();
-                        file.write_all(&[
-                            ((value >> 16) & 0xFF) as u8,
-                            ((value >> 8) & 0xFF) as u8,
-                            (value & 0xFF) as u8,
-                        ])?
-                    },
-                    32 => file.write_all(&sample.to_i32().to_be_bytes())?,
-                    _ => return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Unsupported bit depth"
-                    )),
+        const FRAME_BLOCK: usize = 16_384;
+        let mut buf: Vec<u8> = Vec::with_capacity(FRAME_BLOCK * block_align as usize);
+
+        match self.bit_depth {
+            16 => {
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let b = self.samples[ch][i].to_i16().to_be_bytes();
+                            buf.extend_from_slice(&b);
+                        }
+                    }
+                    w.write_all(&buf)?;
                 }
             }
+            24 => {
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let v = self.samples[ch][i].to_i24();
+                            buf.extend_from_slice(&[
+                                ((v >> 16) & 0xFF) as u8,
+                                ((v >> 8) & 0xFF) as u8,
+                                (v & 0xFF) as u8,
+                            ]);
+                        }
+                    }
+                    w.write_all(&buf)?;
+                }
+            }
+            32 => {
+                // AIFF branch only used for integer 32-bit (no float path provided here)
+                for base in (0..frames).step_by(FRAME_BLOCK) {
+                    buf.clear();
+                    let end = (base + FRAME_BLOCK).min(frames);
+                    for i in base..end {
+                        for ch in 0..self.num_channels {
+                            let b = self.samples[ch][i].to_i32().to_be_bytes();
+                            buf.extend_from_slice(&b);
+                        }
+                    }
+                    w.write_all(&buf)?;
+                }
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Unsupported bit depth",
+                ))
+            }
         }
+
+        w.flush()?;
         Ok(())
     }
 

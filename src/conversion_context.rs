@@ -582,6 +582,8 @@ impl ConversionContext {
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
+        // Start timer BEFORE any heavy work (DSP + file write)
+        let wall_start = Instant::now();
 
         // Print configuration information
         eprintln!("\nConfiguration:");
@@ -660,13 +662,13 @@ impl ConversionContext {
         eprintln!("Upsample Ratio (L): {}", self.upsample_ratio);
         eprintln!("");
 
-        // Process blocks
-        let wall_start = Instant::now(); // ADD: start timer
+        // Process (DSP)
         self.process_blocks()?;
-        let elapsed = wall_start.elapsed(); // ADD: end timer
+        let dsp_elapsed = wall_start.elapsed();
 
         // Save file for non-stdout outputs using a derived path (like C++)
         if self.out_ctx.output != 's' {
+            eprintln!("Saving to file...");
             let out_path = self.derive_output_path();
             match self.out_ctx.output.to_ascii_lowercase() {
                 'w' => {
@@ -680,6 +682,9 @@ impl ConversionContext {
                 _ => {}
             }
         }
+        // Total elapsed now includes file write
+        let total_elapsed = wall_start.elapsed();
+
         // Report timing & speed
         if self.total_dsd_bytes_processed > 0 {
             let channels = self.in_ctx.channels_num as u64;
@@ -692,16 +697,18 @@ impl ConversionContext {
             } else {
                 0.0
             };
-            let elapsed_sec = elapsed.as_secs_f64().max(1e-9);
-            let speed = audio_seconds / elapsed_sec;
+            let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
+            let total_sec = total_elapsed.as_secs_f64().max(1e-9);
+            let speed_dsp = audio_seconds / dsp_sec;
+            let speed_total = audio_seconds / total_sec;
             // Format H:MM:SS for elapsed
-            let total_secs = elapsed.as_secs();
+            let total_secs = total_elapsed.as_secs();
             let h = total_secs / 3600;
             let m = (total_secs % 3600) / 60;
             let s = total_secs % 60;
             eprintln!(
-                "{} bytes processed in {:02}:{:02}:{:02}  (Speed: {:.2}x realtime)",
-                self.total_dsd_bytes_processed, h, m, s, speed
+                "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
+                self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
             );
         }
 
