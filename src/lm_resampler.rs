@@ -278,97 +278,50 @@ fn stage1_poly_enabled() -> bool {
 }
 
 // --- ADD: Two-phase L=10/M=147 (21 * 7) path for DSD64 -> 192 kHz --------------------
-// Custom Debug impl below (omit fir1) so do not derive Debug here.
+#[derive(Debug)]
 struct TwoPhaseL10M147 {
-    // Stage1: conventional zero-stuff + FIR (same model as original cascade)
-    fir1: FirConvolve,
-    up_factor: u32,   // L = 10
-    decim1: u32,      // 21
-    delay1: u64,
-    ups_index: u64,
-    phase1: u32,
-    primed1: bool,
-    // Stage2: integer symmetric decimator /7 with provided taps
-    stage2: DecimFIRSym,
-}
-
-impl std::fmt::Debug for TwoPhaseL10M147 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // fir1 omitted because FirConvolve does not implement Debug
-        f.debug_struct("TwoPhaseL10M147")
-            .field("up_factor", &self.up_factor)
-            .field("decim1", &self.decim1)
-            .field("delay1", &self.delay1)
-            .field("ups_index", &self.ups_index)
-            .field("phase1", &self.phase1)
-            .field("primed1", &self.primed1)
-            .field("stage2", &self.stage2)
-            .finish()
-    }
+    stage1: Stage1PolyL10_21, // polyphase L=10 / 21
+    stage2: DecimFIRSym,      // /7 integer decimator
 }
 
 impl TwoPhaseL10M147 {
     fn new() -> Self {
-        // Reconstruct full length of stage1 filter from half taps
-        let full1 = (HTAPS_DSDX10_21TO1_EQ.len() * 2) as u64;
-        let delay1 = (full1 - 1) / 2;
         Self {
-            fir1: FirConvolve::new(&HTAPS_DSDX10_21TO1_EQ),
-            up_factor: 10,
-            decim1: 21,
-            delay1,
-            ups_index: 0,
-            phase1: 0,
-            primed1: false,
+            stage1: Stage1PolyL10_21::new(&HTAPS_DSDX10_21TO1_EQ),
             stage2: DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ, 7),
         }
     }
 
     #[inline]
     fn push_bit(&mut self, bit: u8) -> Option<f64> {
-        let mut out: Option<f64> = None;
-        let xi_base: i8 = if bit != 0 { 1 } else { -1 };
-        for up in 0..self.up_factor {
-            let sample = if up == 0 { xi_base } else { 0 };
-            let y1 = self.fir1.process_sample_i8(sample);
-            let idx_up = self.ups_index;
-            self.ups_index += 1;
-
-            // Prime stage1 (wait for group delay)
-            if !self.primed1 {
-                if idx_up >= self.delay1 {
-                    self.primed1 = true;
-                    self.phase1 = 0;
-                }
-                continue;
-            }
-
-            self.phase1 += 1;
-            if self.phase1 != self.decim1 {
-                continue;
-            }
-            self.phase1 = 0;
-
-            // Feed Stage2 decimator
+        if let Some(y1) = self.stage1.push_bit(bit) {
             if let Some(y2) = self.stage2.push(y1) {
-                out = Some(y2);
+                return Some(y2);
             }
         }
-        out
+        None
     }
 
     #[inline]
     fn output_latency_frames(&self) -> f64 {
-        // Latency contributions:
-        // Stage1 delay (input samples) scaled by final rate factor L/(21*7)
-        let d1 = (self.delay1 as f64) * (self.up_factor as f64) / (self.decim1 as f64 * 7.0);
-        // Stage2 center delay (in its input domain) divided by its decimation
+        // Stage1 latency (input samples) scaled by L/(21*7)
+        let d1 = (self.stage1.input_delay() as f64) * (10.0 / (21.0 * 7.0));
         let d2 = (self.stage2.center_delay() as f64) / 7.0;
         d1 + d2
     }
 }
-// -------------------------------------------------------------------------------------
 
+// 3. In EquiLMResampler::new (m == 147 branch) update the early two-phase debug message
+// (search for the existing two-phase debug eprintln! and replace its text):
+
+// OLD (inside if l == 10 && target_rate_hz == 192_000 && !dump_stage1):
+// "[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 -> /7) reference Stage1 FIR + optimized Stage2"
+// NEW:
+ // "[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 (poly L-phase) -> /7)"
+
+// (Only the string changes; no logic change needed.)
+
+// --- ====================================================================================
 // ====================================================================================
 impl EquiLMResampler {
     pub fn new(
@@ -477,7 +430,7 @@ impl EquiLMResampler {
                 if l == 10 && target_rate_hz == 192_000 && !dump_stage1 {
                     if verbose && print_config {
                         eprintln!(
-                            "[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 -> /7) reference Stage1 FIR + optimized Stage2"
+                            "[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 (poly L-phase) -> /7)"
                         );
                     }
                     let two_phase = TwoPhaseL10M147::new();
@@ -888,3 +841,112 @@ impl DecimFIRSym {
         acc
     }
 }
+
+// --- BEGIN ADD Stage1PolyL10_21 -------------------------------------------------------
+
+#[derive(Debug)]
+struct Stage1PolyL10_21 {
+    // L=10 phase polyphase: phases[r][k] = h[r + k*10]
+    phases: [Vec<f64>; 10],
+    l: u32,          // 10
+    m: u32,          // 21
+    ring: Vec<f64>,  // input (original DSD64 rate) sample history
+    mask: usize,
+    w: usize,
+    acc: u32,        // time accumulator (adds L, subtracts M)
+    phase_mod: u32,  // (n_out * M) mod L advanced by (M % L) each output
+    input_count: u64,
+    input_delay: u64,
+    primed: bool,
+}
+
+impl Stage1PolyL10_21 {
+    fn new(right_half: &[f64]) -> Self {
+        let l = 10u32;
+        let m = 21u32;
+
+        // Rebuild full symmetric high‑rate taps
+        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+        full.extend_from_slice(right_half);
+        let n = full.len();
+
+        // Build L phases
+        let mut phases: [Vec<f64>; 10] = Default::default();
+        for (i, &c) in full.iter().enumerate() {
+            phases[i % 10].push(c);
+        }
+
+        // Group delay in high-rate samples => convert to input samples (ceil division by L)
+        let gd_high = (n as u64 - 1) / 2;
+        let input_delay = (gd_high + (l as u64 - 1)) / l as u64;
+
+        let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
+        let cap = max_len.next_power_of_two().max(64);
+
+        Self {
+            phases,
+            l,
+            m,
+            ring: vec![0.0; cap],
+            mask: cap - 1,
+            w: 0,
+            acc: 0,
+            phase_mod: 0,
+            input_count: 0,
+            input_delay,
+            primed: false,
+        }
+    }
+
+    #[inline]
+    fn push_bit(&mut self, bit: u8) -> Option<f64> {
+        let s = if bit != 0 { 1.0 } else { -1.0 };
+        self.ring[self.w] = s;
+        self.w = (self.w + 1) & self.mask;
+        self.input_count += 1;
+
+        // Advance rational time
+        self.acc += self.l;
+        if self.acc < self.m {
+            return None;
+        }
+        self.acc -= self.m;
+
+        // Wait until we have enough history (group delay)
+        if !self.primed {
+            if self.input_count >= self.input_delay {
+                self.primed = true;
+            } else {
+                // Still advance phase sequence for deterministic alignment
+                self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+                return None;
+            }
+        }
+
+        // Phase for this output
+        let phase = self.phase_mod as usize;
+        let taps = &self.phases[phase];
+
+        // Convolution:
+        // taps[k] corresponds to input sample x[n - k]
+        // newest input is at w-1; iterate taps forward consuming older samples
+        let mut acc_sum = 0.0;
+        let mut idx = (self.w + self.ring.len() - 1) & self.mask; // newest
+        for &c in taps {
+            acc_sum += c * self.ring[idx];
+            idx = (idx + self.ring.len() - 1) & self.mask; // older
+        }
+
+        // Advance phase_mod for next output
+        self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+
+        Some(acc_sum)
+    }
+
+    #[inline]
+    fn input_delay(&self) -> u64 {
+        self.input_delay
+    }
+}
+
+// --- END ADD Stage1PolyL10_21 ---------------------------------------------------------
