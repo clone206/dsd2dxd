@@ -679,6 +679,10 @@ impl ConversionContext {
                     self.out_ctx
                         .save_and_print_file(&out_path, AudioFileFormat::Aiff)?;
                 }
+                'f' => {
+                    self.out_ctx
+                        .save_and_print_file(&out_path, AudioFileFormat::Flac)?;
+                }
                 _ => {}
             }
         }

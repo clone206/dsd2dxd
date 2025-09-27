@@ -8,6 +8,7 @@ pub enum AudioFileFormat {
     NotLoaded,
     Wave,
     Aiff,
+    Flac,
 }
 
 #[derive(Clone)]
@@ -52,6 +53,7 @@ where
         match format {
             AudioFileFormat::Wave => self.save_wave_file(path),
             AudioFileFormat::Aiff => self.save_aiff_file(path),
+            AudioFileFormat::Flac => self.save_flac_file(path),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Unsupported format"
@@ -256,6 +258,86 @@ where
         }
 
         w.flush()?;
+        Ok(())
+    }
+
+    fn save_flac_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        use flac_codec::byteorder::LittleEndian;
+        use flac_codec::encode::{FlacByteWriter, Options};
+
+        if self.num_channels == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "No channels"));
+        }
+        let frames = self.get_num_samples_per_channel();
+        if frames == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "No samples"));
+        }
+
+        // Support 16 or 24 bit (truncate >24).
+        let mut bits_per_sample = self.bit_depth;
+        if bits_per_sample > 24 {
+            bits_per_sample = 24;
+        }
+        if bits_per_sample != 16 && bits_per_sample != 24 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "FLAC: only 16 or 24-bit supported",
+            ));
+        }
+
+        let channels = self.num_channels as u32;
+        let bps = bits_per_sample as u32;
+        let bytes_per_sample = (bits_per_sample / 8) as usize;
+        let total_pcm_bytes = frames as u64 * channels as u64 * bytes_per_sample as u64;
+
+        // Create FLAC writer (LittleEndian because we feed little-endian sample bytes)
+        let mut flac: FlacByteWriter<_, LittleEndian> = FlacByteWriter::create(
+            path.as_ref(),
+            Options::default(),
+            self.sample_rate,
+            bps,
+            channels.try_into().unwrap(),
+            Some(total_pcm_bytes),
+        )
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("FLAC create: {e}")))?;
+
+        const FRAME_BLOCK: usize = 16_384;
+        let mut buf: Vec<u8> = Vec::with_capacity(FRAME_BLOCK * channels as usize * bytes_per_sample);
+
+        if bits_per_sample == 16 {
+            for base in (0..frames).step_by(FRAME_BLOCK) {
+                buf.clear();
+                let end = (base + FRAME_BLOCK).min(frames);
+                for i in base..end {
+                    for ch in 0..self.num_channels {
+                        buf.extend_from_slice(&self.samples[ch][i].to_i16().to_le_bytes());
+                    }
+                }
+                flac.write_all(&buf)?;
+            }
+        } else {
+            // 24-bit
+            for base in (0..frames).step_by(FRAME_BLOCK) {
+                buf.clear();
+                let end = (base + FRAME_BLOCK).min(frames);
+                for i in base..end {
+                    for ch in 0..self.num_channels {
+                        let v = self.samples[ch][i].to_i24();
+                        // little-endian 24-bit (LSB first)
+                        buf.extend_from_slice(&[
+                            (v & 0xFF) as u8,
+                            ((v >> 8) & 0xFF) as u8,
+                            ((v >> 16) & 0xFF) as u8,
+                        ]);
+                    }
+                }
+                flac.write_all(&buf)?;
+            }
+        }
+
+        flac
+            .finalize()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("FLAC finalize: {e}")))?;
         Ok(())
     }
 
