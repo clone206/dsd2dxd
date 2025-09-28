@@ -432,8 +432,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
         if self.in_ctx.input.to_ascii_lowercase().ends_with(".dsf") && !self.in_ctx.std_in {
             let path = Path::new(&self.in_ctx.input);
+            let path_out = Path::new(&out_path);
             let dsf_file = DsfFile::open(path)?;
-            println!("DSF file metadata:\n\n{}", dsf_file);
+            if let Some(tag) = dsf_file.id3_tag() {
+                tag.write_to_path(path_out, tag.version())?;
+            }
         }
 
         Ok(())
