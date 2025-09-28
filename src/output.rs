@@ -29,7 +29,7 @@ impl OutputContext {
         out_type: char,
         out_vol: f64,
         output_path: String,
-        out_rate: i32
+        out_rate: i32,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());

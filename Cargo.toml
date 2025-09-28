@@ -8,6 +8,7 @@ clap = { version = "4.4", features = ["derive"] }
 rand = "0.8"
 libc = "0.2"
 flac-codec = "1.2.0"
+dsf = "0.2.2"
 
 [build-dependencies]
 cc = "1.0"

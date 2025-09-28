@@ -8,9 +8,10 @@ use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
 use crate::dsd2pcm::HTAPS_DDR_64TO1_EQ;
 use crate::dsd2pcm::HTAPS_DSD64_32TO1_EQ; // NEW: Equiripple 32:1 half taps for DSD64 -> 88.2 kHz
 use crate::dsdin_sys::DSD_64_RATE;
-use crate::lm_resampler::EquiLMResampler;
 use crate::input::InputContext;
+use crate::lm_resampler::EquiLMResampler;
 use crate::output::OutputContext;
+use dsf::DsfFile;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -324,23 +325,7 @@ impl ConversionContext {
 
         // Save file for non-stdout outputs using a derived path (like C++)
         if self.out_ctx.output != 's' {
-            eprintln!("Saving to file...");
-            let out_path = self.derive_output_path();
-            match self.out_ctx.output.to_ascii_lowercase() {
-                'w' => {
-                    self.out_ctx
-                        .save_and_print_file(&out_path, AudioFileFormat::Wave)?;
-                }
-                'a' => {
-                    self.out_ctx
-                        .save_and_print_file(&out_path, AudioFileFormat::Aiff)?;
-                }
-                'f' => {
-                    self.out_ctx
-                        .save_and_print_file(&out_path, AudioFileFormat::Flac)?;
-                }
-                _ => {}
-            }
+            self.write_file();
         }
         // Total elapsed now includes file write
         let total_elapsed = wall_start.elapsed();
@@ -420,6 +405,35 @@ impl ConversionContext {
                  "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
 No data is lost due to buffer resizing; resizing only adjusts capacity."
              );
+        }
+
+        Ok(())
+    }
+
+    fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
+        eprintln!("Saving to file...");
+        let out_path = self.derive_output_path();
+
+        match self.out_ctx.output.to_ascii_lowercase() {
+            'w' => {
+                self.out_ctx
+                    .save_and_print_file(&out_path, AudioFileFormat::Wave)?;
+            }
+            'a' => {
+                self.out_ctx
+                    .save_and_print_file(&out_path, AudioFileFormat::Aiff)?;
+            }
+            'f' => {
+                self.out_ctx
+                    .save_and_print_file(&out_path, AudioFileFormat::Flac)?;
+            }
+            _ => {}
+        }
+
+        if self.in_ctx.input.to_ascii_lowercase().ends_with(".dsf") && !self.in_ctx.std_in {
+            let path = Path::new(&self.in_ctx.input);
+            let dsf_file = DsfFile::open(path)?;
+            println!("DSF file metadata:\n\n{}", dsf_file);
         }
 
         Ok(())
