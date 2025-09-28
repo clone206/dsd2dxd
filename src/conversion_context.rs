@@ -430,7 +430,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             _ => {}
         }
 
-        if self.in_ctx.input.to_ascii_lowercase().ends_with(".dsf") && !self.in_ctx.std_in {
+        if self.in_ctx.input.to_ascii_lowercase().ends_with(".dsf") {
             let path = Path::new(&self.in_ctx.input);
             let path_out = Path::new(&out_path);
             let dsf_file = DsfFile::open(path)?;
