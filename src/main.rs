@@ -25,7 +25,7 @@ static mut VERBOSE_MODE: bool = false;
 #[command(name = "dsd2dxd")]
 struct Cli {
     /// Number of channels
-    #[arg(short = 'c', long = "channels")]
+    #[arg(short = 'c', long = "channels", default_value = "2")]
     channels: Option<i32>,
 
     /// Format: Interleaved (I) or Planar (P)
@@ -36,7 +36,8 @@ struct Cli {
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
     bit_depth: i32,
 
-    /// Filter type: X (XLD), D (Original), E (Equiripple), C (Chebyshev)
+    /// Filter type: X (XLD), D (Original), 
+    /// E (Equiripple. Only available with double rate DSD input, or 88.2K output from DSD64), C (Chebyshev. Only available with double rate DSD input) [default: X if single rate, E if double rate]
     #[arg(short = 't', long = "filttype")]
     filter_type: Option<char>,
 
@@ -45,14 +46,14 @@ struct Cli {
     endianness: char,
 
     /// Block size in bytes
-    #[arg(short = 's', long = "bs")]
+    #[arg(short = 's', long = "bs", default_value = "4096")]
     block_size: Option<i32>,
 
-    /// Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X (none)
+    /// Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X (none) [default: F for 32 bit, T otherwise]
     #[arg(short = 'd', long = "dither")]
     dither_type: Option<char>,
 
-    /// Decimation ratio: 8, 16, 32, or 64
+    /// Output sample rate in Hz
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: i32,
 
@@ -61,6 +62,10 @@ struct Cli {
     input_rate: i32,
 
     /// Output type: S (stdout), A (aif), W (wave), F (flac)
+    /// Note that W, A, or F outputs to either 
+    /// <basename>.[wav|aif|flac] in current directory,
+    /// where <basename> is the input filename 
+    /// without the extension, or output.[wav|aif|flac] if reading from stdin.)
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
 
