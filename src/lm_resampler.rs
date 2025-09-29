@@ -1,22 +1,22 @@
 use crate::fir_convolve::FirConvolve;
-use crate::dsd2pcm::HTAPS_1MHZ_3TO1_EQ;
-use crate::dsd2pcm::HTAPS_288K_3TO1_EQ;
-use crate::dsd2pcm::HTAPS_2MHZ_7TO1_EQ; // NEW second-stage (7:1)
-use crate::dsd2pcm::HTAPS_4MHZ_7TO1_EQ; // NEW: ~4.032 MHz -> /7
-use crate::dsd2pcm::HTAPS_576K_3TO1_EQ;
-use crate::dsd2pcm::HTAPS_8MHZ_7TO1_EQ;
-use crate::dsd2pcm::HTAPS_DDRX10_7TO1_EQ;
-use crate::dsd2pcm::HTAPS_DSDX5_7TO1_EQ;
+use crate::filters::HTAPS_1MHZ_3TO1_EQ;
+use crate::filters::HTAPS_288K_3TO1_EQ;
+use crate::filters::HTAPS_2MHZ_7TO1_EQ; // NEW second-stage (7:1)
+use crate::filters::HTAPS_4MHZ_7TO1_EQ; // NEW: ~4.032 MHz -> /7
+use crate::filters::HTAPS_576K_3TO1_EQ;
+use crate::filters::HTAPS_8MHZ_7TO1_EQ;
+use crate::filters::HTAPS_DDRX10_7TO1_EQ;
+use crate::filters::HTAPS_DSDX5_7TO1_EQ;
 // NEW: 576 kHz -> /3 (final 192 kHz)
-use crate::dsd2pcm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
-use crate::dsd2pcm::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
-use crate::dsd2pcm::HTAPS_DSDX10_21TO1_EQ;    // NEW: Stage1 (10 -> /21) half taps
-use crate::dsd2pcm::HTAPS_1_34MHZ_7TO1_EQ;    // NEW: Stage2 ( -> /7 ) half taps
+use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
+use crate::filters::HTAPS_DDRX5_7TO_1_EQ; // NEW: 10*DSD -> /7
+use crate::filters::HTAPS_DSDX10_21TO1_EQ;    // NEW: Stage1 (10 -> /21) half taps
+use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;    // NEW: Stage2 ( -> /7 ) half taps
 
 // --- Add direct single-stage polyphase path for L=5, M=294 using HTAPS_DDRX5_294TO1_EQ ---
 // Enable with env: DSD2DXD_POLY294=1  (falls back to existing 3‑stage cascade if unset)
 
-use crate::dsd2pcm::HTAPS_DDRX5_294TO1_EQ; // ADD (full-rate (right) half taps for 5x / 294 path)
+use crate::filters::HTAPS_DDRX5_294TO1_EQ; // ADD (full-rate (right) half taps for 5x / 294 path)
 
 // ====================================================================================
 // Generalized equiripple L/M resampler covering:

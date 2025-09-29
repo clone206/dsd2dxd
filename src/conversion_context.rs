@@ -2,11 +2,12 @@ use crate::audio_file::AudioFileFormat;
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
-use crate::dsd2pcm::Dxd;
 // NEW: 576 kHz -> /3 (final 192 kHz)
-use crate::dsd2pcm::HTAPS_DDR_64TO1_CHEB;
-use crate::dsd2pcm::HTAPS_DDR_64TO1_EQ;
-use crate::dsd2pcm::HTAPS_DSD64_32TO1_EQ; // NEW: Equiripple 32:1 half taps for DSD64 -> 88.2 kHz
+use crate::filters::{
+    HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_32TO1_EQ,
+    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_DDR_16TO1_EQ, HTAPS_DDR_16TO1_CHEB,
+    HTAPS_DDR_32TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_D2P, HTAPS_XLD,
+};
 use crate::dsdin_sys::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
@@ -25,7 +26,6 @@ pub struct ConversionContext {
     dsd_data: Vec<u8>,
     float_data: Vec<f64>,
     pcm_data: Vec<u8>,
-    dxds: Vec<Dxd>,
     clips: i32,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
@@ -52,6 +52,71 @@ pub struct ConversionContext {
 // ====================================================================================
 
 impl ConversionContext {
+    // NEW: central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
+    // Returns Some(&half_taps) if we can drive a single-stage BytePrecalcDecimator; otherwise None.
+    fn select_precalc_taps(
+        filt_type: char,
+        dsd_rate: i32,
+        decim_ratio: i32,
+    ) -> Option<&'static [f64]> {
+        match decim_ratio {
+            // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, others fallback to legacy path
+            8 => {
+                if dsd_rate == 1 {
+                    match filt_type {
+                        'D' => Some(&HTAPS_D2P),
+                        'X' => Some(&HTAPS_XLD),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
+            // 16:1
+            16 => match filt_type {
+                'X' => Some(&HTAPS_16TO1_XLD),
+                // E – equiripple: prefer dsd128 eq table (if DSD64 we fall back to XLD)
+                'E' => {
+                    if dsd_rate == 2 {
+                        Some(&HTAPS_DDR_16TO1_EQ)
+                    } else {
+                        None
+                    }
+                }
+                // C – Chebyshev only provided for DSD128; fallback None for DSD64
+                'C' => {
+                    if dsd_rate == 2 {
+                        Some(&HTAPS_DDR_16TO1_CHEB)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
+            // 32:1
+            32 => match filt_type {
+                'X' => Some(&HTAPS_32TO1),
+                'E' => {
+                    if dsd_rate == 1 {
+                        Some(&HTAPS_DSD64_32TO1_EQ)
+                    } else {
+                        Some(&HTAPS_DDR_32TO1_EQ)
+                    }
+                }
+                'C' => Some(&HTAPS_DDR_32TO1_CHEB),
+                _ => None,
+            },
+            // 64:1
+            64 => match filt_type {
+                'E' => Some(&HTAPS_DDR_64TO1_EQ),
+                'C' => Some(&HTAPS_DDR_64TO1_CHEB),
+                'X' | 'D' => Some(&HTAPS_DDR_64TO1_EQ),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     pub fn new(
         in_ctx: InputContext,
         out_ctx: OutputContext,
@@ -59,7 +124,7 @@ impl ConversionContext {
         filt_type: char,
         verbose_param: bool,
     ) -> Result<Self, Box<dyn Error>> {
-        let dsd_bytes_per_chan = in_ctx.block_size as usize; // bytes per channel
+        let dsd_bytes_per_chan = in_ctx.block_size as usize;
         let channels = in_ctx.channels_num as usize;
         let bytes_per_sample = out_ctx.bytes_per_sample as usize;
         let lsb_first = in_ctx.lsbit_first != 0;
@@ -77,22 +142,18 @@ impl ConversionContext {
             );
         }
 
-        // Decimated PCM samples per channel: 8 DSD bits per byte
         let pcm_samples_per_chan = (dsd_bytes_per_chan * 8) / decim_ratio as usize;
+
+        // We will decide below whether we need Dxd objects (legacy) or only precalc decimators.
         let mut ctx = Self {
             in_ctx,
             out_ctx,
             dither,
             filt_type,
-            // Input buffer: bytes_per_chan * channels
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
-            // Per-channel float buffer sized for one channel’s decimated output
             float_data: vec![0.0; pcm_samples_per_chan],
-            // Interleaved PCM buffer for all channels
             pcm_data: vec![0; pcm_samples_per_chan * channels * bytes_per_sample],
-            dxds: (0..channels)
-                .map(|_| Dxd::new(filt_type, lsb_first, decim_ratio, dsd_rate))
-                .collect::<Result<Vec<_>, _>>()?,
+            // Temporarily empty; may stay empty if we build only precalc decimators.
             clips: 0,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
@@ -108,14 +169,9 @@ impl ConversionContext {
             diag_frames_out: 0,
         };
 
-        // Enable equiripple L/M cascade path when requested (E) and supported ratios
-        if ctx.filt_type == 'E'
-            && ctx.in_ctx.dsd_rate >= 1
-            && (decim_ratio == 294 || decim_ratio == 147)
-        {
+        // Fractional (L/M) path stays as-is.
+        if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147) {
             let ch = ctx.in_ctx.channels_num as usize;
-
-            // Stage1 dump flag (unchanged)
             let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
                 .map(|v| {
                     let vl = v.to_ascii_lowercase();
@@ -123,8 +179,6 @@ impl ConversionContext {
                 })
                 .unwrap_or(false);
             ctx.lm_dump_stage1 = dump_stage1;
-
-            // Build one resampler per channel; print config once (chan 0)
             ctx.eq_lm_resamplers = Some(
                 (0..ch)
                     .map(|i| {
@@ -134,18 +188,11 @@ impl ConversionContext {
                             ctx.verbose_mode,
                             ctx.lm_dump_stage1,
                             i == 0,
-                            ctx.out_ctx.rate, // guide tap selection (96k vs 192k vs 384k)
+                            ctx.out_ctx.rate,
                         )
                     })
                     .collect(),
             );
-
-            // Apply makeup gain for fractional L/M paths by increasing the global scaling factor.
-            // This mirrors existing practice for other L/M paths: scale by L (zero-stuff factor).
-            // Examples:
-            //   L=5  -> +14.0 dB (≈ ×5.012) ~ ×5
-            //   L=10 -> +20.0 dB (×10)
-            //   L=20 -> +26.02 dB (×20)
             if ctx.upsample_ratio > 1 {
                 let l = ctx.upsample_ratio as f64;
                 ctx.out_ctx.scale_factor *= l;
@@ -158,43 +205,32 @@ impl ConversionContext {
             }
         }
 
-        // Unified precomputed integer decimator path selection (select taps first, then build once)
-        {
-            let mut precalc_taps: Option<&'static [f64]> = None;
-            let mut precalc_label: Option<&'static str> = None;
-
-            if decim_ratio == 32 && ctx.in_ctx.dsd_rate == 1 && ctx.filt_type == 'E' {
-                precalc_taps = Some(&HTAPS_DSD64_32TO1_EQ);
-                precalc_label = Some("32:1 EQ (DSD64 -> 88.2 kHz)");
-            } else if decim_ratio == 64 && ctx.in_ctx.dsd_rate == 2 {
-                if ctx.filt_type == 'C' {
-                    precalc_taps = Some(&HTAPS_DDR_64TO1_CHEB);
-                    precalc_label = Some("64:1 Chebyshev (DSD128 -> 88.2 kHz)");
-                } else if ctx.filt_type == 'E' {
-                    precalc_taps = Some(&HTAPS_DDR_64TO1_EQ);
-                    precalc_label = Some("64:1 Equiripple (DSD128 -> 88.2 kHz)");
-                }
-            }
-
-            if let Some(taps) = precalc_taps {
+        // Integer simple decimation path: attempt universal precalc selection.
+        if ctx.eq_lm_resamplers.is_none() {
+            if let Some(taps) =
+                Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
+            {
                 let ch = ctx.in_ctx.channels_num as usize;
                 ctx.precalc_decims = Some(
                     (0..ch)
                         .map(|_| {
-                            BytePrecalcDecimator::new(taps, decim_ratio as u32)
+                            BytePrecalcDecimator::new(taps, ctx.decim_ratio as u32)
                                 .expect("Precalc BytePrecalcDecimator init failed")
                         })
                         .collect(),
                 );
                 if ctx.verbose_mode {
-                    if let Some(label) = precalc_label {
-                        eprintln!(
-                            "[DBG] Precalc decimator enabled: {} (ratio {}:1).",
-                            label, decim_ratio
-                        );
-                    } else {
-                        eprintln!("[DBG] Precalc decimator enabled (ratio {}:1).", decim_ratio);
-                    }
+                    eprintln!(
+                        "[DBG] Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
+                        ctx.decim_ratio, ctx.filt_type, dsd_rate
+                    );
+                }
+            } else {
+                if ctx.verbose_mode {
+                    eprintln!(
+                        "[DBG] Precalc taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
+                        ctx.decim_ratio, ctx.filt_type, dsd_rate
+                    );
                 }
             }
         }
@@ -202,7 +238,6 @@ impl ConversionContext {
         ctx.out_ctx.set_channels_num(ctx.in_ctx.channels_num);
         ctx.out_ctx.init_file()?;
         ctx.dither.init();
-
         Ok(ctx)
     }
 
@@ -692,9 +727,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             for chan in 0..channels {
                 let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
 
-                // Select per-channel processing path
                 if self.precalc_decims.is_some() {
-                    // Unified precomputed integer decimator path
                     self.float_data[..estimate_frames].fill(0.0);
                     self.process_precalc_channel(
                         chan,
@@ -705,7 +738,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     );
                     frames_used_per_chan = estimate_frames;
                 } else if self.eq_lm_resamplers.is_some() {
-                    // Fractional L/M equiripple path
                     let produced = self.process_eq_lm_channel(
                         chan,
                         block_remaining,
@@ -718,17 +750,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     } else {
                         debug_assert_eq!(frames_used_per_chan, produced);
                     }
-                } else if let Some(dxd) = self.dxds.get_mut(chan) {
-                    // Original integer FIR translate path
-                    dxd.translate(
-                        block_remaining,
-                        &self.dsd_data[dsd_chan_offset..],
-                        self.in_ctx.dsd_stride as isize,
-                        &mut self.float_data[..estimate_frames],
-                        1,
-                        self.decim_ratio,
-                    )?;
-                    frames_used_per_chan = estimate_frames;
+                } else {
+                    // Should not happen: no processing path selected.
+                    return Err("No active decimation path (precalc / LM / legacy) available.".into());
                 }
 
                 // Output / packing per channel

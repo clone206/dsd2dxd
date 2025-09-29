@@ -6,16 +6,15 @@ mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
 mod dsd;
-mod dsd2pcm;
 mod dsdin_sys;
 mod fir_convolve;
 mod input;
 mod output;
 mod lm_resampler;
+mod filters;
 
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
-pub use dsd2pcm::Dxd;
 pub use input::InputContext;
 pub use output::OutputContext;
 
