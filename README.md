@@ -87,7 +87,12 @@ Options:
   -e, --endianness <ENDIANNESS>  Endianness: M (MSB) or L (LSB) [default: M]
   -s, --bs <BLOCK_SIZE>          Block size in bytes [default: 4096]
   -d, --dither <DITHER_TYPE>     Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X (none) [default: F for 32 bit, T otherwise]
-  -r, --rate <OUTPUT_RATE>       Output sample rate in Hz [default: 352800]
+  -r, --rate <OUTPUT_RATE>       Output sample rate in Hz. Can be 
+                                 88200, 96000, 176400, 192000, 
+                                 352800, 384000. Note that
+                                 conversion to multiples of 44.1k are 
+                                 much faster than multiples of 48k
+                                 multiples [default: 352800]
   -i, --inrate <INPUT_RATE>      Input DSD rate: 1 (dsd64) or 2 (dsd128) [default: 1]
   -o, --output <OUTPUT>          Output type: S (stdout), A (aif), W (wave), F (flac) Note that W, A, or F outputs to either <basename>.[wav|aif|flac] in
                                  current directory, where <basename> is the input filename without the extension, or output.[wav|aif|flac] if reading from
@@ -120,7 +125,7 @@ The decimation filters for dsd128 were created from scratch using extensive list
 
 For a natural sound with slight rolloff, try switching to the chebyshev filters when using dsd128 (the default is normally equiripple when inputting dsd128). For a slightly more "airy" sound when using dsd128, stay with the equiripple filters, especially if going to 176.4 kHz (32:1 decimation).
 
-For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. You can actually choose the equiripple filter for DSD64 to 88.2K only (not an option for DSD64 to 176k or higher). Better to go to 176.4 kHz when sticking with the XLD filter, if the final format will be 88.2kHz or below, or if playing back on a NOS DAC. If either of those are false, you may encounter harshness on playback as the 176.4kHz file is delta sigma modulated by the DAC. Note that unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
+For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. You can actually choose the equiripple filter for DSD64 to 88.2K only (not an option for DSD64 to 176k or 352.8k, but it is for 96k, 192k, and 384k). Better to go to 176.4 kHz when sticking with the XLD filter, if the output will later be resampled to 88.2kHz or below, or if playing back the 176.4k file on a NOS DAC. If either of those are false, you may encounter harshness on playback as the 176.4kHz file is delta sigma modulated by the DAC. Note that unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
 
 There are a few dither options, including the Airwindows [Not Just Another Dither](https://www.airwindows.com/not-just-another-dither/), and [Dither Float](https://www.airwindows.com/ditherfloat/). The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. dsd2dxd uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
