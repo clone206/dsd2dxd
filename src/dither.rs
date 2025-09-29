@@ -56,9 +56,9 @@ impl Dither {
     fn process_tpdf(&mut self) -> f64 {
         // Triangular PDF dither with 1 LSB peak-to-peak amplitude (input already scaled so 1.0 = 1 LSB)
         let mut rng = rand::thread_rng();
-        let r1 = rng.gen::<f64>();
-        let r2 = rng.gen::<f64>();
-        (r1 - r2) * 0.5   // range [-0.5, 0.5], triangular distribution
+        let r1: f64 = rng.gen_range(0.0..=0.5);
+        let r2: f64 = rng.gen_range(0.0..=0.5);
+        r1 - r2   // range [-0.5, 0.5], triangular distribution
     }
 
     pub fn process_samp(&mut self, sample: &mut f64, chan: usize) {
