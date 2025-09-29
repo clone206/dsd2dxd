@@ -75,10 +75,6 @@ struct Cli {
     /// Input files (use - for stdin)
     #[arg(name = "FILES")]
     files: Vec<String>,
-
-    /// Output file (if not stdout)
-    #[arg(short = 'O', long = "output-file")]
-    output_file: Option<String>,
 }
 
 fn verbose(message: &str, new_line: bool) {
@@ -113,7 +109,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli.bit_depth,
         cli.output,
         cli.level,
-        cli.output_file.unwrap_or_default(),
         cli.output_rate,
     )?;
 

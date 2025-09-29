@@ -11,7 +11,6 @@ use crate::dsdin_sys::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
 use crate::output::OutputContext;
-use dsf::DsfFile;
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -317,11 +316,13 @@ impl ConversionContext {
         eprintln!("Block Size: {} bytes", self.in_ctx.block_size);
         eprintln!("Scaling Factor: {}", self.out_ctx.scale_factor);
         eprintln!("Upsample Ratio (L): {}", self.upsample_ratio);
-        eprintln!("");
 
         // Process (DSP)
         self.process_blocks()?;
         let dsp_elapsed = wall_start.elapsed();
+
+        eprintln!("Clipped {} times.", self.clips);
+        eprintln!("");
 
         // Save file for non-stdout outputs using a derived path (like C++)
         if self.out_ctx.output != 's' {
@@ -330,84 +331,91 @@ impl ConversionContext {
         // Total elapsed now includes file write
         let total_elapsed = wall_start.elapsed();
 
-        // Report timing & speed
         if self.total_dsd_bytes_processed > 0 {
-            let channels = self.in_ctx.channels_num as u64;
-            // Bytes per channel
-            let bytes_per_chan = self.total_dsd_bytes_processed / channels;
-            let bits_per_chan = bytes_per_chan * 8;
-            let dsd_base_rate = (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
-            let audio_seconds = if dsd_base_rate > 0 {
-                (bits_per_chan as f64) / (dsd_base_rate as f64)
-            } else {
-                0.0
-            };
-            let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
-            let total_sec = total_elapsed.as_secs_f64().max(1e-9);
-            let speed_dsp = audio_seconds / dsp_sec;
-            let speed_total = audio_seconds / total_sec;
-            // Format H:MM:SS for elapsed
-            let total_secs = total_elapsed.as_secs();
-            let h = total_secs / 3600;
-            let m = (total_secs % 3600) / 60;
-            let s = total_secs % 60;
-            eprintln!(
-                "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
-                self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
-            );
+            self.report_timing(dsp_elapsed, total_elapsed);
         }
 
-        // ---- Diagnostics: expected vs actual output length (verbose only) ----
         if self.verbose_mode {
-            let ch = self.in_ctx.channels_num.max(1) as u64;
-            let bps = self.out_ctx.bytes_per_sample as u64;
-            let expected_frames = self.diag_expected_frames_floor;
-            let actual_frames = self.diag_frames_out;
-            // Estimate latency (frames not emitted at start) for rational path
-            let mut latency_frames_est = 0u64;
-            if let Some(ref rvec) = self.eq_lm_resamplers {
-                if let Some(r0) = rvec.first() {
-                    latency_frames_est =
-                        r0.output_latency_frames(self.lm_dump_stage1).round() as u64;
-                }
-            }
-            let expected_bytes = expected_frames * ch * bps;
-            let actual_bytes = actual_frames * ch * bps;
-            let diff_frames = expected_frames as i64 - actual_frames as i64;
-            let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
-            let pct = if expected_frames > 0 {
-                (diff_frames as f64) * 100.0 / (expected_frames as f64)
-            } else {
-                0.0
-            };
-            eprintln!("\n[DIAG] Output length accounting:");
-            eprintln!(
-                "[DIAG] DSD bits in: {}  L={}  M={}  stage1_dump={}",
-                self.diag_bits_in, self.upsample_ratio, self.decim_ratio, self.lm_dump_stage1
-            );
-            eprintln!(
-                "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
-                expected_frames, actual_frames, diff_frames, pct
-            );
-            if latency_frames_est > 0 {
-                let post_latency = expected_frames.saturating_sub(latency_frames_est);
-                let residual = post_latency as i64 - actual_frames as i64;
-                eprintln!(
-                    "[DIAG] Est. latency frames: {}  Expected after latency: {}  Residual diff: {}",
-                    latency_frames_est, post_latency, residual
-                );
-            }
-            eprintln!(
-                "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
-                expected_bytes, actual_bytes, diff_bytes
-            );
-            eprintln!(
-                 "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
-No data is lost due to buffer resizing; resizing only adjusts capacity."
-             );
+            self.report_in_out();
         }
 
         Ok(())
+    }
+
+    // Report timing & speed
+    fn report_timing(&self, dsp_elapsed: std::time::Duration, total_elapsed: std::time::Duration) {
+        let channels = self.in_ctx.channels_num as u64;
+        // Bytes per channel
+        let bytes_per_chan = self.total_dsd_bytes_processed / channels;
+        let bits_per_chan = bytes_per_chan * 8;
+        let dsd_base_rate = (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
+        let audio_seconds = if dsd_base_rate > 0 {
+            (bits_per_chan as f64) / (dsd_base_rate as f64)
+        } else {
+            0.0
+        };
+        let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
+        let total_sec = total_elapsed.as_secs_f64().max(1e-9);
+        let speed_dsp = audio_seconds / dsp_sec;
+        let speed_total = audio_seconds / total_sec;
+        // Format H:MM:SS for elapsed
+        let total_secs = total_elapsed.as_secs();
+        let h = total_secs / 3600;
+        let m = (total_secs % 3600) / 60;
+        let s = total_secs % 60;
+        eprintln!(
+            "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
+            self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
+        );
+    }
+
+    // ---- Diagnostics: expected vs actual output length (verbose only) ----
+    fn report_in_out(&self) {
+        let ch = self.in_ctx.channels_num.max(1) as u64;
+        let bps = self.out_ctx.bytes_per_sample as u64;
+        let expected_frames = self.diag_expected_frames_floor;
+        let actual_frames = self.diag_frames_out;
+        // Estimate latency (frames not emitted at start) for rational path
+        let mut latency_frames_est = 0u64;
+        if let Some(ref rvec) = self.eq_lm_resamplers {
+            if let Some(r0) = rvec.first() {
+                latency_frames_est = r0.output_latency_frames(self.lm_dump_stage1).round() as u64;
+            }
+        }
+        let expected_bytes = expected_frames * ch * bps;
+        let actual_bytes = actual_frames * ch * bps;
+        let diff_frames = expected_frames as i64 - actual_frames as i64;
+        let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
+        let pct = if expected_frames > 0 {
+            (diff_frames as f64) * 100.0 / (expected_frames as f64)
+        } else {
+            0.0
+        };
+        eprintln!("\n[DIAG] Output length accounting:");
+        eprintln!(
+            "[DIAG] DSD bits in: {}  L={}  M={}  stage1_dump={}",
+            self.diag_bits_in, self.upsample_ratio, self.decim_ratio, self.lm_dump_stage1
+        );
+        eprintln!(
+            "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
+            expected_frames, actual_frames, diff_frames, pct
+        );
+        if latency_frames_est > 0 {
+            let post_latency = expected_frames.saturating_sub(latency_frames_est);
+            let residual = post_latency as i64 - actual_frames as i64;
+            eprintln!(
+                "[DIAG] Est. latency frames: {}  Expected after latency: {}  Residual diff: {}",
+                latency_frames_est, post_latency, residual
+            );
+        }
+        eprintln!(
+            "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
+            expected_bytes, actual_bytes, diff_bytes
+        );
+        eprintln!(
+            "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
+No data is lost due to buffer resizing; resizing only adjusts capacity."
+        );
     }
 
     fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
@@ -431,6 +439,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
 
         if self.in_ctx.input.to_ascii_lowercase().ends_with(".dsf") {
+            use dsf::DsfFile;
             let path = Path::new(&self.in_ctx.input);
             let path_out = Path::new(&out_path);
             let dsf_file = DsfFile::open(path)?;

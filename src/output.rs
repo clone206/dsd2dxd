@@ -20,7 +20,6 @@ pub struct OutputContext {
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
     pub file: Option<File>,
-    pub output_path: String,
 }
 
 impl OutputContext {
@@ -28,7 +27,6 @@ impl OutputContext {
         out_bits: i32,
         out_type: char,
         out_vol: f64,
-        output_path: String,
         out_rate: i32,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
@@ -57,7 +55,6 @@ impl OutputContext {
             float_file: None,
             int_file: None,
             file: None,
-            output_path,
         };
 
         ctx.set_scaling(out_vol);
@@ -148,13 +145,6 @@ impl OutputContext {
             }
         }
     }
-
-    pub fn open_output_file(&mut self) -> Result<(), Box<dyn Error>> {
-        if self.output != 's' {
-            self.file = Some(File::create(&self.output_path)?);
-        }
-        Ok(())
-    }
 }
 
 impl Clone for OutputContext {
@@ -170,7 +160,6 @@ impl Clone for OutputContext {
             float_file: self.float_file.clone(),
             int_file: self.int_file.clone(),
             file: None, // File cannot be cloned, so we create a new None
-            output_path: self.output_path.clone(),
         }
     }
 }
