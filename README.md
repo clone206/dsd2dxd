@@ -72,32 +72,53 @@ For many users, the majority of the below options can usually be ignored, as you
 ```
 Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
 
-If reading from a file, certain command line options you provide (e.g. block size) may be overridden 
-using the metadata found in that file (either a dsf or dff file).
-If neither filename(s) or - is provided, standard in is assumed.
-Multiple filenames can be provided and the input-related options specified will be applied to each, 
+If reading from a file, certain command line options you provide 
+(e.g. block size) may be overridden using the metadata found in that 
+file (either a dsf or dff file). If neither filename(s) or - is 
+provided, standard in is assumed. Multiple filenames can be provided 
+and the input-related options specified will be applied to each, 
 except where overridden by each file's metadata.
 
 Options:
   -c, --channels <CHANNELS>      Number of channels [default: 2]
-  -f, --fmt <FORMAT>             Format: Interleaved (I) or Planar (P) [default: I]
-  -b, --bitdepth <BIT_DEPTH>     Bit depth: 16, 20, 24, or 32 (float) [default: 24]
-  -t, --filttype <FILTER_TYPE>   Filter type: X (XLD), D (Original), E (Equiripple. Only available with double rate DSD input, or 88.2K output from
-                                 DSD64), C (Chebyshev. Only available with double rate DSD input) [default: X if single rate, E if double rate]
-  -e, --endianness <ENDIANNESS>  Endianness: M (MSB) or L (LSB) [default: M]
+  -f, --fmt <FORMAT>             Format: Interleaved (I) or Planar 
+                                 (P) [default: I]
+  -b, --bitdepth <BIT_DEPTH>     Bit depth: 16, 20, 24, or 32 (float) 
+                                 [default: 24]
+  -t, --filttype <FILTER_TYPE>   Filter type: X (XLD), D (Original), 
+                                 E (Equiripple. Only available with 
+                                 double rate DSD input, or 88.2K 
+                                 output from
+                                 DSD64), C (Chebyshev. Only available 
+                                 with double rate DSD input) 
+                                 [default: X if single rate, E if 
+                                 double rate]
+  -e, --endianness <ENDIANNESS>  Endianness: M (MSB) or L (LSB) 
+                                 [default: M]
   -s, --bs <BLOCK_SIZE>          Block size in bytes [default: 4096]
-  -d, --dither <DITHER_TYPE>     Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X (none) [default: F for 32 bit, T otherwise]
+  -d, --dither <DITHER_TYPE>     Dither type: T (TPDF), R 
+                                 (rectangular), N (NJAD), F (float), 
+                                 X (none) [default: F for 32 bit, T 
+                                 otherwise]
   -r, --rate <OUTPUT_RATE>       Output sample rate in Hz. Can be 
                                  88200, 96000, 176400, 192000, 
                                  352800, 384000. Note that
                                  conversion to multiples of 44.1k are 
                                  much faster than multiples of 48k
                                  multiples [default: 352800]
-  -i, --inrate <INPUT_RATE>      Input DSD rate: 1 (dsd64) or 2 (dsd128) [default: 1]
-  -o, --output <OUTPUT>          Output type: S (stdout), A (aif), W (wave), F (flac) Note that W, A, or F outputs to either <basename>.[wav|aif|flac] in
-                                 current directory, where <basename> is the input filename without the extension, or output.[wav|aif|flac] if reading from
+  -i, --inrate <INPUT_RATE>      Input DSD rate: 1 (dsd64) or 2 
+                                 (dsd128) [default: 1]
+  -o, --output <OUTPUT>          Output type: S (stdout), A (aif), W 
+                                 (wave), F (flac) Note that W, A, or 
+                                 F outputs to either <basename>.[wav|
+                                 aif|flac] in
+                                 current directory, where <basename> 
+                                 is the input filename without the 
+                                 extension, or output.[wav|aif|flac] 
+                                 if reading from
                                  stdin.) [default: S]
-  -l, --level <LEVEL>            Volume level adjustment in dB [default: 0.0]
+  -l, --level <LEVEL>            Volume level adjustment in dB 
+                                 [default: 0.0]
   -v, --verbose                  Print diagnostic messages
   -h, --help                     Print help
 ```
