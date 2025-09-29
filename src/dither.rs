@@ -54,12 +54,11 @@ impl Dither {
     }
 
     fn process_tpdf(&mut self) -> f64 {
+        // Triangular PDF dither with 1 LSB peak-to-peak amplitude (input already scaled so 1.0 = 1 LSB)
         let mut rng = rand::thread_rng();
-        // Scale TPDF dither for 24-bit
-        // For 24-bit, we want the dither amplitude to be 1 LSB peak-to-peak
-        // 1 LSB at 24-bit is 1/8388608 (2^-23)
-        let scale = 1.0 / 8388608.0;
-        (rng.gen::<f64>() - rng.gen::<f64>()) * scale
+        let r1 = rng.gen::<f64>();
+        let r2 = rng.gen::<f64>();
+        (r1 - r2) * 0.5   // range [-0.5, 0.5], triangular distribution
     }
 
     pub fn process_samp(&mut self, sample: &mut f64, chan: usize) {
@@ -109,7 +108,7 @@ impl Dither {
         }
 
         // Hotbin A becomes the Benford bin value for this number floored
-        let hot_bin_a = benfordize.floor() as usize;
+        let mut hot_bin_a = benfordize.floor() as usize;
 
         let mut total_a = 0.0;
         // produce total number- smaller of total_a & total_b is closer to Benford real
@@ -134,6 +133,8 @@ impl Dither {
 
             // Remove temp weight from this leading digit
             byn[hot_bin_a] -= 1.0;
+        } else {
+            hot_bin_a = 10; // out of range
         }
 
         // Isolate leading digit of number
@@ -146,7 +147,7 @@ impl Dither {
         }
 
         // Hotbin B becomes the Benford bin value for this number ceiled
-        let hot_bin_b = benfordize.floor() as usize;
+        let mut hot_bin_b = benfordize.floor() as usize;
 
         let mut total_b = 0.0;
         if hot_bin_b > 0 && hot_bin_b < 10 {
@@ -169,6 +170,8 @@ impl Dither {
 
             // Remove temp weight from this leading digit
             byn[hot_bin_b] -= 1.0;
+        } else {
+            hot_bin_b = 10; // out of range
         }
 
         // Assign the relevant one to the delay line
