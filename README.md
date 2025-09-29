@@ -176,12 +176,12 @@ DSF and DFF file data & metadata reading is done via a modified version of [dsdu
 
 ## Contributing
 
-Contributions from experienced  developers welcome! Just keep the code clean and try to follow the formatting patterns already in place (e.g. space indentation, avoiding overly long lines of code.) I personally use the Microsoft C/C++ extensions in vscode, which include a formatter. Using the same formatter may save some headaches.
+Contributions from experienced  developers welcome! Just keep the code clean and try to follow the formatting patterns already in place (e.g. space indentation, avoiding overly long lines of code.) I personally use vscode, which includes a formatter. Using the same formatter may save some headaches.
 
 Make sure to do some testing, including with the included test scripts and test tone DSD files.
 
-If you'd like to create new filters for dsd2dxd, you'll need to make sure they have an even number of taps. The filter coefficients stored in the dsd2pcm C header only include the 2nd half of the taps of each symmetric decimation filter. Thus far the approach taken in the filter design has been to prefer gradual rolloffs and to allow small amounts of aliasing. This author doesn't put much stock in the importance of ultrasonic frequencies for enjoyable sound reproduction.
+If you'd like to create new filters for dsd2dxd, you'll need to make sure they have an even number of taps (odd filter order). The filter coefficients stored in the code only include the 2nd half of the taps of each symmetric decimation filter. Thus far the approach taken in the filter design has been to prefer gradual rolloffs and to allow small amounts of aliasing. This author doesn't put much stock in the importance of ultrasonic frequencies for enjoyable sound reproduction.
 
-In summary, I've tried to keep things as flat as possible out to 20kHz, gradually rolling off after that, with the transition band edging slightly past the Nyquist frequency, and keeping the number of taps to a minimum.
+In summary, I've tried to keep things as flat as possible out to 20kHz-22kHz, gradually rolling off after that, with the transition band edging slightly past the Nyquist frequency, and keeping the number of taps to a minimum.
 
 For general info on contributing see [https://docs.github.com/en/get-started/exploring-projects-on-github/contributing-to-a-project](https://docs.github.com/en/get-started/exploring-projects-on-github/contributing-to-a-project). Basically, fork this repository, create a feature branch from main, and submit a pull request.
