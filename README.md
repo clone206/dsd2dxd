@@ -51,9 +51,10 @@ dsd2dxd -o w *.d?f
 # Example of reading raw dsd (planar format, lsb first) into stdin,
 # piping output to ffplay
 dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ch_layout stereo -i -
-# Example of piping output to ffmpeg to save to a flac file
-# (Planar, LSB-first, "Not Just Another" dither, 176.4K output from dsd64 input file, quantized to 20 bits)
-dsd2dxd -f P -e L -d N -r 176400 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ch_layout stereo -i - -c:a flac outfile.flac
+# Example of piping output to ffmpeg to save to an apple lossless file
+# (Planar, LSB-first, "Not Just Another" dither, 176.4K output from 
+# dsd64 input file)
+dsd2dxd -f P -e L -d N -r 176400 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ch_layout stereo -i - -c:a alac outfile.m4a
 # Generalized example of using with an input and output file,
 # via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
