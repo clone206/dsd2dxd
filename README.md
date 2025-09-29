@@ -12,10 +12,11 @@ Converts DSD to PCM on the command line with the following features:
   - The dither will be optimized accordingly, including for 20 bit output.
 - Allows you to choose between different decimation filters.
 
-## Dependencies
+## Build Dependencies
 
 - A C compiler (e.g. `gcc`)
-- Rust/Cargo
+  - May require installing the developer tools on MacOS
+- [Rust/Cargo](https://rust-lang.org/tools/install/)
   - On *nix systems like MacOS & Linux, this can be as easy as running the following on the command line: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. Feel free to accept the defaults when the installer prompts you.
 - `ffmpeg` (Optional)
   - Only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for converting/compressing the output of dsd2dxd (e.g. to an apple lossless file, a format that dsd2dxd doesn't yet support.)
