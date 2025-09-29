@@ -53,7 +53,7 @@ struct Cli {
     #[arg(short = 'd', long = "dither")]
     dither_type: Option<char>,
 
-    /// Output sample rate in Hz. Can be 8200, 96000, 176400, 192000, 352800, 384000. Note that conversion to multiples of 44.1k are much faster than 48k multiples
+    /// Output sample rate in Hz. Can be 88200, 96000, 176400, 192000, 352800, 384000. Note that conversion to multiples of 44.1k are much faster than 48k multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: i32,
 
