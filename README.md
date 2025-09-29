@@ -86,13 +86,13 @@ Options:
           Format: Interleaved (I) or Planar
           (P) [default: I]
   -b, --bitdepth <BIT_DEPTH>
-          Bit depth: 16, 20, 24, or 32
+          Bit depth: 16, 20, 24 (fixed integer), or 32
           (float) [default: 24]
   -t, --filttype <FILTER_TYPE>
           Filter type: X (XLD), D
-          (Original), E (Equiripple. Only
+          (Original dsd2pcm), E (Equiripple. Only
           available with double rate DSD
-          input, or 88.2K output from
+          input, or 88.2K output and multiples of 48k from
           DSD64), C (Chebyshev. Only
           available with double rate DSD
           input) [default: X if single rate,
@@ -158,15 +158,13 @@ dsd2dxd includes shell scripts to compile and test with 1kHz test tone files.
 
 The decimation filters for dsd128 were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
 
-For a natural sound with slight rolloff, try switching to the chebyshev filters when using dsd128 (the default is normally equiripple when inputting dsd128). For a slightly more "airy" sound when using dsd128, stay with the equiripple filters, especially if going to 176.4 kHz (32:1 decimation).
+For a natural sound with slight rolloff, try switching to the chebyshev filters when using dsd128 (the default is normally equiripple when inputting dsd128). For a slightly more "airy" sound when using dsd128, stay with the equiripple filters, especially if going to 176.4 kHz.
 
-For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. You can actually choose the equiripple filter for DSD64 to 88.2K only (not an option for DSD64 to 176k or 352.8k, but it is for 96k, 192k, and 384k). Better to go to 176.4 kHz when sticking with the XLD filter, if the output will later be resampled to 88.2kHz or below, or if playing back the 176.4k file on a NOS DAC. If either of those are false, you may encounter harshness on playback as the 176.4kHz file is delta sigma modulated by the DAC. Note that unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
+For dsd64, if you like the sound of XLD then feel free to use those filters here (default for dsd64), but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. You can actually choose the equiripple filter for DSD64 to 88.2K (not an option for DSD64 to 176k or 352.8k, but it is for 96k, 192k, and 384k). Better to go to 176.4 kHz when sticking with the XLD filter, if the output will later be resampled to 88.2kHz or below, or if playing back the 176.4k file on a NOS DAC. If either of those are false, you may encounter harshness on playback as the 176.4kHz file is delta sigma modulated by the DAC. Note that unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
 
 There are a few dither options, including the Airwindows [Not Just Another Dither](https://www.airwindows.com/not-just-another-dither/), and [Dither Float](https://www.airwindows.com/ditherfloat/). The former is not truly random and uses weighting based on Benford Real Numbers, and the latter is for use when outputting to 32 bit float. dsd2dxd uses double precision calculations internally so technically outputting to 32 bit float represents a loss of precision, hence the Dither Float option.
 
 You can also turn the dither off completely if that's your thing.
-
-```
 
 ## Acknowledgements
 

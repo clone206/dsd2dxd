@@ -32,12 +32,12 @@ struct Cli {
     #[arg(short = 'f', long = "fmt", default_value = "I")]
     format: char,
 
-    /// Bit depth: 16, 20, 24, or 32 (float)
+    /// Bit depth: 16, 20, 24 (fixed integer), or 32 (float)
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
     bit_depth: i32,
 
-    /// Filter type: X (XLD), D (Original), 
-    /// E (Equiripple. Only available with double rate DSD input, or 88.2K output from DSD64), C (Chebyshev. Only available with double rate DSD input) [default: X if single rate, E if double rate]
+    /// Filter type: X (XLD), D (Original dsd2pcm), 
+    /// E (Equiripple. Only available with double rate DSD input, or 88.2K output and multiples of 48k from DSD64), C (Chebyshev. Only available with double rate DSD input) [default: X if single rate, E if double rate]
     #[arg(short = 't', long = "filttype")]
     filter_type: Option<char>,
 
