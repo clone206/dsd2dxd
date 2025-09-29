@@ -734,26 +734,33 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 // Output / packing per channel
                 // TODO: restore float output for stdout (write_float)
                 if self.out_ctx.output == 's' {
-                    // Interleave into pcm_data
-                    let mut pcm_pos = chan * self.out_ctx.bytes_per_sample as usize;
+                    // Interleave into pcm_data (handle float vs integer separately)
+                    let bps = self.out_ctx.bytes_per_sample as usize; // 4 for 32-bit float
+                    let mut pcm_pos = chan * bps;
                     for s in 0..frames_used_per_chan {
-                        let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                        self.dither.process_samp(&mut qin, chan);
-                        let value = Self::my_round(qin) as i32;
-                        let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
                         let mut out_idx = pcm_pos;
-                        self.write_int(
-                            &mut out_idx,
-                            clamped,
-                            self.out_ctx.bytes_per_sample as usize,
-                        );
-                        pcm_pos += channels * (self.out_ctx.bytes_per_sample as usize);
+                        if self.out_ctx.bits == 32 {
+                            // 32-bit float path: scale only, no dithering/clipping
+                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut q, chan);
+                            self.write_float(&mut out_idx, q);
+                        } else {
+                            // Integer path: dither + clamp + write_int
+                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut qin, chan);
+                            let value = Self::my_round(qin) as i32;
+                            let peak = self.out_ctx.peak_level as i32;
+                            let clamped = self.clamp_value(-peak, value, peak - 1);
+                            self.write_int(&mut out_idx, clamped, bps);
+                        }
+                        pcm_pos += channels * bps;
                     }
                 } else {
                     // File formats: push samples into AudioFile buffers
                     if self.out_ctx.bits == 32 {
                         for s in 0..frames_used_per_chan {
-                            let q = self.float_data[s] * self.out_ctx.scale_factor;
+                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut q, chan);
                             self.out_ctx.push_samp(q as f32, chan);
                         }
                     } else {
@@ -761,7 +768,8 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                             let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
                             self.dither.process_samp(&mut qin, chan);
                             let value = Self::my_round(qin) as i32;
-                            let clamped = self.clamp_value(-8_388_608, value, 8_388_607);
+                            let peak = self.out_ctx.peak_level as i32;
+                            let clamped = self.clamp_value(-peak, value, peak - 1);
                             self.out_ctx.push_samp(clamped, chan);
                         }
                     }
@@ -875,7 +883,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
         match bytes {
             3 => {
-                let v = value as i32;
+                // 24-bit container (also used for 20-bit). For 20-bit we left-align by shifting 4.
+                let mut v = value;
+                if self.out_ctx.bits == 20 {
+                    v <<= 4; // align 20 significant bits into the top of 24-bit word (LS 4 bits zero)
+                }
                 self.pcm_data[*offset] = (v & 0xFF) as u8;
                 self.pcm_data[*offset + 1] = ((v >> 8) & 0xFF) as u8;
                 self.pcm_data[*offset + 2] = ((v >> 16) & 0xFF) as u8;
@@ -895,6 +907,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     }
 
     // Make clamp a method to access self
+    #[inline]
     fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
         let mut result = value;
         if value < min {

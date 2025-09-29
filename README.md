@@ -4,7 +4,7 @@ Converts DSD to PCM on the command line with the following features:
 - Accepts single rate (dsd64), or double rate (dsd128) DSD as input.
   - .dsf and .dff files can be read from, including metadata.
 - Can output to an aiff, wav, or flac file.
-  - Where possible, ID3v2 tags are copied to the destination files (when read from .dsf or .dff file).
+  - Where possible, ID3v2 tags are copied to the destination files (when read from .dsf file).
 - Can also read raw DSD bitstreams from standard in (stdin) and output raw PCM to standard out (stdout), so you can use piping/shell redirection to combine with other audio utilities on the command line.
   - Handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved, unless otherwise specified with the below command line options.
 - Allows you to specify the type of dither to use on output
@@ -14,27 +14,22 @@ Converts DSD to PCM on the command line with the following features:
 
 ## Dependencies
 
-- \*nix environment (linux, MacOS, etc.) with `g++` and `pkg-config` installed.
-- [taglib 2.0.1](https://github.com/taglib/taglib)
-  - Note that many *nix distros have dated versions of the taglib dev package, so you may need to follow the [install instructions](https://github.com/taglib/taglib/blob/master/INSTALL.md) from the above repo and use cmake/make to build and install taglib 2.0.1 from source.
-  - If using [homebrew](https://brew.sh/), such as on MacOS, it should be as simple as running `brew install taglib --HEAD`. It is also possible to install homebrew on linux.
-- `flac`
-  - With apt on linux: `sudo apt install libflac++-dev`
-  - With homebrew: `brew install flac`
+- A C compiler (e.g. `gcc`)
+- Rust/Cargo
 - `ffmpeg` (Optional)
   - Only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for converting/compressing the output of dsd2dxd (e.g. to an apple lossless file, a format that dsd2dxd doesn't yet support.)
   - With apt on linux: `sudo apt install ffmpeg`
   - With homebrew `brew install ffmpeg`
 
-## C++ program usage
+## Program usage
 
 ### Compling
 
-`g++ *.c *.cpp -std=c++17 -O3 -o dsd2dxd $(pkg-config --libs --cflags taglib flac++)`
+`RUSTFLAGS='-C target-cpu=native' cargo build --release`
 
-### Installing
+### Installing on *nix
 
-`sudo install dsd2dxd /usr/local/bin/`
+`sudo install ./target/release/dsd2dxd /usr/local/bin/`
 
 You can specify any directory you like as the last argument in the above install command. For example, instead of `/usr/local/bin/` you could use `/usr/bin/`. As long as the directory is in your `$PATH` it will work.
 
@@ -53,23 +48,23 @@ dsd2dxd -o a *.dsf
 dsd2dxd -o w *.d?f
 # Example of reading raw dsd (planar format, lsb first) into stdin,
 # piping output to ffplay
-dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ac 2 -i -
+dsd2dxd -f P -e L < 1kHz_stereo_p.dsd | ffplay -f s24le -ar 352.8k -ch_layout stereo -i -
 # Example of piping output to ffmpeg to save to a flac file
-# (Planar, LSB-first, "Not Just Another" dither, 16:1 decimation on dsd64 input file, quantized to 20 bits)
-dsd2dxd -f P -e L -d N -r 16 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ac 2 -i - -c:a flac outfile.flac
+# (Planar, LSB-first, "Not Just Another" dither, 176.4K output from dsd64 input file, quantized to 20 bits)
+dsd2dxd -f P -e L -d N -r 176400 -b 20 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 176.4k -ch_layout stereo -i - -c:a flac outfile.flac
 # Generalized example of using with an input and output file,
 # via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
 # Recursively convert all files ending in .dsf or .DSF in the current
 # directory and subdirectories, to 24 bit flac files, using the equiripple filter
 # where the input files are dsd128 (falling back to the default filter for 
-# dsd64), with 32:1 decimation.
-dsd2dxd -t E -r 32 -b 24 -o f ./{*,**/*}.{dsf,DSF}
+# dsd64), with 88.2K output.
+dsd2dxd -r 88200 -b 24 -o f ./{*,**/*}.{dsf,DSF}
 ```
 
 ### Full Usage and Options
 
-For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-l`, for setting the output type, decimation ratio, and level adjustment, respectively.
+For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-l`, for setting the output type, output sample rate, and level adjustment, respectively.
 
 
 ```
@@ -92,9 +87,9 @@ except where overridden by each file's metadata.
         X (XLD filter), D (Original dsd2pcm filter. Only 
         available with 8:1 decimation ratio), 
         E (Equiripple. Only 
-        available with double rate DSD input),
+        available with double rate DSD input, and 88.2K output from DSD64),
         C (Chebyshev. Only available with double rate DSD input)
-        (default: X [single rate] or C [double rate])
+        (default: X [single rate] or E [double rate])
     -e, --endianness
         Byte order of input. M (MSB first) or L (LSB first) (default: M)
     -s, --bs
@@ -102,9 +97,9 @@ except where overridden by each file's metadata.
     -d, --dither
         Which type of dither to use. T (TPDF), R (rectangular), N (Not Just Another
         Dither), F (floating point dither), or X (no dither) (default: F for 32 bit, T otherwise)
-    -r, --ratio
-        Decimation ratio. 8, 16, 32, or 64 (to 1) (default: 8. 64 only available with 
-        double rate DSD, Chebyshev filter)
+    -r, --rate
+        Output sample rate in Hz. 384000, 352800, 192000,
+        176400, 96000, 88200 (default: 352800)
     -i, --inrate
         Input DSD data rate. 1 (dsd64) or 2 (dsd128) (default: 1. 2 only available with 
         Decimation ratio of 16, 32, or 64)
