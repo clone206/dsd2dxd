@@ -377,7 +377,7 @@ impl EquiLMResampler {
                 let delay3 = (full3 - 1) / 2;
                 let poly2 = DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7);
                 let poly3 = DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3);
-                let use_stage1_poly = l < 14 && !dump_stage1;
+                let use_stage1_poly = !dump_stage1;
                 let stage1_poly = if use_stage1_poly {
                     if verbose && print_config {
                         eprintln!(
@@ -502,7 +502,7 @@ impl EquiLMResampler {
                 let delay3 = (full3 - 1) / 2;
                 let poly2 = DecimFIRSym::new_from_half(right2, 7);
                 let poly3 = DecimFIRSym::new_from_half(right3, 3);
-                let use_stage1_poly = l < 7 && !dump_stage1; // only L=5 benefits
+                let use_stage1_poly = !dump_stage1;
                 let stage1_poly = if use_stage1_poly {
                     if verbose && print_config {
                         eprintln!(
