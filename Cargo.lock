@@ -166,11 +166,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dff"
+version = "0.1.0"
+dependencies = [
+ "id3",
+ "sampled_data_duration",
+]
+
+[[package]]
 name = "dsd2dxd"
 version = "0.1.0"
 dependencies = [
  "cc",
  "clap",
+ "dff",
  "dsf",
  "flac-codec",
  "libc",

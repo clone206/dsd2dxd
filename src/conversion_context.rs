@@ -1,14 +1,14 @@
 use crate::audio_file::AudioFileFormat;
-use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
+use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dither::Dither;
 // NEW: 576 kHz -> /3 (final 192 kHz)
-use crate::filters::{
-    HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_32TO1_EQ,
-    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_DDR_16TO1_EQ, HTAPS_DDR_16TO1_CHEB,
-    HTAPS_DDR_32TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_D2P, HTAPS_XLD,
-};
 use crate::dsdin_sys::DSD_64_RATE;
+use crate::filters::{
+    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
+    HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
+    HTAPS_DSD64_32TO1_EQ, HTAPS_XLD,
+};
 use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
 use crate::output::OutputContext;
@@ -207,8 +207,7 @@ impl ConversionContext {
 
         // Integer simple decimation path: attempt universal precalc selection.
         if ctx.eq_lm_resamplers.is_none() {
-            if let Some(taps) =
-                Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
+            if let Some(taps) = Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
             {
                 let ch = ctx.in_ctx.channels_num as usize;
                 ctx.precalc_decims = Some(
@@ -481,6 +480,14 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             if let Some(tag) = dsf_file.id3_tag() {
                 tag.write_to_path(path_out, tag.version())?;
             }
+        } else if self.in_ctx.input.to_ascii_lowercase().ends_with(".dff") {
+            use dff::DffFile;
+            let path = Path::new(&self.in_ctx.input);
+            let path_out = Path::new(&out_path);
+            let dff_file = DffFile::open(path)?;
+            if let Some(tag) = dff_file.id3_tag() {
+                tag.write_to_path(path_out, tag.version())?;
+            } 
         }
 
         Ok(())
@@ -669,11 +676,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 // Rational path: frames ≈ floor(bits * L / M) (or first-stage denominator if dumping)
                 let eff_L = self.upsample_ratio as u64;
                 let eff_M = if self.lm_dump_stage1 {
-                    if self.decim_ratio == 294 {
-                        14
-                    } else {
-                        7
-                    }
+                    if self.decim_ratio == 294 { 14 } else { 7 }
                 } else {
                     self.decim_ratio
                 } as u64;
@@ -752,7 +755,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     }
                 } else {
                     // Should not happen: no processing path selected.
-                    return Err("No active decimation path (precalc / LM / legacy) available.".into());
+                    return Err(
+                        "No active decimation path (precalc / LM / legacy) available.".into(),
+                    );
                 }
 
                 // Output / packing per channel
@@ -965,17 +970,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         let upsample_ratio: u32 = if decim_ratio < 147 {
             1
         } else if out_ctx.rate == 384_000 {
-            if in_ctx.dsd_rate == 1 {
-                20
-            } else {
-                10
-            }
+            if in_ctx.dsd_rate == 1 { 20 } else { 10 }
         } else if out_ctx.rate == 192_000 {
-            if in_ctx.dsd_rate == 1 {
-                10
-            } else {
-                5
-            }
+            if in_ctx.dsd_rate == 1 { 10 } else { 5 }
         } else if out_ctx.rate == 96_000 {
             5
         } else {
