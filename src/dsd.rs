@@ -1,100 +1,64 @@
-use std::path::Path;
+use std::{fs::File, path::Path};
+
+use id3::Tag;
 
 // Re-export only
-pub use crate::dsdin_sys::DSD_64_RATE;
 use crate::dsdin_sys::{DSD_FORMAT_DSDIFF, DSD_FORMAT_DSF};
 
 pub struct Dsd {
-    pub audio_length: i64,
-    pub audio_pos: i64,
-    pub channel_count: i32,
-    pub dsd_rate: i32,
-    pub interleaved: bool,
+    pub audio_length: u64,
+    pub audio_pos: u64,
+    pub channel_count: u32,
     pub is_lsb: bool,
     pub block_size: u32,
     pub sample_rate: u32,
     pub container_format: u32,
+    pub file: File,
+    pub tag: Option<Tag>,
 }
 
 impl Dsd {
-    // Replace ctor to allocate the opaque C struct using C-reported size, then use getters
     pub fn new(path: String) -> Result<Self, Box<dyn std::error::Error>> {
-        let sr: u32;
-        let cf: u32;
-        let ch: i32;
-        let bs: u32;
-        let dl: u64;
-        let ap: u64;
-        let is_lsb: i32;
+        let lower = path.to_ascii_lowercase();
 
-        if path.to_ascii_lowercase().ends_with(".dsf") {
+        if lower.ends_with(".dsf") {
             use dsf::DsfFile;
             let file_path = Path::new(&path);
             let mut dsf_file = DsfFile::open(file_path)?;
-            sr = dsf_file.fmt_chunk().sampling_frequency();
-            cf = DSD_FORMAT_DSF;
-            ch = dsf_file.fmt_chunk().channel_num() as i32;
-            is_lsb = if dsf_file.fmt_chunk().bits_per_sample() == 1 { 1 } else { 0 };
-            bs = 4096; // DSF is always planar-per-frame with 4096 byte blocks
-            dl = dsf_file.fmt_chunk().sample_count() / 8 * ch as u64; // bits to bytes
-            ap = dsf_file.frames()?.offset(0)?;
-            let dsd = Self {
-                audio_length: dl as i64,
-                audio_pos: ap as i64,
-                channel_count: ch as i32,
-                dsd_rate: match sr {
-                    2_822_400 => 1,
-                    5_644_800 => 2,
-                    _ if sr > 0 && sr % 2_822_400 == 0 => (sr / 2_822_400) as i32,
-                    _ => 0, // let InputContext fall back to CLI if needed
-                },
-                interleaved: match cf {
-                    DSD_FORMAT_DSDIFF => true,
-                    DSD_FORMAT_DSF => false, // DSF is block-interleaved -> treat as planar-per-frame
-                    _ => false,
-                },
-                is_lsb: is_lsb != 0,
-                block_size: bs,
-                sample_rate: sr,
-                container_format: cf,
-            };
-
-            return Ok(dsd);
-        } else if path.to_ascii_lowercase().ends_with(".dff") {
+            let file = dsf_file.file().try_clone()?;
+            Ok(Self {
+                sample_rate: dsf_file.fmt_chunk().sampling_frequency(),
+                container_format: DSD_FORMAT_DSF,
+                channel_count: dsf_file.fmt_chunk().channel_num() as u32,
+                is_lsb: dsf_file.fmt_chunk().bits_per_sample() == 1,
+                block_size: 4096,
+                audio_length: dsf_file.fmt_chunk().sample_count() / 8
+                    * dsf_file.fmt_chunk().channel_num() as u64,
+                audio_pos: dsf_file.frames()?.offset(0)?,
+                file,
+                tag: dsf_file.id3_tag().clone(),
+            })
+        } else if lower.ends_with(".dff") {
             use dff::DffFile;
             let file_path = Path::new(&path);
-            let dff_file = DffFile::open(file_path)?;
-            sr = dff_file.get_sample_rate()?;
-            cf = DSD_FORMAT_DSDIFF;
-            ch = dff_file.get_num_channels()? as i32;
-            is_lsb = 0; // DFF is always MSB
-            bs = 1; // DFF is always interleaved with 1 byte blocks
-            dl = dff_file.get_audio_length();
-            ap = dff_file.get_dsd_data_offset();
-            let dsd = Self {
-                audio_length: dl as i64,
-                audio_pos: ap as i64,
-                channel_count: ch as i32,
-                dsd_rate: match sr {
-                    2_822_400 => 1,
-                    5_644_800 => 2,
-                    _ if sr > 0 && sr % 2_822_400 == 0 => (sr / 2_822_400) as i32,
-                    _ => 0, // let InputContext fall back to CLI if needed
-                },
-                interleaved: match cf {
-                    DSD_FORMAT_DSDIFF => true,
-                    DSD_FORMAT_DSF => false, // DSF is block-interleaved -> treat as planar-per-frame
-                    _ => false,
-                },
-                is_lsb: is_lsb != 0,
-                block_size: bs,
-                sample_rate: sr,
-                container_format: cf,
-            };
-
-            return Ok(dsd);
+            let mut dff_file = DffFile::open(file_path)?;
+            let file = dff_file.file().try_clone()?;
+            Ok(Self {
+                sample_rate: dff_file.get_sample_rate()?,
+                container_format: DSD_FORMAT_DSDIFF,
+                channel_count: dff_file.get_num_channels()? as u32,
+                is_lsb: false,
+                // TODO: remove this magic number. Currently it causes
+                // the default (or user supplied) block size 
+                // to be applied in input.rs
+                block_size: 0,
+                audio_length: dff_file.get_audio_length(),
+                audio_pos: dff_file.get_dsd_data_offset(),
+                file,
+                tag: dff_file.id3_tag().clone(),
+            })
         } else {
-            return Err("Unsupported file extension; only .dsf and .dff are supported".into());
+            Err("Unsupported file extension; only .dsf and .dff are supported".into())
         }
     }
 }

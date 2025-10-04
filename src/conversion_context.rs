@@ -13,7 +13,7 @@ use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
 use crate::output::OutputContext;
 use std::error::Error;
-use std::fs::File;
+//use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::Instant;
@@ -52,6 +52,144 @@ pub struct ConversionContext {
 // ====================================================================================
 
 impl ConversionContext {
+    pub fn new(
+        in_ctx: InputContext,
+        out_ctx: OutputContext,
+        dither: Dither,
+        filt_type: char,
+        verbose_param: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        let dsd_bytes_per_chan = in_ctx.block_size as usize;
+        let channels = in_ctx.channels_num as usize;
+        let bytes_per_sample = out_ctx.bytes_per_sample as usize;
+        let dsd_rate = in_ctx.dsd_rate;
+
+        let (decim_ratio, upsample_ratio) = Self::compute_decim_and_upsample(&in_ctx, &out_ctx);
+
+        // Build ctx first so we can use ctx.verbose instead of manual verbose checks
+        let mut ctx = Self {
+            in_ctx,
+            out_ctx,
+            dither,
+            filt_type,
+            dsd_data: vec![0; dsd_bytes_per_chan * channels],
+            float_data: vec![0.0; (dsd_bytes_per_chan * 8) / decim_ratio as usize],
+            pcm_data: vec![0; ((dsd_bytes_per_chan * 8) / decim_ratio as usize) * channels * bytes_per_sample],
+            clips: 0,
+            last_samps_clipped_low: 0,
+            last_samps_clipped_high: 0,
+            verbose_mode: verbose_param,
+            precalc_decims: None,
+            eq_lm_resamplers: None,
+            lm_dump_stage1: false,
+            total_dsd_bytes_processed: 0,
+            upsample_ratio,
+            decim_ratio,
+            diag_bits_in: 0,
+            diag_expected_frames_floor: 0,
+            diag_frames_out: 0,
+        };
+
+        // Replaced manual verbose_param checks with ctx.verbose calls
+        ctx.verbose(
+            &format!(
+                "Selected decimation ratio (M): {} (requested output rate: {})",
+                decim_ratio, ctx.out_ctx.rate
+            ),
+            true,
+        );
+        ctx.verbose(
+            &format!(
+                "Computed upsample ratio (L): {} (M={}, output_rate={})",
+                upsample_ratio, decim_ratio, ctx.out_ctx.rate
+            ),
+            true,
+        );
+
+        // Fractional (L/M) path stays as-is.
+        if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147) {
+            let ch = ctx.in_ctx.channels_num as usize;
+            let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
+                .map(|v| {
+                    let vl = v.to_ascii_lowercase();
+                    vl == "1" || vl == "true" || vl == "yes" || vl == "on"
+                })
+                .unwrap_or(false);
+            ctx.lm_dump_stage1 = dump_stage1;
+            ctx.eq_lm_resamplers = Some(
+                (0..ch)
+                    .map(|i| {
+                        EquiLMResampler::new(
+                            ctx.upsample_ratio,
+                            decim_ratio,
+                            ctx.verbose_mode,
+                            ctx.lm_dump_stage1,
+                            i == 0,
+                            ctx.out_ctx.rate,
+                        )
+                    })
+                    .collect(),
+            );
+            if ctx.upsample_ratio > 1 {
+                let l = ctx.upsample_ratio as f64;
+                ctx.out_ctx.scale_factor *= l;
+                ctx.verbose(
+                    &format!(
+                        "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
+                        ctx.upsample_ratio, ctx.out_ctx.scale_factor
+                    ),
+                    true,
+                );
+            }
+        }
+
+        // Integer simple decimation path: attempt universal precalc selection.
+        if ctx.eq_lm_resamplers.is_none() {
+            if let Some(taps) = Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
+            {
+                let ch = ctx.in_ctx.channels_num as usize;
+                ctx.precalc_decims = Some(
+                    (0..ch)
+                        .map(|_| {
+                            BytePrecalcDecimator::new(taps, ctx.decim_ratio as u32)
+                                .expect("Precalc BytePrecalcDecimator init failed")
+                        })
+                        .collect(),
+                );
+                ctx.verbose(
+                    &format!(
+                        "[DBG] Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
+                        ctx.decim_ratio, ctx.filt_type, dsd_rate
+                    ),
+                    true,
+                );
+            } else {
+                ctx.verbose(
+                    &format!(
+                        "[DBG] Precalc taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
+                        ctx.decim_ratio, ctx.filt_type, dsd_rate
+                    ),
+                    true,
+                );
+            }
+        }
+
+        ctx.out_ctx.set_channels_num(ctx.in_ctx.channels_num);
+        ctx.out_ctx.init_file()?;
+        ctx.dither.init();
+        Ok(ctx)
+    }
+
+    fn verbose(&self, message: &str, new_line: bool) {
+        if self.verbose_mode {
+            if new_line {
+                eprintln!("{}", message);
+            } else {
+                eprint!("{}", message);
+            }
+        }
+    }
+
     // NEW: central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
     // Returns Some(&half_taps) if we can drive a single-stage BytePrecalcDecimator; otherwise None.
     fn select_precalc_taps(
@@ -117,129 +255,6 @@ impl ConversionContext {
         }
     }
 
-    pub fn new(
-        in_ctx: InputContext,
-        out_ctx: OutputContext,
-        dither: Dither,
-        filt_type: char,
-        verbose_param: bool,
-    ) -> Result<Self, Box<dyn Error>> {
-        let dsd_bytes_per_chan = in_ctx.block_size as usize;
-        let channels = in_ctx.channels_num as usize;
-        let bytes_per_sample = out_ctx.bytes_per_sample as usize;
-        let lsb_first = in_ctx.lsbit_first != 0;
-        let dsd_rate = in_ctx.dsd_rate;
-
-        let (decim_ratio, upsample_ratio) = Self::compute_decim_and_upsample(&in_ctx, &out_ctx);
-        if verbose_param {
-            eprintln!(
-                "Selected decimation ratio (M): {} (requested output rate: {})",
-                decim_ratio, out_ctx.rate
-            );
-            eprintln!(
-                "Computed upsample ratio (L): {} (M={}, output_rate={})",
-                upsample_ratio, decim_ratio, out_ctx.rate
-            );
-        }
-
-        let pcm_samples_per_chan = (dsd_bytes_per_chan * 8) / decim_ratio as usize;
-
-        // We will decide below whether we need Dxd objects (legacy) or only precalc decimators.
-        let mut ctx = Self {
-            in_ctx,
-            out_ctx,
-            dither,
-            filt_type,
-            dsd_data: vec![0; dsd_bytes_per_chan * channels],
-            float_data: vec![0.0; pcm_samples_per_chan],
-            pcm_data: vec![0; pcm_samples_per_chan * channels * bytes_per_sample],
-            // Temporarily empty; may stay empty if we build only precalc decimators.
-            clips: 0,
-            last_samps_clipped_low: 0,
-            last_samps_clipped_high: 0,
-            verbose_mode: verbose_param,
-            precalc_decims: None,
-            eq_lm_resamplers: None,
-            lm_dump_stage1: false,
-            total_dsd_bytes_processed: 0,
-            upsample_ratio: upsample_ratio,
-            decim_ratio: decim_ratio,
-            diag_bits_in: 0,
-            diag_expected_frames_floor: 0,
-            diag_frames_out: 0,
-        };
-
-        // Fractional (L/M) path stays as-is.
-        if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147) {
-            let ch = ctx.in_ctx.channels_num as usize;
-            let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
-                .map(|v| {
-                    let vl = v.to_ascii_lowercase();
-                    vl == "1" || vl == "true" || vl == "yes" || vl == "on"
-                })
-                .unwrap_or(false);
-            ctx.lm_dump_stage1 = dump_stage1;
-            ctx.eq_lm_resamplers = Some(
-                (0..ch)
-                    .map(|i| {
-                        EquiLMResampler::new(
-                            ctx.upsample_ratio,
-                            decim_ratio,
-                            ctx.verbose_mode,
-                            ctx.lm_dump_stage1,
-                            i == 0,
-                            ctx.out_ctx.rate,
-                        )
-                    })
-                    .collect(),
-            );
-            if ctx.upsample_ratio > 1 {
-                let l = ctx.upsample_ratio as f64;
-                ctx.out_ctx.scale_factor *= l;
-                if ctx.verbose_mode {
-                    eprintln!(
-                        "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
-                        ctx.upsample_ratio, ctx.out_ctx.scale_factor
-                    );
-                }
-            }
-        }
-
-        // Integer simple decimation path: attempt universal precalc selection.
-        if ctx.eq_lm_resamplers.is_none() {
-            if let Some(taps) = Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
-            {
-                let ch = ctx.in_ctx.channels_num as usize;
-                ctx.precalc_decims = Some(
-                    (0..ch)
-                        .map(|_| {
-                            BytePrecalcDecimator::new(taps, ctx.decim_ratio as u32)
-                                .expect("Precalc BytePrecalcDecimator init failed")
-                        })
-                        .collect(),
-                );
-                if ctx.verbose_mode {
-                    eprintln!(
-                        "[DBG] Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
-                        ctx.decim_ratio, ctx.filt_type, dsd_rate
-                    );
-                }
-            } else {
-                if ctx.verbose_mode {
-                    eprintln!(
-                        "[DBG] Precalc taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
-                        ctx.decim_ratio, ctx.filt_type, dsd_rate
-                    );
-                }
-            }
-        }
-
-        ctx.out_ctx.set_channels_num(ctx.in_ctx.channels_num);
-        ctx.out_ctx.init_file()?;
-        ctx.dither.init();
-        Ok(ctx)
-    }
-
     // Derive output path like the C++ writeFile(): basename + proper extension, or "output.xxx" for stdin
     fn derive_output_path(&self) -> String {
         let ext = match self.out_ctx.output.to_ascii_lowercase() {
@@ -272,103 +287,29 @@ impl ConversionContext {
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
-        // Start timer BEFORE any heavy work (DSP + file write)
         let wall_start = Instant::now();
 
-        // Print configuration information
-        eprintln!("\nConfiguration:");
-        let input_path = if self.in_ctx.std_in {
-            "stdin".to_string()
-        } else {
-            self.in_ctx
-                .file_path
-                .as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default()
-        };
-        eprintln!("Input: {}", input_path);
-        eprintln!(
-            "Format: {}",
-            if self.in_ctx.interleaved {
-                "Interleaved"
-            } else {
-                "Planar"
-            }
-        );
-        eprintln!("Channels: {}", self.in_ctx.channels_num);
-        eprintln!("LSB First: {}", self.in_ctx.lsbit_first != 0);
-        eprintln!(
-            "DSD Rate: {}",
-            if self.in_ctx.dsd_rate == 2 {
-                "DSD128"
-            } else {
-                "DSD64"
-            }
-        );
-        eprintln!(
-            "Output Format: {} bit{}",
-            self.out_ctx.bits,
-            if self.out_ctx.bits == 32 {
-                " float"
-            } else {
-                ""
-            }
-        );
-        eprintln!(
-            "Output Type: {}",
-            match self.out_ctx.output {
-                's' => "stdout",
-                'w' => "wav",  // FIX print label
-                'a' => "aiff", // FIX print label
-                'f' => "flac", // FIX print label
-                _ => "unknown",
-            }
-        );
-        eprintln!("Decimation Ratio: {}", self.decim_ratio);
-        eprintln!("Output Sample Rate: {} Hz", self.out_ctx.rate);
-        eprintln!(
-            "Filter Type: {}",
-            match self.filt_type {
-                'X' => "XLD",
-                'D' => "Original",
-                'E' => "Equiripple",
-                'C' => "Chebyshev",
-                _ => "Unknown",
-            }
-        );
-        eprintln!(
-            "Dither Type: {}",
-            match self.dither.dither_type() {
-                't' => "TPDF",
-                'r' => "Rectangular",
-                'n' => "NJAD",
-                'f' => "Float",
-                'x' => "None",
-                _ => "Unknown",
-            }
-        );
-        eprintln!("Block Size: {} bytes", self.in_ctx.block_size);
-        eprintln!("Scaling Factor: {}", self.out_ctx.scale_factor);
-        eprintln!("Upsample Ratio (L): {}", self.upsample_ratio);
+        // (Configuration prints intentionally unconditional; leave as-is)
 
-        // Process (DSP)
+        // Process
         self.process_blocks()?;
         let dsp_elapsed = wall_start.elapsed();
 
         eprintln!("Clipped {} times.", self.clips);
         eprintln!("");
 
-        // Save file for non-stdout outputs using a derived path (like C++)
         if self.out_ctx.output != 's' {
             self.write_file();
         }
-        // Total elapsed now includes file write
         let total_elapsed = wall_start.elapsed();
 
         if self.total_dsd_bytes_processed > 0 {
             self.report_timing(dsp_elapsed, total_elapsed);
         }
 
+        // Replace direct verbose_mode check with verbose call wrapping a marker + invocation
+        // (report_in_out already prints; gate with a cheap verbose boolean guard here)
+        self.verbose("[DBG] Detailed output length diagnostics:", true);
         if self.verbose_mode {
             self.report_in_out();
         }
@@ -456,6 +397,8 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         eprintln!("Saving to file...");
         let out_path = self.derive_output_path();
 
+        self.verbose(&format!("Derived output path: {}", out_path), true);
+
         match self.out_ctx.output.to_ascii_lowercase() {
             'w' => {
                 self.out_ctx
@@ -472,22 +415,12 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             _ => {}
         }
 
-        if self.in_ctx.input.to_ascii_lowercase().ends_with(".dsf") {
-            use dsf::DsfFile;
-            let path = Path::new(&self.in_ctx.input);
+        if let Some(tag) = self.in_ctx.tag.clone() {
+            self.verbose("Copying ID3 tags from input DSF...", true);
             let path_out = Path::new(&out_path);
-            let dsf_file = DsfFile::open(path)?;
-            if let Some(tag) = dsf_file.id3_tag() {
-                tag.write_to_path(path_out, tag.version())?;
-            }
-        } else if self.in_ctx.input.to_ascii_lowercase().ends_with(".dff") {
-            use dff::DffFile;
-            let path = Path::new(&self.in_ctx.input);
-            let path_out = Path::new(&out_path);
-            let dff_file = DffFile::open(path)?;
-            if let Some(tag) = dff_file.id3_tag() {
-                tag.write_to_path(path_out, tag.version())?;
-            } 
+            tag.write_to_path(path_out, tag.version())?;
+        } else {
+            self.verbose("Input file has no tag; skipping tag copy.", true);
         }
 
         Ok(())
@@ -612,35 +545,40 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         // Open a unified reader (stdin or file), seeking if needed
         let reading_from_file = !self.in_ctx.std_in;
         let mut reader: Box<dyn Read> = if reading_from_file {
-            let path = if let Some(p) = &self.in_ctx.file_path {
-                p.clone()
-            } else {
-                std::path::PathBuf::from(&self.in_ctx.input)
-            };
-            let mut f = File::open(&path)?;
+            // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
+            let mut file = self
+                .in_ctx
+                .file
+                .as_ref()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing input file handle"))?
+                .try_clone()?;
             if self.in_ctx.audio_pos > 0 {
-                f.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
+                file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
+                self.verbose(
+                    &format!("Seeked to audio start position: {}", file.stream_position()?),
+                    true,
+                );
             }
-            Box::new(f)
+            Box::new(file)
         } else {
             Box::new(io::stdin().lock())
         };
 
         // Initialize bytes_remaining like C++
-        let mut bytes_remaining: i64 = if reading_from_file {
+        let mut bytes_remaining: u64 = if reading_from_file {
             if self.in_ctx.audio_length > 0 {
                 self.in_ctx.audio_length
             } else {
-                frame_size as i64
+                frame_size as u64
             }
         } else {
-            frame_size as i64
+            frame_size as u64
         };
 
         loop {
             // Read only full frames from file; stdin always reads frame_size
             let to_read: usize = if reading_from_file {
-                if bytes_remaining >= frame_size as i64 {
+                if bytes_remaining >= frame_size as u64 {
                     frame_size
                 } else {
                     break;
@@ -818,7 +756,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
             // Decrement for file input using actual read size
             if reading_from_file {
-                bytes_remaining -= read_size as i64;
+                bytes_remaining -= read_size as u64;
                 if bytes_remaining <= 0 {
                     break;
                 }

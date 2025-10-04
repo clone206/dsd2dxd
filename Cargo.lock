@@ -182,6 +182,7 @@ dependencies = [
  "dff",
  "dsf",
  "flac-codec",
+ "id3",
  "libc",
  "rand",
 ]

@@ -7,7 +7,7 @@ use std::path::Path;
 pub struct OutputContext {
     // Init'd via input params
     pub bits: i32,
-    pub channels_num: i32,
+    pub channels_num: u32,
     pub rate: i32,
     pub bytes_per_sample: i32,
     pub output: char,
@@ -61,7 +61,7 @@ impl OutputContext {
         Ok(ctx)
     }
 
-    pub fn set_channels_num(&mut self, chan_num_out: i32) {
+    pub fn set_channels_num(&mut self, chan_num_out: u32) {
         self.channels_num = chan_num_out;
     }
 
