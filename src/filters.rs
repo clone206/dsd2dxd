@@ -1637,6 +1637,9 @@ pub const HTAPS_1_34MHZ_7TO1_EQ: [f64; 55] = [
     1.553408565309e-07,
 ];
 
+/**
+ * 1st phase for 384K target
+ */
 pub const HTAPS_DDRX10_7TO1_EQ: [f64; 26] = [
     0.06587603211871,
     0.06415828036226,
@@ -1720,6 +1723,9 @@ pub const HTAPS_1MHZ_3TO1_EQ: [f64; 15] = [
     -8.220453045268e-06,
 ];
 
+/**
+ * 1st phase for 192K target
+ */
 pub const HTAPS_DDRX5_7TO_1_EQ: [f64; 25] = [
     0.06863281841814,
     0.06669203863891,
