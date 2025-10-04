@@ -41,7 +41,7 @@ impl Dsd {
         } else if lower.ends_with(".dff") {
             use dff::DffFile;
             let file_path = Path::new(&path);
-            let mut dff_file = DffFile::open(file_path)?;
+            let dff_file = DffFile::open(file_path)?;
             let file = dff_file.file().try_clone()?;
             Ok(Self {
                 sample_rate: dff_file.get_sample_rate()?,
