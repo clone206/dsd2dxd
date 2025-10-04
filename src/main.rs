@@ -7,18 +7,16 @@ mod conversion_context;
 mod dither;
 mod dsd;
 mod dsdin_sys;
+mod filters;
 mod fir_convolve;
 mod input;
-mod output;
 mod lm_resampler;
-mod filters;
+mod output;
 
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
 pub use output::OutputContext;
-
-static mut VERBOSE_MODE: bool = false;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd")]
@@ -35,7 +33,7 @@ struct Cli {
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
     bit_depth: i32,
 
-    /// Filter type: X (XLD), D (Original dsd2pcm), 
+    /// Filter type: X (XLD), D (Original dsd2pcm),
     /// E (Equiripple. Only available with double rate DSD input, or 88.2K output and multiples of 48k from DSD64), C (Chebyshev. Only available with double rate DSD input) [default: X if single rate, E if double rate]
     #[arg(short = 't', long = "filttype")]
     filter_type: Option<char>,
@@ -61,9 +59,9 @@ struct Cli {
     input_rate: i32,
 
     /// Output type: S (stdout), A (aif), W (wave), F (flac)
-    /// Note that W, A, or F outputs to either 
+    /// Note that W, A, or F outputs to either
     /// <basename>.[wav|aif|flac] in current directory,
-    /// where <basename> is the input filename 
+    /// where <basename> is the input filename
     /// without the extension, or output.[wav|aif|flac] if reading from stdin.)
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
@@ -81,23 +79,18 @@ struct Cli {
     files: Vec<String>,
 }
 
-fn verbose(message: &str, new_line: bool) {
-    unsafe {
-        if VERBOSE_MODE {
+fn main() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+
+    let verbose = |message: &str, new_line: bool| {
+        if cli.verbose {
             if new_line {
                 eprintln!("{}", message);
             } else {
                 eprint!("{}", message);
             }
         }
-    }
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
-    unsafe {
-        VERBOSE_MODE = cli.verbose;
-    }
+    };
 
     let inputs = if cli.files.is_empty() {
         vec!["-".to_string()]
@@ -109,12 +102,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .dither_type
         .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
 
-    let mut out_ctx = OutputContext::new(
-        cli.bit_depth,
-        cli.output,
-        cli.level,
-        cli.output_rate,
-    )?;
+    let mut out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate)?;
 
     let dither = Dither::new(dither_type)?;
 
