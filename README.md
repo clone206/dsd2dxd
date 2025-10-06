@@ -23,15 +23,13 @@ Converts DSD to PCM on the command line with the following features:
 
 ## Program usage
 
-### Compling
+### Compling and Installing
 
-`RUSTFLAGS='-C target-cpu=native' cargo build --release`
+At the root of the cloned repository:
 
-### Installing on *nix
+`cargo install --path .`
 
-`sudo install ./target/release/dsd2dxd /usr/local/bin/`
-
-You can specify any directory you like as the last argument in the above install command. For example, instead of `/usr/local/bin/` you could use `/usr/bin/`. As long as the directory is in your `$PATH` it will work.
+This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo.
 
 ### Examples
 

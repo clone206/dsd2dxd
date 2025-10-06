@@ -48,12 +48,10 @@ pub struct BytePrecalcDecimator {
     // Precomputed tables: tables[i][byte] gives partial sum for segment i
     tables: Vec<Box<[f64; 256]>>,
     num_tables: usize,
-    decim: u32,
     bytes_per_out: u32,
     fifo: Vec<u8>,
     fifo_pos: usize,
     gain: f64,          // DC normalization (like ptr->gain in C)
-    delay: u64,         // Group delay (half full length minus 1)/2
     delay_count: u64,   // Countdown before starting to emit
     // Cached for mirror addressing
     table_span: usize,  // num_tables * 2 - 1
@@ -101,22 +99,13 @@ impl BytePrecalcDecimator {
         Some(Self {
             tables,
             num_tables,
-            decim,
             bytes_per_out: decim / 8,
             fifo: vec![0u8; (num_tables * 2 + 8).next_power_of_two()], // simple ring
             fifo_pos: 0,
             gain,
-            delay,
             delay_count: delay,
             table_span: num_tables * 2 - 1,
         })
-    }
-
-    /// Reset internal state (silence pattern like C not strictly required here).
-    pub fn reset(&mut self) {
-        for b in &mut self.fifo { *b = 0x69; }
-        self.fifo_pos = 0;
-        self.delay_count = self.delay;
     }
 
     /// Feed a block of DSD bytes; produce decimated PCM outputs.
@@ -166,9 +155,6 @@ impl BytePrecalcDecimator {
         }
         produced
     }
-
-    pub fn gain(&self) -> f64 { self.gain }
-    pub fn latency(&self) -> u64 { self.delay }
 }
 
 // ADD: missing bit reversal helper (used by BytePrecalcDecimator)

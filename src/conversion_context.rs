@@ -30,21 +30,14 @@ pub struct ConversionContext {
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
     verbose_mode: bool,
-    // Unified precomputed integer decimator (one active variant):
-    //   precalc_ratio = 32  -> DSD64  eq 32:1
-    //   precalc_ratio = 64  -> DSD128 cheb or eq 64:1
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
-    // Generalized equiripple L/M resamplers (covers 5/294, 5/147, 10/147)
     eq_lm_resamplers: Option<Vec<EquiLMResampler>>,
-    // Debug flag: dump after first stage (×L -> /decim1), for any L/M
-    lm_dump_stage1: bool,
-    total_dsd_bytes_processed: u64, // ADD: accumulate total input DSD bytes read
-    upsample_ratio: u32, // NEW: L in L/M fractional (zero‑stuff) paths; 1 for pure integer decim
+    total_dsd_bytes_processed: u64,
+    upsample_ratio: u32,
     decim_ratio: i32,
-    // Diagnostics
-    diag_bits_in: u64,               // total DSD input bits seen
-    diag_expected_frames_floor: u64, // floor(bits * L / M)
-    diag_frames_out: u64,            // actual PCM frames produced (per channel count)
+    diag_bits_in: u64,
+    diag_expected_frames_floor: u64,
+    diag_frames_out: u64,
 }
 
 // ====================================================================================
@@ -81,7 +74,6 @@ impl ConversionContext {
             verbose_mode: verbose_param,
             precalc_decims: None,
             eq_lm_resamplers: None,
-            lm_dump_stage1: false,
             total_dsd_bytes_processed: 0,
             upsample_ratio,
             decim_ratio,
@@ -90,32 +82,9 @@ impl ConversionContext {
             diag_frames_out: 0,
         };
 
-        // Replaced manual verbose_param checks with ctx.verbose calls
-        ctx.verbose(
-            &format!(
-                "Selected decimation ratio (M): {} (requested output rate: {})",
-                decim_ratio, ctx.out_ctx.rate
-            ),
-            true,
-        );
-        ctx.verbose(
-            &format!(
-                "Computed upsample ratio (L): {} (M={}, output_rate={})",
-                upsample_ratio, decim_ratio, ctx.out_ctx.rate
-            ),
-            true,
-        );
-
-        // Fractional (L/M) path stays as-is.
+        // Fractional (L/M) path stays as-is (stage1 dump removed permanently).
         if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147) {
             let ch = ctx.in_ctx.channels_num as usize;
-            let dump_stage1 = std::env::var("DSD2DXD_DUMP_STAGE1")
-                .map(|v| {
-                    let vl = v.to_ascii_lowercase();
-                    vl == "1" || vl == "true" || vl == "yes" || vl == "on"
-                })
-                .unwrap_or(false);
-            ctx.lm_dump_stage1 = dump_stage1;
             ctx.eq_lm_resamplers = Some(
                 (0..ch)
                     .map(|i| {
@@ -123,9 +92,8 @@ impl ConversionContext {
                             ctx.upsample_ratio,
                             decim_ratio,
                             ctx.verbose_mode,
-                            ctx.lm_dump_stage1,
                             i == 0,
-                            ctx.out_ctx.rate,
+                            ctx.out_ctx.rate as u32,
                         )
                     })
                     .collect(),
@@ -354,7 +322,7 @@ impl ConversionContext {
         let mut latency_frames_est = 0u64;
         if let Some(ref rvec) = self.eq_lm_resamplers {
             if let Some(r0) = rvec.first() {
-                latency_frames_est = r0.output_latency_frames(self.lm_dump_stage1).round() as u64;
+                latency_frames_est = r0.output_latency_frames().round() as u64;
             }
         }
         let expected_bytes = expected_frames * ch * bps;
@@ -368,8 +336,8 @@ impl ConversionContext {
         };
         eprintln!("\n[DIAG] Output length accounting:");
         eprintln!(
-            "[DIAG] DSD bits in: {}  L={}  M={}  stage1_dump={}",
-            self.diag_bits_in, self.upsample_ratio, self.decim_ratio, self.lm_dump_stage1
+            "[DIAG] DSD bits in: {}  L={}  M={}",
+            self.diag_bits_in, self.upsample_ratio, self.decim_ratio
         );
         eprintln!(
             "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
@@ -469,7 +437,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                         break;
                     }
                     let bit = (byte >> b) & 1;
-                    let got = rs.push_bit_lm(bit, self.lm_dump_stage1);
+                    let got = rs.push_bit_lm(bit);
                     if let Some(y) = got {
                         self.float_data[produced] = y;
                         produced += 1;
@@ -481,7 +449,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                         break;
                     }
                     let bit = (byte >> b) & 1;
-                    let got = rs.push_bit_lm(bit, self.lm_dump_stage1);
+                    let got = rs.push_bit_lm(bit);
                     if let Some(y) = got {
                         self.float_data[produced] = y;
                         produced += 1;
@@ -613,11 +581,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             if self.eq_lm_resamplers.is_some() {
                 // Rational path: frames ≈ floor(bits * L / M) (or first-stage denominator if dumping)
                 let eff_L = self.upsample_ratio as u64;
-                let eff_M = if self.lm_dump_stage1 {
-                    if self.decim_ratio == 294 { 14 } else { 7 }
-                } else {
-                    self.decim_ratio
-                } as u64;
+                let eff_M = self.decim_ratio as u64;
                 self.diag_expected_frames_floor = (self.diag_bits_in * eff_L) / eff_M;
             } else {
                 // Integer / Chebyshev / original FIR path
@@ -633,14 +597,8 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             let bits_in = block_remaining * 8;
             let (estimate_frames, is_rational_lm) = if self.eq_lm_resamplers.is_some() {
                 let l = self.upsample_ratio as usize;
-                if self.lm_dump_stage1 {
-                    // Stage1 dump after first decimator (14 for M=294, 7 for M=147)
-                    let d1 = if self.decim_ratio == 294 { 14 } else { 7 };
-                    ((bits_in * l + (d1 - 1)) / d1, true) // ceil(bits*L/d1)
-                } else {
-                    let m = self.decim_ratio as usize; // 294 or 147
-                    ((bits_in * l + (m - 1)) / m, true) // ceil(bits*L/M)
-                }
+                let m = self.decim_ratio as usize;
+                ((bits_in * l + (m - 1)) / m, true) // ceil(bits*L/M)
             } else if self.precalc_decims.is_some() {
                 (bits_in / (self.decim_ratio as usize), false)
             } else {
