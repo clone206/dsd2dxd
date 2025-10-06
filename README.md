@@ -14,8 +14,6 @@ Converts DSD to PCM on the command line with the following features:
 
 ## Build Dependencies
 
-- A C compiler (e.g. `gcc`)
-  - May require installing the developer tools on MacOS
 - [Rust/Cargo](https://rust-lang.org/tools/install/)
   - On *nix systems like MacOS & Linux, this can be as easy as running the following on the command line: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. Feel free to accept the defaults when the installer prompts you.
 - `ffmpeg` (Optional)
