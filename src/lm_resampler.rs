@@ -23,7 +23,7 @@ use crate::filters::HTAPS_DDRX5_294TO1_EQ; // ADD (full-rate (right) half taps f
 const USE_STAGE1_SLOW: bool = true;
 
 // Add (near existing USE_STAGE1_SLOW)
-const STAGE1_SLOW_DBG: bool = true; // set true to print Stage1 polyphase diagnostics
+const STAGE1_SLOW_DBG: bool = false; // set true to print Stage1 polyphase diagnostics
 
 // ====================================================================================
 // Generalized equiripple L/M resampler covering:
