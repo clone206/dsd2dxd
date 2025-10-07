@@ -644,9 +644,10 @@ impl EquiLMResampler {
             return tp.push_bit(bit);
         }
 
-        // FULL Stage1 polyphase for L=5 and L=20 (now supports multi-output per input internally).
+        // FULL Stage1 polyphase for L=5  (now supports multi-output per input internally).
         // Restrict experimental slow Stage1 polyphase to L=5 only (L=20 needs its own tap design).
-        if USE_STAGE1_SLOW && self.up_factor == 5 {
+        // Stage1 slow polyphase always active for L=5 paths.
+        if self.up_factor == 5 {
             if self.stage1_poly_slow.is_none() {
                 self.stage1_poly_slow = Some(Stage1PolySlow::new(
                     &self.fir1.full_taps,
