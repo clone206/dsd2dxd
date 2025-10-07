@@ -18,6 +18,13 @@ use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;    // NEW: Stage2 ( -> /7 ) half taps
 
 use crate::filters::HTAPS_DDRX5_294TO1_EQ; // ADD (full-rate (right) half taps for 5x / 294 path)
 
+// Toggle slow-domain Stage1 polyphase (debug / diagnostic).
+// Set to true to enable Stage1PolySlow path; keep false for production.
+const USE_STAGE1_SLOW: bool = true;
+
+// Add (near existing USE_STAGE1_SLOW)
+const STAGE1_SLOW_DBG: bool = true; // set true to print Stage1 polyphase diagnostics
+
 // ====================================================================================
 // Generalized equiripple L/M resampler covering:
 //   - L=5,  M=294: (×5 -> /14) -> /7 -> /3  -> 96 kHz
@@ -47,6 +54,8 @@ pub struct EquiLMResampler {
     stage1_poly_input_delay: Option<u64>,
     // NEW two-phase L=10/M=147 path (DSD64 -> 192k)
     two_phase_l10_m147: Option<TwoPhaseL10M147>,
+    // Minimal Stage‑1 slow‑domain polyphase (diagnostic) – optional via constant toggle.
+    stage1_poly_slow: Option<Stage1PolySlow>,
 }
 
 // NEW: PolyPhase294 struct for direct single-stage path
@@ -245,6 +254,7 @@ impl EquiLMResampler {
                         // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
                         stage1_poly_input_delay: None,
                         two_phase_l10_m147: None,
+                        stage1_poly_slow: None,
                     };
                 }
                 // Original cascade Stage1 definitions
@@ -285,6 +295,7 @@ impl EquiLMResampler {
                     poly294: None,
                     stage1_poly_input_delay,
                     two_phase_l10_m147: None,
+                    stage1_poly_slow: None,
                 };
                 if verbose {
                     if first_channel {
@@ -331,6 +342,7 @@ impl EquiLMResampler {
                         // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
                         stage1_poly_input_delay: None,
                         two_phase_l10_m147: Some(two_phase),
+                        stage1_poly_slow: None,
                     };
                 }
                 // (Existing selection logic unchanged, just swap Stage2/3 construction)
@@ -407,6 +419,7 @@ impl EquiLMResampler {
                     poly294: None,
                     stage1_poly_input_delay,
                     two_phase_l10_m147: None,
+                    stage1_poly_slow: None,
                 };
                 if verbose {
                     if first_channel {
@@ -436,6 +449,29 @@ impl EquiLMResampler {
         if let Some(tp) = self.two_phase_l10_m147.as_mut() {
             return tp.push_bit(bit);
         }
+
+        // FULL Stage1 polyphase for L=5 and L=20 (now supports multi-output per input internally).
+        // Restrict experimental slow Stage1 polyphase to L=5 only (L=20 needs its own tap design).
+        if USE_STAGE1_SLOW && self.up_factor == 5 {
+            if self.stage1_poly_slow.is_none() {
+                self.stage1_poly_slow = Some(Stage1PolySlow::new(
+                    &self.fir1.full_taps,
+                    self.up_factor,
+                    self.decim1,
+                ));
+            }
+            let poly = self.stage1_poly_slow.as_mut().unwrap();
+            if let Some(y1) = poly.push(bit) {
+                if let Some(y2) = self.poly2.push(y1) {
+                    if let Some(y3) = self.poly3.push(y2) {
+                        return Some(y3);
+                    }
+                }
+            }
+            return None;
+        }
+
+        // Legacy zero-stuff path (unchanged) for other L / modes.
         let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
         let mut out: Option<f64> = None;
         for p in 0..self.up_factor {
@@ -444,7 +480,6 @@ impl EquiLMResampler {
             let idx_up = self.ups_index;
             self.ups_index += 1;
 
-            // Prime stage 1
             if !self.primed1 {
                 if idx_up >= self.delay1 {
                     self.primed1 = true;
@@ -452,15 +487,14 @@ impl EquiLMResampler {
                 }
                 continue;
             }
+
             self.phase1 += 1;
             if self.phase1 != self.decim1 {
                 continue;
             }
             self.phase1 = 0;
 
-            // Stage 2 polyphase decimation
             if let Some(y2) = self.poly2.push(y1) {
-                // Stage 3 polyphase decimation
                 if let Some(y3) = self.poly3.push(y2) {
                     out = Some(y3);
                 }
@@ -689,3 +723,132 @@ impl Stage1PolyL10_21 {
 }
 
 // --- END ADD Stage1PolyL10_21 ---------------------------------------------------------
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+
+// Thread-local cache for slow-domain Stage1 polyphase states (keyed by EquiLMResampler pointer)
+thread_local! {
+    static STAGE1_SLOW_POLY: RefCell<HashMap<usize, Stage1PolySlow>> = RefCell::new(HashMap::new());
+}
+
+// Minimal slow-domain Stage1 polyphase applying noble identities (×L FIR -> /decim1) without zero stuffing.
+// Built lazily from the existing high-rate FIR taps (fir1.full_taps) and used only inside push_bit_lm.
+#[derive(Debug)]
+struct Stage1PolySlow {
+    phases: Vec<Vec<f64>>, // phases[r][k] = h[r + k*L], k increasing in time (older)
+    l: u32,                // up factor (5)
+    d1: u32,               // first decimation (7 or 14)
+    ring: Vec<f64>,
+    mask: usize,
+    w: usize,
+    high_index: u64,       // high-rate sample counter (after upsample expansion)
+    delay_high: u64,       // (N-1)/2 group delay in high-rate samples
+    phase1: u32,           // decimation phase counter (0..d1-1)
+    primed: bool,
+    input_count: u64,
+    dbg_outputs: u64,
+}
+
+impl Stage1PolySlow {
+    fn new(full_taps: &[f64], l: u32, d1: u32) -> Self {
+        // Build phases in natural time order (k increasing)
+        let mut phases = vec![Vec::new(); l as usize];
+        for (i, &c) in full_taps.iter().enumerate() {
+            phases[i % l as usize].push(c);
+        }
+
+        let n = full_taps.len() as u64;
+        let delay_high = (n - 1) / 2;
+        let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
+        let cap = max_len.next_power_of_two().max(64);
+        Self {
+            phases,
+            l,
+            d1,
+            ring: vec![0.0; cap],
+            mask: cap - 1,
+            w: 0,
+            high_index: 0,
+            delay_high,
+            phase1: 0,
+            primed: false,
+            input_count: 0,
+            dbg_outputs: 0,
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, bit: u8) -> Option<f64> {
+        // Write one real input sample (±1.0)
+        let s = if bit != 0 { 1.0 } else { -1.0 };
+        self.ring[self.w] = s;
+        self.w = (self.w + 1) & self.mask;
+        self.input_count += 1;
+
+        let mut emitted: Option<f64> = None;
+
+        // Simulate all L high-rate slots (p = 0..L-1). Only p=0 is non-zero, but we must
+        // still advance high_index through every slot to mirror legacy scheduling.
+        for p in 0..self.l {
+            let idx_high = self.high_index;
+            self.high_index += 1;
+
+            if !self.primed {
+                if idx_high >= self.delay_high {
+                    self.primed = true;
+                    self.phase1 = 0;
+                }
+                continue;
+            }
+
+            self.phase1 += 1;
+            if self.phase1 != self.d1 {
+                continue;
+            }
+            self.phase1 = 0;
+
+            // Only compute once (L < d1 ensures <=1 output per input). Still finish loop
+            // so remaining high-rate slots advance high_index.
+            if emitted.is_none() {
+                let phase = (idx_high % self.l as u64) as usize;
+                let taps = &self.phases[phase];
+
+                let mut sum = 0.0;
+                let mut sample_idx = (self.w + self.ring.len() - 1) & self.mask;
+                for &c in taps {
+                    sum += c * self.ring[sample_idx];
+                    sample_idx = (sample_idx + self.ring.len() - 1) & self.mask;
+                }
+                emitted = Some(sum);
+
+                if STAGE1_SLOW_DBG && self.dbg_outputs < 128 {
+                    eprintln!(
+                        "[S1DBG] in={} p={} emit=1 high_idx={} phase_used={} taps={} total_out={}",
+                        self.input_count,
+                        p,
+                        idx_high,
+                        phase,
+                        taps.len(),
+                        self.dbg_outputs + 1
+                    );
+                }
+                self.dbg_outputs += 1;
+            }
+            // (Do NOT break; continue to advance remaining high-rate slots.)
+        }
+
+        if STAGE1_SLOW_DBG && emitted.is_none() && self.input_count <= 128 {
+            eprintln!(
+                "[S1DBG] in={} emit=0 high_idx_end={} primed={} phase1={}",
+                self.input_count,
+                self.high_index,
+                self.primed,
+                self.phase1
+            );
+        }
+
+        emitted
+    }
+}

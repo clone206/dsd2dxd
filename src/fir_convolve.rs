@@ -2,7 +2,7 @@
 
 pub struct FirConvolve {
     n: usize,
-    full_taps: Vec<f64>,   // symmetric full impulse (needed for event engine)
+    pub full_taps: Vec<f64>,   // symmetric full impulse (needed for event engine)
     imp_acc: Vec<f64>,     // output accumulator ring
     imp_pos: usize,
 }
