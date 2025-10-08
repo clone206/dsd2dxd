@@ -7,7 +7,7 @@ use crate::dsdin_sys::DSD_64_RATE;
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD64_32TO1_EQ, HTAPS_XLD,
+    HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_XLD,
 };
 use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
@@ -205,6 +205,9 @@ impl ConversionContext {
                 'E' => {
                     if dsd_rate == 1 {
                         Some(&HTAPS_DSD64_32TO1_EQ)
+                    } else if dsd_rate == 4 {
+                        // New dedicated DSD256 32:1 equiripple half taps
+                        Some(&HTAPS_DSD256_32TO1_EQ)
                     } else {
                         Some(&HTAPS_DDR_32TO1_EQ)
                     }
@@ -580,9 +583,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             self.diag_bits_in += (block_remaining as u64) * 8;
             if self.eq_lm_resamplers.is_some() {
                 // Rational path: frames ≈ floor(bits * L / M) (or first-stage denominator if dumping)
-                let eff_L = self.upsample_ratio as u64;
-                let eff_M = self.decim_ratio as u64;
-                self.diag_expected_frames_floor = (self.diag_bits_in * eff_L) / eff_M;
+                let eff_l = self.upsample_ratio as u64;
+                let eff_m = self.decim_ratio as u64;
+                self.diag_expected_frames_floor = (self.diag_bits_in * eff_l) / eff_m;
             } else {
                 // Integer / Chebyshev / original FIR path
                 if self.decim_ratio > 0 {
@@ -752,7 +755,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
         // DSD256 (4x) currently only used with 147:1 (Equiripple) path toward 384k/192k/96k
-        if self.in_ctx.dsd_rate == 4 && !(self.decim_ratio == 147 && self.filt_type == 'E') {
+        if self.in_ctx.dsd_rate == 4 && !((self.decim_ratio == 147 || self.decim_ratio == 32) && self.filt_type == 'E') {
             return Err("With DSD256 input, only 147:1 decimation using the Equiripple filter is presently supported.".into());
         }
         // 294:1 constraint (only DSD128 + E)
