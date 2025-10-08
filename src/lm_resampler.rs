@@ -392,7 +392,7 @@ impl EquiLMResampler {
                 let v = v.to_ascii_lowercase();
                 !(v == "0" || v == "false" || v == "no" || v == "off")
             })
-            .unwrap_or(true);
+            .unwrap_or(false);
 
         match m {
             294 => {
