@@ -11,7 +11,7 @@ use crate::filters::{
     HTAPS_DSD256_64TO1_EQ, HTAPS_XLD,
 };
 use crate::input::InputContext;
-use crate::lm_resampler::EquiLMResampler;
+use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
 use std::error::Error;
 //use std::fs::File;
@@ -32,7 +32,7 @@ pub struct ConversionContext {
     last_samps_clipped_high: i32,
     verbose_mode: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
-    eq_lm_resamplers: Option<Vec<EquiLMResampler>>,
+    eq_lm_resamplers: Option<Vec<LMResampler>>,
     total_dsd_bytes_processed: u64,
     upsample_ratio: u32,
     decim_ratio: i32,
@@ -89,7 +89,7 @@ impl ConversionContext {
             ctx.eq_lm_resamplers = Some(
                 (0..ch)
                     .map(|i| {
-                        EquiLMResampler::new(
+                        LMResampler::new(
                             ctx.upsample_ratio,
                             decim_ratio,
                             ctx.verbose_mode,
