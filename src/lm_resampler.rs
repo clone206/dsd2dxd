@@ -385,6 +385,15 @@ impl EquiLMResampler {
             })
             .unwrap_or(false);
 
+        // Toggle for DSD64 (L=10) -> 192 kHz: two-phase (×10 -> /21 -> /7) vs generic Stage1 + shared /7,/3 cascade.
+        // Default ON (two-phase). Set to 0/false/off to force generic path for A/B testing.
+        let enable_two_phase_l10_192k = std::env::var("DSD2DXD_TWO_PHASE_L10_192K")
+            .map(|v| {
+                let v = v.to_ascii_lowercase();
+                !(v == "0" || v == "false" || v == "no" || v == "off")
+            })
+            .unwrap_or(true);
+
         match m {
             294 => {
                 if use_poly294 && l == 5 {
@@ -500,6 +509,37 @@ impl EquiLMResampler {
                         stage1_poly_slow: None,
                         stage1_poly_generic: None,
                     };
+                }
+
+                // DSD64 -> 192k two‑phase path (×10 -> /21 -> /7) using TwoPhaseL10M147 (toggleable)
+                if l == 10 && out_rate == 192_000 && enable_two_phase_l10_192k {
+                    if verbose {
+                        eprintln!("[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 192k (env DSD2DXD_TWO_PHASE_L10_192K=on)");
+                    }
+                    let tp = TwoPhaseL10M147::new();
+                    // Placeholders for unused poly2/poly3 in this resampler instance (early-return path)
+                    let fir1 = FirConvolve::new(&HTAPS_DSDX10_21TO1_EQ);
+                    let dummy2 = DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ, 7);
+                    let dummy3 = DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ, 7); // not used
+                    return Self {
+                        fir1,
+                        up_factor: l,
+                        decim1: 21,
+                        delay1: 0,
+                        poly2: dummy2,
+                        decim2: 7,
+                        poly3: dummy3,
+                        decim3: 3, // unused
+                        poly294: None,
+                        stage1_poly_input_delay: None,
+                        two_phase_l10_m147: Some(tp),
+                        two_phase_l20_m147_384: None,
+                        two_phase_l10_m147_384: None,
+                        stage1_poly_slow: None,
+                        stage1_poly_generic: None,
+                    };
+                } else if l == 10 && out_rate == 192_000 && verbose {
+                    eprintln!("[DBG] Two-phase L=10/M=147 path DISABLED via env (DSD2DXD_TWO_PHASE_L10_192K=off); using generic Stage1 poly cascade");
                 }
 
                 // Existing L=20 two‑phase 384k branch remains below
