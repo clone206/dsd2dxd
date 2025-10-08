@@ -113,8 +113,8 @@ Options:
           are much faster than 48k multiples
           [default: 352800]
   -i, --inrate <INPUT_RATE>
-          Input DSD rate: 1 (dsd64) or 2
-          (dsd128) [default: 1]
+          Input DSD rate: 1 (dsd64), 2
+          (dsd128), or 4 (dsd256) [default: 1]
   -o, --output <OUTPUT>
           Output type: S (stdout), A (aif),
           W (wave), F (flac) Note that W, A,

@@ -54,7 +54,7 @@ struct Cli {
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: i32,
 
-    /// Input DSD rate: 1 (dsd64) or 2 (dsd128)
+    /// Input DSD rate: 1 (dsd64), 2 (dsd128), or 4 (dsd256)
     #[arg(short = 'i', long = "inrate", default_value = "1")]
     input_rate: i32,
 
