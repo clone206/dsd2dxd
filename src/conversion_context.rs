@@ -8,7 +8,7 @@ use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
     HTAPS_DSD64_8TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
-    HTAPS_XLD,
+    HTAPS_DSD256_64TO1_EQ, HTAPS_XLD,
 };
 use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
@@ -221,7 +221,13 @@ impl ConversionContext {
             },
             // 64:1
             64 => match filt_type {
-                'E' => Some(&HTAPS_DDR_64TO1_EQ),
+                'E' => {
+                    if dsd_rate == 4 {
+                        Some(&HTAPS_DSD256_64TO1_EQ)
+                    } else {
+                        Some(&HTAPS_DDR_64TO1_EQ)
+                    }
+                }
                 'C' => Some(&HTAPS_DDR_64TO1_CHEB),
                 'X' | 'D' => Some(&HTAPS_DDR_64TO1_EQ),
                 _ => None,
@@ -758,9 +764,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         {
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
-        // DSD256 (4x) currently only used with 147:1 (Equiripple) path toward 384k/192k/96k
-        if self.in_ctx.dsd_rate == 4 && !((self.decim_ratio == 147 || self.decim_ratio == 32) && self.filt_type == 'E') {
-            return Err("With DSD256 input, only 147:1 decimation using the Equiripple filter is presently supported.".into());
+        // DSD256 (4x) integer decimation paths: currently support 32:1, 64:1, and 147:1 (all require 'E')
+        if self.in_ctx.dsd_rate == 4
+            && !(matches!(self.decim_ratio, 32 | 64 | 147) && self.filt_type == 'E')
+        {
+            return Err("With DSD256 input, only 32:1, 64:1, or 147:1 decimation using the Equiripple filter is presently supported.".into());
         }
         // 294:1 constraint (only DSD128 + E)
         if self.decim_ratio == 294 && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E') {
