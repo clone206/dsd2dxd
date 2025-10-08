@@ -740,33 +740,33 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     // Remove the separate write_file method since we're now writing directly
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
+        // DSD128 (2x) explicit allow list
         if self.in_ctx.dsd_rate == 2 && ![16, 32, 64, 147, 294].contains(&self.decim_ratio) {
-            return Err(
-                "Only decimation value of 16, 32, 64, 147, or 294 allowed with dsd128 input."
-                    .into(),
-            );
-        } else if self.in_ctx.dsd_rate == 1
+            return Err("Only decimation value of 16, 32, 64, 147, or 294 allowed with DSD128 input.".into());
+        }
+        // DSD64 (1x) allow list (8/16/32 always; 147 only with 'E')
+        if self.in_ctx.dsd_rate == 1
             && !([8, 16, 32].contains(&self.decim_ratio)
                 || (self.decim_ratio == 147 && self.filt_type == 'E'))
         {
-            return Err(
-                "With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter)."
-                    .into(),
-            );
+            return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
+        // DSD256 (4x) currently only used with 147:1 (Equiripple) path toward 384k/192k/96k
+        if self.in_ctx.dsd_rate == 4 && !(self.decim_ratio == 147 && self.filt_type == 'E') {
+            return Err("With DSD256 input, only 147:1 decimation using the Equiripple filter is presently supported.".into());
+        }
+        // 294:1 constraint (only DSD128 + E)
         if self.decim_ratio == 294 && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E') {
-            return Err(
-                "294:1 decimation currently only supported for DSD128 with Equiripple filter."
-                    .into(),
-            );
+            return Err("294:1 decimation currently only supported for DSD128 with Equiripple filter.".into());
         }
+        // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
         if self.decim_ratio == 147
-            && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 1 || self.in_ctx.dsd_rate == 2))
+            && !(self.filt_type == 'E'
+                && (self.in_ctx.dsd_rate == 1
+                    || self.in_ctx.dsd_rate == 2
+                    || self.in_ctx.dsd_rate == 4))
         {
-            return Err(
-                "147:1 decimation is only supported with the Equiripple filter for DSD64 or DSD128 input."
-                    .into(),
-            );
+            return Err("147:1 decimation is only supported with the Equiripple filter for DSD64, DSD128, or DSD256 input.".into());
         }
         Ok(())
     }
@@ -873,11 +873,13 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         let upsample_ratio: u32 = if decim_ratio < 147 {
             1
         } else if out_ctx.rate == 384_000 {
-            if in_ctx.dsd_rate == 1 { 20 } else { 10 }
+            // Specialized two-phase L choices for 384k: DSD64->L20, DSD128->L10, DSD256->L5
+            if in_ctx.dsd_rate == 1 { 20 } else if in_ctx.dsd_rate == 2 { 10 } else if in_ctx.dsd_rate == 4 { 5 } else { 5 }
         } else if out_ctx.rate == 192_000 {
-            if in_ctx.dsd_rate == 1 { 10 } else { 5 }
+            // 192k: DSD64->L10, DSD128->L5, DSD256->L5 (reuses L5 path)
+            if in_ctx.dsd_rate == 1 { 10 } else if in_ctx.dsd_rate == 2 { 5 } else if in_ctx.dsd_rate == 4 { 5 } else { 5 }
         } else if out_ctx.rate == 96_000 {
-            5
+            5 // All current supported DSD rates use L=5 toward 96k
         } else {
             5
         };
