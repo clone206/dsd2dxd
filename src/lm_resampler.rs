@@ -1,7 +1,7 @@
 use crate::filters::HTAPS_1MHZ_3TO1_EQ;
 use crate::filters::HTAPS_288K_3TO1_EQ;
-use crate::filters::HTAPS_2MHZ_7TO1_EQ; 
-use crate::filters::HTAPS_4MHZ_7TO1_EQ; 
+use crate::filters::HTAPS_2MHZ_7TO1_EQ;
+use crate::filters::HTAPS_4MHZ_7TO1_EQ;
 use crate::filters::HTAPS_576K_3TO1_EQ;
 use crate::filters::HTAPS_8MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX10_21TO1_EQ;
@@ -11,7 +11,7 @@ use crate::fir_convolve::FirConvolve;
 // NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
-use crate::filters::HTAPS_DDRX5_7TO_1_EQ; 
+use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 
 // Toggle slow-domain Stage1 polyphase (debug / diagnostic).
 // Set to true to enable Stage1PolySlow path; keep false for production.
@@ -284,13 +284,11 @@ impl LMResampler {
             if self.stage1_poly_slow.is_none() {
                 let half = self.fir1.full_taps.len() / 2;
                 let right_half = &self.fir1.full_taps[half..];
-                self.stage1_poly_slow = Some(Stage1PolySlow::new(
-                    right_half,
-                    self.up_factor,
-                    self.decim1,
-                ));
+                self.stage1_poly_slow =
+                    Some(Stage1PolySlow::new(right_half, self.up_factor, self.decim1));
                 if self.verbose {
-                    let total_m = (self.decim1 as u64) * (self.decim2 as u64) * (self.decim3 as u64);
+                    let total_m =
+                        (self.decim1 as u64) * (self.decim2 as u64) * (self.decim3 as u64);
                     eprintln!(
                         "[DBG] Stage1PolySlow active: L={} first_stage=/{} total_decim={} ({} -> final).",
                         self.up_factor,
@@ -361,20 +359,22 @@ impl LMResampler {
     }
 }
 
-
 // Unified two‑phase L∈{10,20} / (21*7) path for DSD64 or DSD128 -> 384 kHz
 #[derive(Debug)]
 struct TwoPhaseLM147_384 {
-    stage1: Stage1PolyL21, // ×L /21 polyphase (L=10 or 20)
+    stage1: Stage1PolyM21, // ×L /21 polyphase (L=10 or 20)
     stage2: DecimFIRSym,   // /7 (2.688 MHz -> 384 kHz)
     l: u32,
 }
 
 impl TwoPhaseLM147_384 {
     fn new(l: u32) -> Self {
-        debug_assert!(l == 10 || l == 20, "TwoPhaseLM147_384 only supports L=10 or L=20");
+        debug_assert!(
+            l == 10 || l == 20,
+            "TwoPhaseLM147_384 only supports L=10 or L=20"
+        );
         Self {
-            stage1: Stage1PolyL21::new(l, &HTAPS_DDRX10_21TO1_EQ),
+            stage1: Stage1PolyM21::new(l, &HTAPS_DDRX10_21TO1_EQ),
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
             l,
         }
@@ -399,7 +399,7 @@ impl TwoPhaseLM147_384 {
 
 // Unified Stage1 polyphase for L ∈ {10,20} with m=21
 #[derive(Debug)]
-struct Stage1PolyL21 {
+struct Stage1PolyM21 {
     phases: Vec<Vec<f64>>,
     l: u32,         // 10 or 20
     m: u32,         // 21
@@ -413,9 +413,8 @@ struct Stage1PolyL21 {
     primed: bool,
 }
 
-impl Stage1PolyL21 {
+impl Stage1PolyM21 {
     fn new(l: u32, right_half: &[f64]) -> Self {
-        debug_assert!(l == 10 || l == 20, "Stage1PolyL21 only supports L=10 or L=20");
         let m = 21u32;
         // Rebuild full symmetric high‑rate taps
         let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
@@ -468,8 +467,8 @@ impl Stage1PolyL21 {
             }
         }
 
-    let phase = self.phase_mod as usize;
-    let taps = &self.phases[phase];
+        let phase = self.phase_mod as usize;
+        let taps = &self.phases[phase];
 
         // Convolution taps[k] * x[n-k]
         let mut acc_sum = 0.0;
@@ -479,13 +478,15 @@ impl Stage1PolyL21 {
             idx = (idx + self.ring.len() - 1) & self.mask;
         }
 
-    self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+        self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
 
         Some(acc_sum)
     }
 
     #[inline]
-    fn input_delay(&self) -> u64 { self.input_delay }
+    fn input_delay(&self) -> u64 {
+        self.input_delay
+    }
 }
 
 // --- ====================================================================================
@@ -594,7 +595,7 @@ thread_local! {
 struct Stage1PolySlow {
     phases: Vec<Vec<f64>>, // phases[r][k] = h[r + k*L], k increasing in time (older)
     l: u32,                // up factor (5)
-    d1: u32,               // first decimation (7 or 14)
+    m: u32,                // first decimation (7 or 14)
     ring: Vec<f64>,
     mask: usize,
     w: usize,
@@ -606,7 +607,7 @@ struct Stage1PolySlow {
 }
 
 impl Stage1PolySlow {
-    fn new(right_half: &[f64], l: u32, d1: u32) -> Self {
+    fn new(right_half: &[f64], l: u32, m: u32) -> Self {
         // Reconstruct full symmetric taps from right half (like other polyphase constructors)
         let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
         full.extend_from_slice(right_half);
@@ -624,7 +625,7 @@ impl Stage1PolySlow {
         Self {
             phases,
             l,
-            d1,
+            m,
             ring: vec![0.0; cap],
             mask: cap - 1,
             w: 0,
@@ -648,7 +649,7 @@ impl Stage1PolySlow {
 
         // Simulate all L high-rate slots (p = 0..L-1). Only p=0 is non-zero, but we must
         // still advance high_index through every slot to mirror legacy scheduling.
-    for _ in 0..self.l {
+        for _ in 0..self.l {
             let idx_high = self.high_index;
             self.high_index += 1;
 
@@ -661,7 +662,7 @@ impl Stage1PolySlow {
             }
 
             self.phase1 += 1;
-            if self.phase1 != self.d1 {
+            if self.phase1 != self.m {
                 continue;
             }
             self.phase1 = 0;
@@ -683,7 +684,6 @@ impl Stage1PolySlow {
             // (Do NOT break; continue to advance remaining high-rate slots.)
         }
 
-
         emitted
     }
 }
@@ -696,7 +696,7 @@ impl Stage1PolySlow {
 struct Stage1PolyGeneric {
     phases: Vec<Vec<f64>>, // phases[r][k] = h[r + k*L]
     l: u32,
-    d1: u32,
+    m: u32,
     ring: Vec<f64>,
     mask: usize,
     w: usize,
@@ -721,7 +721,7 @@ impl Stage1PolyGeneric {
         Self {
             phases,
             l,
-            d1,
+            m: d1,
             ring: vec![0.0; cap],
             mask: cap - 1,
             w: 0,
@@ -767,7 +767,7 @@ impl Stage1PolyGeneric {
             }
 
             self.phase1 += 1;
-            if self.phase1 != self.d1 {
+            if self.phase1 != self.m {
                 continue;
             }
             self.phase1 = 0;
