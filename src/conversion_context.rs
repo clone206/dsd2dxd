@@ -739,21 +739,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
     // Remove the separate write_file method since we're now writing directly
 
-    // Helper function for clip stats
-    fn update_clip_stats(&mut self, low: bool, high: bool) {
-        if low {
-            if self.last_samps_clipped_low == 1 {
-                self.clips += 1;
-            }
-            self.last_samps_clipped_low += 1;
-        } else if high {
-            if self.last_samps_clipped_high == 1 {
-                self.clips += 1;
-            }
-            self.last_samps_clipped_high += 1;
-        }
-    }
-
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         if self.in_ctx.dsd_rate == 2 && ![16, 32, 64, 147, 294].contains(&self.decim_ratio) {
             return Err(
@@ -784,14 +769,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             );
         }
         Ok(())
-    }
-
-    fn my_round(x: f64) -> i64 {
-        if x < 0.0 {
-            (x - 0.5).floor() as i64
-        } else {
-            (x + 0.5).floor() as i64
-        }
     }
 
     fn write_float(&mut self, offset: &mut usize, sample: f64) {
@@ -831,6 +808,27 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         *offset += bytes;
     }
 
+    // Helper function for clip stats
+    #[inline]
+    fn update_clip_stats(&mut self, low: bool, high: bool) {
+        if low {
+            if self.last_samps_clipped_low == 1 {
+                self.clips += 1;
+            }
+            self.last_samps_clipped_low += 1;
+            return;
+        }
+        self.last_samps_clipped_low = 0;
+        if high {
+            if self.last_samps_clipped_high == 1 {
+                self.clips += 1;
+            }
+            self.last_samps_clipped_high += 1;
+            return;
+        }
+        self.last_samps_clipped_high = 0;
+    }
+
     // Make clamp a method to access self
     #[inline]
     fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
@@ -843,6 +841,15 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             self.update_clip_stats(false, true);
         }
         result
+    }
+
+    #[inline]
+    fn my_round(x: f64) -> i64 {
+        if x < 0.0 {
+            (x - 0.5).floor() as i64
+        } else {
+            (x + 0.5).floor() as i64
+        }
     }
 
     #[inline]
