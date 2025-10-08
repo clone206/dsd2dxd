@@ -22,7 +22,7 @@ use crate::filters::HTAPS_DDRX5_294TO1_EQ; // ADD (full-rate (right) half taps f
 
 // Toggle slow-domain Stage1 polyphase (debug / diagnostic).
 // Set to true to enable Stage1PolySlow path; keep false for production.
-const USE_STAGE1_SLOW: bool = true;
+// Slow-domain Stage1 polyphase is always active for L=5 now; legacy toggle removed.
 
 // Add (near existing USE_STAGE1_SLOW)
 const STAGE1_SLOW_DBG: bool = false; // set true to print Stage1 polyphase diagnostics
@@ -40,9 +40,7 @@ pub struct EquiLMResampler {
     up_factor: u32, // L
     decim1: u32,    // 14 (M=294) or 7 (M=147)
     delay1: u64,
-    ups_index: u64,
-    phase1: u32,
-    primed1: bool,
+    
     // Stage 2 (polyphase decimator by 7)
     poly2: DecimFIRSym,
     decim2: u32,     // 7 (kept for latency formula)
@@ -60,6 +58,8 @@ pub struct EquiLMResampler {
     two_phase_l10_m147_384: Option<TwoPhaseL10M147_384>, // NEW
     // Minimal Stage‑1 slow‑domain polyphase (diagnostic) – optional via constant toggle.
     stage1_poly_slow: Option<Stage1PolySlow>,
+    // Generic Stage1 polyphase (for L != 5 fallback instead of legacy zero stuffing)
+    stage1_poly_generic: Option<Stage1PolyGeneric>,
 }
 
 // NEW: PolyPhase294 struct for direct single-stage path
@@ -163,6 +163,7 @@ impl PolyPhaseL5M294 {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn output_latency_frames(&self) -> f64 {
         // Approximate output latency in final-rate frames:
         // Output rate = input_rate * L / M
@@ -179,6 +180,7 @@ struct TwoPhaseL10M147 {
 }
 
 impl TwoPhaseL10M147 {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             stage1: Stage1PolyL10_21::new(&HTAPS_DSDX10_21TO1_EQ),
@@ -197,6 +199,7 @@ impl TwoPhaseL10M147 {
     }
 
     #[inline]
+    #[allow(dead_code)]
     fn output_latency_frames(&self) -> f64 {
         // Stage1 latency (input samples) scaled by L/(21*7)
         let d1 = (self.stage1.input_delay() as f64) * (10.0 / (21.0 * 7.0));
@@ -213,6 +216,7 @@ struct TwoPhaseL20M147_384 {
 }
 
 impl TwoPhaseL20M147_384 {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             stage1: Stage1PolyL20_21::new(&HTAPS_DDRX10_21TO1_EQ),
@@ -229,6 +233,7 @@ impl TwoPhaseL20M147_384 {
         None
     }
     #[inline]
+    #[allow(dead_code)]
     fn output_latency_frames(&self) -> f64 {
         // Stage1 latency (input samples) scaled by L / (21*7) plus stage2 latency (scaled by /7)
         let d1 = (self.stage1.input_delay() as f64) * (20.0 / (21.0 * 7.0));
@@ -392,9 +397,7 @@ impl EquiLMResampler {
                         up_factor: l,
                         decim1: 14,
                         delay1: 0,
-                        ups_index: 0,
-                        phase1: 0,
-                        primed1: true,
+                        
                         // Stage 2 (polyphase decimator by 7)
                         poly2: DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7),
                         decim2: 7,
@@ -409,6 +412,7 @@ impl EquiLMResampler {
                         two_phase_l20_m147_384: None, // ADD
                         two_phase_l10_m147_384: None, // NEW
                         stage1_poly_slow: None,
+                        stage1_poly_generic: None,
                     };
                 }
                 // Original cascade Stage1 definitions
@@ -437,9 +441,7 @@ impl EquiLMResampler {
                     up_factor: l,
                     decim1: 14,
                     delay1,
-                    ups_index: 0,
-                    phase1: 0,
-                    primed1: false,
+                     
                     // Stage 2 (polyphase decimator by 7)
                     poly2,
                     decim2: 7,
@@ -452,6 +454,7 @@ impl EquiLMResampler {
                     two_phase_l20_m147_384: None, // ADD
                     two_phase_l10_m147_384: None, // NEW
                     stage1_poly_slow: None,
+                    stage1_poly_generic: None,
                 };
                 if verbose {
                     if first_channel {
@@ -484,9 +487,7 @@ impl EquiLMResampler {
                         up_factor: l,
                         decim1: 21,
                         delay1: 0,
-                        ups_index: 0,
-                        phase1: 0,
-                        primed1: true,
+                        
                         poly2: dummy2,
                         decim2: 7,
                         poly3: dummy3,
@@ -497,6 +498,7 @@ impl EquiLMResampler {
                         two_phase_l20_m147_384: None,
                         two_phase_l10_m147_384: Some(tp),
                         stage1_poly_slow: None,
+                        stage1_poly_generic: None,
                     };
                 }
 
@@ -515,9 +517,7 @@ impl EquiLMResampler {
                         up_factor: l,
                         decim1: 21,
                         delay1: 0,
-                        ups_index: 0,
-                        phase1: 0,
-                        primed1: true,
+                        
                         poly2: dummy2,
                         decim2: 7,
                         poly3: dummy3,
@@ -528,11 +528,12 @@ impl EquiLMResampler {
                         two_phase_l20_m147_384: Some(tp),
                         two_phase_l10_m147_384: None,
                         stage1_poly_slow: None,
+                        stage1_poly_generic: None,
                     };
                 }
 
                 // (Existing selection logic unchanged, just swap Stage2/3 construction)
-                let (fir1, full1, right2, full2, right3, full3, label) =
+                let (fir1, full1, right2, _full2, right3, _full3, label) =
                     if (l == 10 || l == 20) && out_rate == 384_000 {
                         (
                              FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ),
@@ -564,7 +565,7 @@ impl EquiLMResampler {
                              "192k (DDR×5, 4MHz, 576k)",
                          )
                     };
-                let stage1_half: &[f64] = if (l == 10 || l == 20) && out_rate == 384_000 {
+                let _stage1_half: &[f64] = if (l == 10 || l == 20) && out_rate == 384_000 {
                     &HTAPS_DDRX10_7TO1_EQ
                 } else if l == 5 && out_rate == 96_000 {
                     &HTAPS_DSDX5_7TO1_EQ
@@ -593,9 +594,7 @@ impl EquiLMResampler {
                     up_factor: l,
                     decim1: 7,
                     delay1,
-                    ups_index: 0,
-                    phase1: 0,
-                    primed1: false,
+                     
                     // Stage 2 (polyphase decimator by 7)
                     poly2,
                     decim2: 7,
@@ -608,6 +607,7 @@ impl EquiLMResampler {
                     two_phase_l20_m147_384: None, // ADD
                     two_phase_l10_m147_384: None, // NEW
                     stage1_poly_slow: None,
+                    stage1_poly_generic: None,
                 };
                 if verbose {
                     if first_channel {
@@ -666,36 +666,35 @@ impl EquiLMResampler {
             return None;
         }
 
-        // Legacy zero-stuff path (unchanged) for other L / modes.
-        let bit_i8: i8 = if bit != 0 { 1 } else { -1 };
-        let mut out: Option<f64> = None;
-        for p in 0..self.up_factor {
-            let xi8 = if p == 0 { bit_i8 } else { 0 };
-            let y1 = self.fir1.process_sample_i8(xi8);
-            let idx_up = self.ups_index;
-            self.ups_index += 1;
-
-            if !self.primed1 {
-                if idx_up >= self.delay1 {
-                    self.primed1 = true;
-                    self.phase1 = 0;
+        // Generic Stage1 polyphase (replaces legacy zero-stuff path).
+        if self.stage1_poly_generic.is_none() {
+            self.stage1_poly_generic = Some(Stage1PolyGeneric::new(
+                &self.fir1.full_taps,
+                self.up_factor as u32,
+                self.decim1 as u32,
+            ));
+        }
+        let poly = self.stage1_poly_generic.as_mut().unwrap();
+        let mut final_out: Option<f64> = None;
+        // If L >= decim1 we may produce multiple Stage1 outputs per input sample.
+        if self.up_factor as u32 >= self.decim1 {
+            poly.push_all(bit, |y1| {
+                if let Some(y2) = self.poly2.push(y1) {
+                    if let Some(y3) = self.poly3.push(y2) {
+                        final_out = Some(y3); // keep last (chronological) output
+                    }
                 }
-                continue;
-            }
-
-            self.phase1 += 1;
-            if self.phase1 != self.decim1 {
-                continue;
-            }
-            self.phase1 = 0;
-
-            if let Some(y2) = self.poly2.push(y1) {
-                if let Some(y3) = self.poly3.push(y2) {
-                    out = Some(y3);
+            });
+        } else {
+            if let Some(y1) = poly.push(bit) {
+                if let Some(y2) = self.poly2.push(y1) {
+                    if let Some(y3) = self.poly3.push(y2) {
+                        final_out = Some(y3);
+                    }
                 }
             }
         }
-        out
+        final_out
     }
 
     #[inline]
@@ -924,7 +923,7 @@ impl Stage1PolyL10_21 {
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::collections::VecDeque;
+// (VecDeque import removed; not needed)
 
 // Thread-local cache for slow-domain Stage1 polyphase states (keyed by EquiLMResampler pointer)
 thread_local! {
@@ -1048,5 +1047,100 @@ impl Stage1PolySlow {
         }
 
         emitted
+    }
+}
+
+// Generic Stage1 polyphase variant used for legacy replacement (supports any L, d1 where L < some multiple of d1).
+// Strategy: identical scheduling model to Stage1PolySlow (simulate all L high-rate slots per real input)
+// but allows different (l, d1) pairs (e.g., L=10,d1=21) and supports at most one output per input when L < d1.
+// If in future L >= d1 cases are needed, extend to push multiple outputs per input (similar to Stage1PolyL10_21 design).
+#[derive(Debug)]
+struct Stage1PolyGeneric {
+    phases: Vec<Vec<f64>>, // phases[r][k] = h[r + k*L]
+    l: u32,
+    d1: u32,
+    ring: Vec<f64>,
+    mask: usize,
+    w: usize,
+    high_index: u64,
+    delay_high: u64,
+    phase1: u32,
+    primed: bool,
+    input_count: u64,
+}
+
+impl Stage1PolyGeneric {
+    fn new(full_taps: &[f64], l: u32, d1: u32) -> Self {
+        // Build phase lists
+        let mut phases = vec![Vec::new(); l as usize];
+        for (i, &c) in full_taps.iter().enumerate() {
+            phases[i % l as usize].push(c);
+        }
+        let n = full_taps.len() as u64;
+        let delay_high = (n - 1) / 2;
+        let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
+        let cap = max_len.next_power_of_two().max(64);
+        Self {
+            phases,
+            l,
+            d1,
+            ring: vec![0.0; cap],
+            mask: cap - 1,
+            w: 0,
+            high_index: 0,
+            delay_high,
+            phase1: 0,
+            primed: false,
+            input_count: 0,
+        }
+    }
+
+    // Simple single-output helper (used when L < d1 guaranteeing <=1 output per input)
+    #[inline]
+    fn push(&mut self, bit: u8) -> Option<f64> {
+        let mut first: Option<f64> = None;
+        self.push_all(bit, |y| {
+            if first.is_none() { first = Some(y); }
+        });
+        first
+    }
+
+    // Multi-output path: invoke closure for every Stage1 output (in-order) produced by this input sample.
+    #[inline]
+    fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
+        // Drain any impossible leftover state (none kept between calls besides ring & counters)
+        let s = if bit != 0 { 1.0 } else { -1.0 };
+        self.ring[self.w] = s;
+        self.w = (self.w + 1) & self.mask;
+        self.input_count += 1;
+
+        for _p in 0..self.l {
+            let idx_high = self.high_index;
+            self.high_index += 1;
+
+            if !self.primed {
+                if idx_high >= self.delay_high {
+                    self.primed = true;
+                    self.phase1 = 0;
+                }
+                continue;
+            }
+
+            self.phase1 += 1;
+            if self.phase1 != self.d1 {
+                continue;
+            }
+            self.phase1 = 0;
+
+            let phase = (idx_high % self.l as u64) as usize;
+            let taps = &self.phases[phase];
+            let mut sum = 0.0;
+            let mut sample_idx = (self.w + self.ring.len() - 1) & self.mask;
+            for &c in taps {
+                sum += c * self.ring[sample_idx];
+                sample_idx = (sample_idx + self.ring.len() - 1) & self.mask;
+            }
+            emit(sum);
+        }
     }
 }
