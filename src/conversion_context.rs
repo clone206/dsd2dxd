@@ -7,7 +7,8 @@ use crate::dsdin_sys::DSD_64_RATE;
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_XLD,
+    HTAPS_DSD64_8TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
+    HTAPS_XLD,
 };
 use crate::input::InputContext;
 use crate::lm_resampler::EquiLMResampler;
@@ -166,12 +167,13 @@ impl ConversionContext {
         decim_ratio: i32,
     ) -> Option<&'static [f64]> {
         match decim_ratio {
-            // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, others fallback to legacy path
+            // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, 'E' uses new equiripple, others fallback
             8 => {
                 if dsd_rate == 1 {
                     match filt_type {
                         'D' => Some(&HTAPS_D2P),
                         'X' => Some(&HTAPS_XLD),
+                        'E' => Some(&HTAPS_DSD64_8TO1_EQ),
                         _ => None,
                     }
                 } else {
@@ -181,15 +183,17 @@ impl ConversionContext {
             // 16:1
             16 => match filt_type {
                 'X' => Some(&HTAPS_16TO1_XLD),
-                // E – equiripple: prefer dsd128 eq table (if DSD64 we fall back to XLD)
+                // E – equiripple: now support DSD64 with dedicated table, DSD128 with DDR table
                 'E' => {
-                    if dsd_rate == 2 {
+                    if dsd_rate == 1 {
+                        Some(&HTAPS_DSD64_16TO1_EQ)
+                    } else if dsd_rate == 2 {
                         Some(&HTAPS_DDR_16TO1_EQ)
                     } else {
                         None
                     }
                 }
-                // C – Chebyshev only provided for DSD128; fallback None for DSD64
+                // C – Chebyshev only provided for DSD128; fallback None for others
                 'C' => {
                     if dsd_rate == 2 {
                         Some(&HTAPS_DDR_16TO1_CHEB)

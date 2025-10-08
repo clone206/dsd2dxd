@@ -34,8 +34,8 @@ struct Cli {
     bit_depth: i32,
 
     /// Filter type: X (XLD), D (Original dsd2pcm),
-    /// E (Equiripple. Only available with double rate DSD input, or 88.2K output and multiples of 48k from DSD64), C (Chebyshev. Only available with double rate DSD input) [default: X if single rate, E if double rate]
-    #[arg(short = 't', long = "filttype")]
+    /// E (Equiripple. Only available with double rate DSD input, or 88.2K output and multiples of 48k from DSD64), C (Chebyshev. Only available with double rate DSD input)
+    #[arg(short = 't', long = "filttype", default_value = "E")]
     filter_type: Option<char>,
 
     /// Endianness: M (MSB) or L (LSB)
@@ -132,21 +132,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             cli.verbose,
         )?;
 
-        let filter_type = if cli.filter_type.is_some() {
-            cli.filter_type.unwrap().to_ascii_uppercase()
-        } else {
-            match in_ctx.dsd_rate {
-                2 => 'E',
-                _ => 'X',
-            }
-        };
-
         // Create conversion context
         let mut conv_ctx = ConversionContext::new(
             in_ctx,
             out_ctx.clone(),
             dither.clone(),
-            filter_type,
+            cli.filter_type.unwrap().to_ascii_uppercase(),
             cli.verbose,
         )?;
         conv_ctx.do_conversion()?;
