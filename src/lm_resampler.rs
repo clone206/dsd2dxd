@@ -7,7 +7,6 @@ use crate::filters::HTAPS_8MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX10_7TO1_EQ;
 use crate::filters::HTAPS_DSDX5_7TO1_EQ;
-use crate::fir_convolve::FirConvolve;
 // NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
@@ -25,12 +24,10 @@ use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 // Stage1 dump now supported for any M: output after first stage (×L -> /decim1).
 // ====================================================================================
 pub struct LMResampler {
-    // Stage 1
-    fir1: FirConvolve,
+    // Stage 1 half taps (right half including center if odd)
+    stage1_half: &'static [f64],
     up_factor: u32, // L
     decim1: u32,    // 14 (M=294) or 7 (M=147)
-    delay1: u64,
-
     // Stage 2 (polyphase decimator by 7)
     poly2: DecimFIRSym,
     decim2: u32, // 7 (kept for latency formula)
@@ -39,7 +36,6 @@ pub struct LMResampler {
     decim3: u32, // 3
     // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
     // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
-    stage1_poly_input_delay: Option<u64>,
     two_phase_lm147_384: Option<TwoPhaseLM147_384>,
     // Unified Stage1 polyphase (replaces former Slow + Generic variants)
     stage1_poly: Option<Stage1Poly>,
@@ -51,13 +47,12 @@ impl LMResampler {
         match m {
             294 => {
                 // Original cascade Stage1 definitions
-                let fir1 = FirConvolve::new(&HTAPS_DDRX5_14TO1_EQ);
-                let full1 = (HTAPS_DDRX5_14TO1_EQ.len() * 2) as u64;
+                let stage1_half: &'static [f64] = &HTAPS_DDRX5_14TO1_EQ;
+                let full1 = (stage1_half.len() * 2) as u64;
                 let delay1 = (full1 - 1) / 2;
                 let poly2 = DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7);
                 let poly3 = DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3);
-                let use_stage1_poly = !first_channel;
-                let stage1_poly_input_delay = if use_stage1_poly {
+                let stage1_poly_input_delay = if !first_channel {
                     // group delay high-rate = delay1; convert to input samples (ceil / L)
                     let input_delay = (delay1 + (l as u64 - 1)) / l as u64;
                     if verbose {
@@ -72,10 +67,9 @@ impl LMResampler {
                 };
 
                 let s = Self {
-                    fir1,
+                    stage1_half,
                     up_factor: l,
                     decim1: 14,
-                    delay1,
 
                     // Stage 2 (polyphase decimator by 7)
                     poly2,
@@ -83,7 +77,6 @@ impl LMResampler {
                     // Stage 3 (polyphase decimator by 3)
                     poly3,
                     decim3: 3,
-                    stage1_poly_input_delay,
                     two_phase_lm147_384: None,
                     stage1_poly: None,
                     verbose,
@@ -111,20 +104,18 @@ impl LMResampler {
                     }
                     let tp = TwoPhaseLM147_384::new(l);
                     // Minimal placeholders (not used directly)
-                    let fir1 = FirConvolve::new(&HTAPS_DDRX10_21TO1_EQ);
+                    let stage1_half: &'static [f64] = &HTAPS_DDRX10_21TO1_EQ; // placeholder (unused in two-phase)
                     let dummy2 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
                     let dummy3 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
                     return Self {
-                        fir1,
+                        stage1_half,
                         up_factor: l,
                         decim1: 21,
-                        delay1: 0,
 
                         poly2: dummy2,
                         decim2: 7,
                         poly3: dummy3,
                         decim3: 3,
-                        stage1_poly_input_delay: None,
                         two_phase_lm147_384: Some(tp),
                         stage1_poly: None,
                         verbose,
@@ -138,20 +129,18 @@ impl LMResampler {
                     }
                     let tp = TwoPhaseLM147_384::new(l);
                     // Placeholder FIR & decims (unused in this mode beyond latency scaffolding)
-                    let fir1 = FirConvolve::new(&HTAPS_DDRX10_21TO1_EQ);
+                    let stage1_half: &'static [f64] = &HTAPS_DDRX10_21TO1_EQ; // placeholder
                     let dummy2 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
                     let dummy3 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
                     return Self {
-                        fir1,
+                        stage1_half,
                         up_factor: l,
                         decim1: 21,
-                        delay1: 0,
 
                         poly2: dummy2,
                         decim2: 7,
                         poly3: dummy3,
                         decim3: 3,
-                        stage1_poly_input_delay: None,
                         two_phase_lm147_384: Some(tp),
                         stage1_poly: None,
                         verbose,
@@ -159,12 +148,12 @@ impl LMResampler {
                 }
 
                 // (Existing selection logic unchanged, just swap Stage2/3 construction)
-                let (fir1, full1, right2, _full2, right3, _full3, label) =
+                let (stage1_half, full1, right2, _full2, right3, _full3, label) =
                     if l == 5 && out_rate == 384_000 {
                         // DSD256 -> 384k path (L=5, M=147) reuses SAME Stage1 half taps as other 384k paths (DDRx10_7TO1) per request.
                         // Second and third stage identical to other 384k (8MHz -> /7, 1MHz -> /3).
                         (
-                            FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ),
+                            &HTAPS_DDRX10_7TO1_EQ[..],
                             (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64,
                             &HTAPS_8MHZ_7TO1_EQ[..],
                             (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64,
@@ -174,7 +163,7 @@ impl LMResampler {
                         )
                     } else if (l == 10 || l == 20) && out_rate == 384_000 {
                         (
-                            FirConvolve::new(&HTAPS_DDRX10_7TO1_EQ),
+                            &HTAPS_DDRX10_7TO1_EQ[..],
                             (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64,
                             &HTAPS_8MHZ_7TO1_EQ[..],
                             (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64,
@@ -184,7 +173,7 @@ impl LMResampler {
                         )
                     } else if l == 5 && out_rate == 96_000 {
                         (
-                            FirConvolve::new(&HTAPS_DSDX5_7TO1_EQ),
+                            &HTAPS_DSDX5_7TO1_EQ[..],
                             (HTAPS_DSDX5_7TO1_EQ.len() * 2) as u64,
                             &HTAPS_2MHZ_7TO1_EQ[..],
                             (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64,
@@ -194,7 +183,7 @@ impl LMResampler {
                         )
                     } else {
                         (
-                            FirConvolve::new(&HTAPS_DDRX5_7TO_1_EQ),
+                            &HTAPS_DDRX5_7TO_1_EQ[..],
                             (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64,
                             &HTAPS_4MHZ_7TO1_EQ[..],
                             (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64,
@@ -215,8 +204,7 @@ impl LMResampler {
                 let delay1 = (full1 - 1) / 2;
                 let poly2 = DecimFIRSym::new_from_half(right2, 7);
                 let poly3 = DecimFIRSym::new_from_half(right3, 3);
-                let use_stage1_poly = !first_channel;
-                let stage1_poly_input_delay = if use_stage1_poly {
+                let stage1_poly_input_delay = if !first_channel {
                     let input_delay = (delay1 + (l as u64 - 1)) / l as u64;
                     if verbose {
                         eprintln!(
@@ -230,18 +218,15 @@ impl LMResampler {
                 };
 
                 let s = Self {
-                    fir1,
+                    stage1_half,
                     up_factor: l,
                     decim1: 7,
-                    delay1,
-
                     // Stage 2 (polyphase decimator by 7)
                     poly2,
                     decim2: 7,
                     // Stage 3 (polyphase decimator by 3)
                     poly3,
                     decim3: 3,
-                    stage1_poly_input_delay,
                     two_phase_lm147_384: None,
                     stage1_poly: None,
                     verbose,
@@ -274,7 +259,7 @@ impl LMResampler {
         // Unified Stage1 polyphase construction
         if self.stage1_poly.is_none() {
             self.stage1_poly = Some(Stage1Poly::new(
-                &self.fir1.full_taps,
+                self.stage1_half,
                 self.up_factor,
                 self.decim1,
             ));
@@ -310,24 +295,6 @@ impl LMResampler {
             }
         }
         final_out
-    }
-
-    #[inline]
-    pub fn output_latency_frames(&self) -> f64 {
-        if let Some(tp) = self.two_phase_lm147_384.as_ref() {
-            return tp.output_latency_frames();
-        }
-        // If logical Stage1 polyphase enabled, use its input-sample delay; else use raw high-rate delay1.
-        let stage1_delay_out = if let Some(d_in) = self.stage1_poly_input_delay {
-            (d_in as f64) * (self.up_factor as f64)
-                / (self.decim1 as f64 * self.decim2 as f64 * self.decim3 as f64)
-        } else {
-            (self.delay1 as f64) / (self.decim1 as f64 * self.decim2 as f64 * self.decim3 as f64)
-        };
-        let l1 = stage1_delay_out;
-        let l2 = (self.poly2.center_delay() as f64) / (self.decim2 as f64 * self.decim3 as f64);
-        let l3 = (self.poly3.center_delay() as f64) / (self.decim3 as f64);
-        l1 + l2 + l3
     }
 }
 
@@ -570,12 +537,16 @@ struct Stage1Poly {
 }
 
 impl Stage1Poly {
-    fn new(full_taps: &[f64], l: u32, m: u32) -> Self {
+    // Accept half taps (right half including center if odd) and reconstruct full symmetric tap set.
+    fn new(right_half: &[f64], l: u32, m: u32) -> Self {
+        // Rebuild full symmetric taps: mirror of right_half (excluding implicit center duplication handled by simple reverse + extend)
+        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+        full.extend_from_slice(right_half);
         let mut phases = vec![Vec::new(); l as usize];
-        for (i, &c) in full_taps.iter().enumerate() {
+        for (i, &c) in full.iter().enumerate() {
             phases[i % l as usize].push(c);
         }
-        let n = full_taps.len() as u64;
+        let n = full.len() as u64;
         let delay_high = (n - 1) / 2;
         let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
         let cap = max_len.next_power_of_two().max(64);

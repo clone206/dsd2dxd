@@ -8,7 +8,6 @@ mod dither;
 mod dsd;
 mod dsdin_sys;
 mod filters;
-mod fir_convolve;
 mod input;
 mod lm_resampler;
 mod output;

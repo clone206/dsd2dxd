@@ -332,12 +332,6 @@ impl ConversionContext {
         let expected_frames = self.diag_expected_frames_floor;
         let actual_frames = self.diag_frames_out;
         // Estimate latency (frames not emitted at start) for rational path
-        let mut latency_frames_est = 0u64;
-        if let Some(ref rvec) = self.eq_lm_resamplers {
-            if let Some(r0) = rvec.first() {
-                latency_frames_est = r0.output_latency_frames().round() as u64;
-            }
-        }
         let expected_bytes = expected_frames * ch * bps;
         let actual_bytes = actual_frames * ch * bps;
         let diff_frames = expected_frames as i64 - actual_frames as i64;
@@ -356,14 +350,6 @@ impl ConversionContext {
             "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
             expected_frames, actual_frames, diff_frames, pct
         );
-        if latency_frames_est > 0 {
-            let post_latency = expected_frames.saturating_sub(latency_frames_est);
-            let residual = post_latency as i64 - actual_frames as i64;
-            eprintln!(
-                "[DIAG] Est. latency frames: {}  Expected after latency: {}  Residual diff: {}",
-                latency_frames_est, post_latency, residual
-            );
-        }
         eprintln!(
             "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
             expected_bytes, actual_bytes, diff_bytes
