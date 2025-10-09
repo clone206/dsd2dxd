@@ -387,24 +387,21 @@ impl Stage1Poly {
         self.wbits = (self.wbits + 1) & self.bits_mask;
     }
 
-    #[inline]
-    fn get_bit_at(&self, idx: usize) -> bool {
-        let word = idx >> 6;
-        let bit = idx & 63;
-        ((self.ring_bits[word] >> bit) & 1) != 0
-    }
+    // reverse8 was removed; not needed by the newest-first byte extractor.
 
-    // Build a byte from 8 bits going backwards in time from start_idx (inclusive).
-    // bit 0 = newest (start_idx), bit j = sample at start_idx - j
+    // Build a byte from 8 consecutive bits ending at start_idx in newest-first order.
+    // Bit k corresponds to the sign at (start_idx - k) modulo ring capacity.
     #[inline]
-    fn byte_from_bits_rev(&self, mut start_idx: usize) -> u8 {
+    fn byte_from_bits_newest_first(&self, start_idx: usize) -> u8 {
         let mut b: u8 = 0;
-        let capb = self.bits_mask + 1;
-        for j in 0..8 {
-            if self.get_bit_at(start_idx) {
-                b |= 1u8 << j;
-            }
-            start_idx = (start_idx + capb - 1) & self.bits_mask;
+        let mut idx = start_idx;
+        for k in 0..8u8 {
+            let word = idx >> 6;
+            let bit = idx & 63;
+            let one = ((self.ring_bits[word] >> bit) & 1) as u8;
+            b |= one << k; // bit k is the sample at (start_idx - k)
+            // subtract 1 modulo capacity: (idx - 1) & mask == (idx + mask) & mask
+            idx = (idx + self.bits_mask) & self.bits_mask;
         }
         b
     }
@@ -449,7 +446,7 @@ impl Stage1Poly {
         let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index (wbits-1)
         let capb = self.bits_mask + 1;
         for group_lut in phase_lut.iter() {
-            let byte = self.byte_from_bits_rev(bidx);
+            let byte = self.byte_from_bits_newest_first(bidx);
             sum += group_lut[byte as usize];
             bidx = (bidx + capb - 8) & self.bits_mask;
         }
@@ -481,7 +478,7 @@ impl Stage1Poly {
             let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
             let capb = self.bits_mask + 1;
             for group_lut in phase_lut.iter() {
-                let byte = self.byte_from_bits_rev(bidx);
+                let byte = self.byte_from_bits_newest_first(bidx);
                 sum += group_lut[byte as usize];
                 bidx = (bidx + capb - 8) & self.bits_mask;
             }
