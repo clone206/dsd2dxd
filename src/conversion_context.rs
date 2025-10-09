@@ -276,8 +276,12 @@ impl ConversionContext {
 
         // (Configuration prints intentionally unconditional; leave as-is)
 
-        // Process
-        self.process_blocks()?;
+        // Process: route to a dedicated L/M loop when using the rational resampler
+        if self.eq_lm_resamplers.is_some() {
+            self.process_blocks_lm()?;
+        } else {
+            self.process_blocks()?;
+        }
         let dsp_elapsed = wall_start.elapsed();
 
         eprintln!("Clipped {} times.", self.clips);
@@ -485,6 +489,174 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
     }
 
+    // Dedicated L/M processing loop (rational resampler path)
+    fn process_blocks_lm(&mut self) -> Result<(), Box<dyn Error>> {
+        let channels = self.in_ctx.channels_num as usize;
+        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
+
+        if self.dsd_data.len() < frame_size {
+            self.dsd_data.resize(frame_size, 0);
+        }
+
+        let reading_from_file = !self.in_ctx.std_in;
+        let mut reader: Box<dyn Read> = if reading_from_file {
+            let mut file = self
+                .in_ctx
+                .file
+                .as_ref()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing input file handle"))?
+                .try_clone()?;
+            if self.in_ctx.audio_pos > 0 {
+                file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
+                self.verbose(
+                    &format!(
+                        "Seeked to audio start position: {}",
+                        file.stream_position()?
+                    ),
+                    true,
+                );
+            }
+            Box::new(file)
+        } else {
+            Box::new(io::stdin().lock())
+        };
+
+        let mut bytes_remaining: u64 = if reading_from_file {
+            if self.in_ctx.audio_length > 0 {
+                self.in_ctx.audio_length
+            } else {
+                frame_size as u64
+            }
+        } else {
+            frame_size as u64
+        };
+
+        loop {
+            let to_read: usize = if reading_from_file {
+                if bytes_remaining >= frame_size as u64 {
+                    frame_size
+                } else {
+                    break;
+                }
+            } else {
+                frame_size
+            };
+            if to_read == 0 {
+                break;
+            }
+
+            if self.dsd_data.len() < to_read {
+                self.dsd_data.resize(to_read, 0);
+            }
+
+            let read_size: usize = match reader.read_exact(&mut self.dsd_data[..to_read]) {
+                Ok(()) => to_read,
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(Box::new(e)),
+            };
+            self.total_dsd_bytes_processed += read_size as u64;
+
+            let block_remaining: usize = read_size / channels;
+
+            // Diagnostics for LM path
+            self.diag_bits_in += (block_remaining as u64) * 8;
+            let eff_l = self.upsample_ratio as u64;
+            let eff_m = self.decim_ratio as u64;
+            self.diag_expected_frames_floor = (self.diag_bits_in * eff_l) / eff_m;
+
+            // Estimate frames (ceil(bits*L/M)) and allocate buffer (+2 safety)
+            let bits_in = block_remaining * 8;
+            let l = self.upsample_ratio as usize;
+            let m = self.decim_ratio as usize;
+            let estimate_frames = (bits_in * l + (m - 1)) / m;
+            let buf_needed = estimate_frames + 2;
+            if self.float_data.len() < buf_needed {
+                self.float_data.resize(buf_needed, 0.0);
+            } else {
+                self.float_data[..buf_needed].fill(0.0);
+            }
+
+            let mut frames_used_per_chan = estimate_frames;
+
+            let max_block_bytes_needed =
+                buf_needed * channels * (self.out_ctx.bytes_per_sample as usize);
+            if self.out_ctx.output == 's' && self.pcm_data.len() < max_block_bytes_needed {
+                self.pcm_data.resize(max_block_bytes_needed, 0);
+            }
+
+            for chan in 0..channels {
+                let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
+                let produced = self.process_eq_lm_channel(
+                    chan,
+                    block_remaining,
+                    dsd_chan_offset,
+                    self.in_ctx.dsd_stride as isize,
+                    buf_needed,
+                );
+                if chan == 0 {
+                    frames_used_per_chan = produced;
+                } else {
+                    debug_assert_eq!(frames_used_per_chan, produced);
+                }
+
+                if self.out_ctx.output == 's' {
+                    let bps = self.out_ctx.bytes_per_sample as usize;
+                    let mut pcm_pos = chan * bps;
+                    for s in 0..frames_used_per_chan {
+                        let mut out_idx = pcm_pos;
+                        if self.out_ctx.bits == 32 {
+                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut q, chan);
+                            self.write_float(&mut out_idx, q);
+                        } else {
+                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut qin, chan);
+                            let value = Self::my_round(qin) as i32;
+                            let peak = self.out_ctx.peak_level as i32;
+                            let clamped = self.clamp_value(-peak, value, peak - 1);
+                            self.write_int(&mut out_idx, clamped, bps);
+                        }
+                        pcm_pos += channels * bps;
+                    }
+                } else {
+                    if self.out_ctx.bits == 32 {
+                        for s in 0..frames_used_per_chan {
+                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut q, chan);
+                            self.out_ctx.push_samp(q as f32, chan);
+                        }
+                    } else {
+                        for s in 0..frames_used_per_chan {
+                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+                            self.dither.process_samp(&mut qin, chan);
+                            let value = Self::my_round(qin) as i32;
+                            let peak = self.out_ctx.peak_level as i32;
+                            let clamped = self.clamp_value(-peak, value, peak - 1);
+                            self.out_ctx.push_samp(clamped, chan);
+                        }
+                    }
+                }
+            }
+
+            let pcm_block_bytes =
+                frames_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
+            self.diag_frames_out += frames_used_per_chan as u64;
+
+            if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
+                self.write_block(pcm_block_bytes)?;
+            }
+
+            if reading_from_file {
+                bytes_remaining -= read_size as u64;
+                if bytes_remaining <= 0 {
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
@@ -565,16 +737,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             // ---- DIAGNOSTICS: accumulate input bits & recompute expected frames ----
             // Total DSD bits seen so far (all channels counted per-channel implicitly by later math)
             self.diag_bits_in += (block_remaining as u64) * 8;
-            if self.eq_lm_resamplers.is_some() {
-                // Rational path: frames ≈ floor(bits * L / M) (or first-stage denominator if dumping)
-                let eff_l = self.upsample_ratio as u64;
-                let eff_m = self.decim_ratio as u64;
-                self.diag_expected_frames_floor = (self.diag_bits_in * eff_l) / eff_m;
-            } else {
-                // Integer / Chebyshev / original FIR path
-                if self.decim_ratio > 0 {
-                    self.diag_expected_frames_floor = self.diag_bits_in / (self.decim_ratio as u64);
-                }
+            // Integer / Chebyshev / original FIR path
+            if self.decim_ratio > 0 {
+                self.diag_expected_frames_floor = self.diag_bits_in / (self.decim_ratio as u64);
             }
             // ------------------------------------------------------------------------
 
