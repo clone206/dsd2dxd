@@ -16,6 +16,90 @@ use crate::filters::HTAPS_DSDX5_7TO1_EQ;
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+// no extra traits needed
+
+// Global LUT cache for Stage1, shared across instances/channels.
+// Keyed by (L, len(right_half), hash(contents of right_half)) to avoid rebuilding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Stage1LutKey {
+    l: u32,
+    n: u32,
+    hash: u64,
+}
+
+static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Vec<Vec<Vec<f64>>>>>>> = OnceLock::new();
+
+#[inline]
+fn hash_f64_slice_fnv1a(v: &[f64]) -> u64 {
+    // 64-bit FNV-1a over raw bit patterns, stable for identical tap tables
+    let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+    const P: u64 = 0x00000100000001B3; // FNV prime
+    for &f in v {
+        let b = f.to_bits();
+        h ^= b;
+        h = h.wrapping_mul(P);
+    }
+    h
+}
+
+fn build_stage1_lut_from_right_half(right_half: &[f64], l: u32) -> Vec<Vec<Vec<f64>>> {
+    // Reconstruct full symmetric taps and polyphase decomposition
+    let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+    full.extend_from_slice(right_half);
+    let mut phases: Vec<Vec<f64>> = vec![Vec::new(); l as usize];
+    for (i, &c) in full.iter().enumerate() {
+        phases[i % l as usize].push(c);
+    }
+    // Build 8-bit LUT per phase and per group of 8 taps (newest-first order)
+    let mut out: Vec<Vec<Vec<f64>>> = Vec::with_capacity(phases.len());
+    for taps in &phases {
+        let n = taps.len();
+        let groups = (n + 7) / 8;
+        let mut phase_lut: Vec<Vec<f64>> = Vec::with_capacity(groups);
+        for g in 0..groups {
+            let base = g * 8;
+            let mut coeffs: [f64; 8] = [0.0; 8];
+            for j in 0..8 {
+                let idx = base + j;
+                if idx < n {
+                    coeffs[j] = taps[idx];
+                }
+            }
+            let mut group_lut = vec![0.0f64; 256];
+            for b in 0u16..256u16 {
+                let mut sum = 0.0f64;
+                for j in 0..8 {
+                    let sign = if (b >> j) & 1 == 1 { 1.0 } else { -1.0 };
+                    sum += coeffs[j] * sign;
+                }
+                group_lut[b as usize] = sum;
+            }
+            phase_lut.push(group_lut);
+        }
+        out.push(phase_lut);
+    }
+    out
+}
+
+fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<Vec<f64>>>> {
+    let key = Stage1LutKey {
+        l,
+        n: right_half.len() as u32,
+        hash: hash_f64_slice_fnv1a(right_half),
+    };
+    let cache = STAGE1_LUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    // Fast path: try hit
+    if let Some(found) = cache.lock().unwrap().get(&key) {
+        return found.clone();
+    }
+    // Miss: build and insert
+    let lut = build_stage1_lut_from_right_half(right_half, l);
+    let arc = Arc::new(lut);
+    cache.lock().unwrap().insert(key, arc.clone());
+    arc
+}
 
 // Toggle slow-domain Stage1 polyphase (debug / diagnostic).
 // Set to true to enable Stage1PolySlow path; keep false for production.
@@ -237,16 +321,17 @@ impl TwoPhaseLM147_384 {
 #[derive(Debug)]
 struct Stage1Poly {
     // Shared
-    phases: Vec<Vec<f64>>,
     l: u32,
     m: u32,
-    ring: Vec<f64>,
-    mask: usize,
-    w: usize,
+    // Float ring removed; use bit-packed signs only
+    // Bit-packed ring (one bit per input sample): 1 for +1, 0 for -1
+    ring_bits: Vec<u64>,
+    bits_mask: usize, // same capacity as ring (power of 2) - 1
+    wbits: usize,     // next write bit index
     mode: Stage1Mode,
     // Precomputed byte-LUTs: lut[phase][group][pattern 0..255] => partial sum for 8 taps
     // Phase taps are evaluated newest-first; group 0 covers the newest 8 taps, group 1 the next 8, etc.
-    lut: Vec<Vec<Vec<f64>>>,
+    lut: Arc<Vec<Vec<Vec<f64>>>>,
     // Legacy SlotSim fields removed
     delay_high: u64,
     high_index: u64,
@@ -262,76 +347,68 @@ struct Stage1Poly {
 
 impl Stage1Poly {
     fn new(right_half: &[f64], l: u32, m: u32) -> Self {
-        // Rebuild full symmetric taps from half-side
-        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
-        full.extend_from_slice(right_half);
-        let mut phases = vec![Vec::new(); l as usize];
-        for (i, &c) in full.iter().enumerate() {
-            phases[i % l as usize].push(c);
-        }
-        let n = full.len() as u64;
-    let delay_high = (n - 1) / 2; // (N-1)/2
-        let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
+        // Full symmetric taps length when mirroring right_half as [rev(right_half), right_half]
+        let n = (right_half.len() * 2) as u64;
+        let delay_high = (n - 1) / 2; // (N-1)/2
+        // Max taps per phase is ceil(n / l)
+        let max_len = ((n as usize) + l as usize - 1) / l as usize;
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
-        let mut me = Self {
-            phases,
+        let lut = get_or_build_stage1_lut(right_half, l);
+        let me = Self {
             l,
             m,
-            ring: vec![0.0; cap],
-            mask: cap - 1,
-            w: 0,
+            ring_bits: vec![0u64; (cap + 63) / 64],
+            bits_mask: cap - 1,
+            wbits: 0,
             mode: if m == 21 { Stage1Mode::Accum } else { Stage1Mode::SlotSim },
             delay_high,
             high_index: 0,
             phase1: 0,
-            lut: Vec::new(),
+            lut,
             acc: 0,
             phase_mod: 0,
             input_count: 0,
             input_delay,
             primed: false,
         };
-        // Build per-phase byte LUTs for Stage1 convolution
-        me.build_lut();
         me
     }
 
-    // Build 8-bit contribution lookup tables per phase and per 8-tap group.
-    // For each phase p, split taps into groups of 8: c[g*8 + j] with j in 0..7 (pad zeros past end).
-    // For each 8-bit pattern b, compute sum_j c_j * s_j where s_j = +1 if bit j set else -1.
-    fn build_lut(&mut self) {
-        self.lut.clear();
-        self.lut.reserve(self.phases.len());
-        for taps in &self.phases {
-            let n = taps.len();
-            let groups = (n + 7) / 8;
-            let mut phase_lut: Vec<Vec<f64>> = Vec::with_capacity(groups);
-            for g in 0..groups {
-                // Gather up to 8 coefficients for this group in newest-first order.
-                let base = g * 8;
-                let mut coeffs: [f64; 8] = [0.0; 8];
-                for j in 0..8 {
-                    let idx = base + j;
-                    if idx < n {
-                        coeffs[j] = taps[idx];
-                    }
-                }
-                let mut group_lut = vec![0.0f64; 256];
-                for b in 0u16..256u16 {
-                    let mut sum = 0.0f64;
-                    // bit j corresponds to coeffs[j] at offset j from newest
-                    for j in 0..8 {
-                        let sign = if (b >> j) & 1 == 1 { 1.0 } else { -1.0 };
-                        sum += coeffs[j] * sign;
-                    }
-                    group_lut[b as usize] = sum;
-                }
-                phase_lut.push(group_lut);
-            }
-            self.lut.push(phase_lut);
+    #[inline]
+    fn set_next_bit(&mut self, is_pos: bool) {
+        let word = self.wbits >> 6;
+        let bit = self.wbits & 63;
+        if is_pos {
+            self.ring_bits[word] |= 1u64 << bit;
+        } else {
+            self.ring_bits[word] &= !(1u64 << bit);
         }
+        self.wbits = (self.wbits + 1) & self.bits_mask;
     }
+
+    #[inline]
+    fn get_bit_at(&self, idx: usize) -> bool {
+        let word = idx >> 6;
+        let bit = idx & 63;
+        ((self.ring_bits[word] >> bit) & 1) != 0
+    }
+
+    // Build a byte from 8 bits going backwards in time from start_idx (inclusive).
+    // bit 0 = newest (start_idx), bit j = sample at start_idx - j
+    #[inline]
+    fn byte_from_bits_rev(&self, mut start_idx: usize) -> u8 {
+        let mut b: u8 = 0;
+        let capb = self.bits_mask + 1;
+        for j in 0..8 {
+            if self.get_bit_at(start_idx) {
+                b |= 1u8 << j;
+            }
+            start_idx = (start_idx + capb - 1) & self.bits_mask;
+        }
+        b
+    }
+
 
     #[inline]
     fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
@@ -341,9 +418,7 @@ impl Stage1Poly {
             }
             Stage1Mode::SlotSim => {
                 // Original slot simulation at high-rate: write once, advance L slots
-                let s = if bit != 0 { 1.0 } else { -1.0 };
-                self.ring[self.w] = s;
-                self.w = (self.w + 1) & self.mask;
+                self.set_next_bit(bit != 0);
                 for _ in 0..self.l {
                     self.sim_high_slot(&mut emit);
                 }
@@ -368,29 +443,23 @@ impl Stage1Poly {
         }
         self.phase1 = 0;
         let phase = (idx_high % self.l as u64) as usize;
-        // Use the same LUT approach as accumulator path
+        // LUT approach over bit-packed ring
         let phase_lut = &self.lut[phase];
         let mut sum = 0.0;
-        let mut sample_idx = (self.w + self.ring.len() - 1) & self.mask; // newest
+        let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index (wbits-1)
+        let capb = self.bits_mask + 1;
         for group_lut in phase_lut.iter() {
-            let mut byte: u8 = 0;
-            for j in 0..8 {
-                let s = self.ring[sample_idx];
-                if s > 0.0 {
-                    byte |= 1u8 << j;
-                }
-                sample_idx = (sample_idx + self.ring.len() - 1) & self.mask;
-            }
+            let byte = self.byte_from_bits_rev(bidx);
             sum += group_lut[byte as usize];
+            bidx = (bidx + capb - 8) & self.bits_mask;
         }
         emit(sum);
     }
 
     // Accumulator mode: emit all outputs scheduled for this input bit
     fn push_accum_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
-        let s = if bit != 0 { 1.0 } else { -1.0 };
-        self.ring[self.w] = s;
-        self.w = (self.w + 1) & self.mask;
+        // Update bitset only (float ring removed)
+        self.set_next_bit(bit != 0);
         self.input_count += 1;
         self.acc += self.l;
         // Possibly produce multiple outputs if acc exceeds m multiple times
@@ -407,20 +476,14 @@ impl Stage1Poly {
             }
             let phase = self.phase_mod as usize;
             let mut sum = 0.0;
-            // Use precomputed LUTs over 8-sample groups, newest-first
+            // Use precomputed LUTs over 8-sample groups using bit-packed ring
             let phase_lut = &self.lut[phase];
-            let mut idx = (self.w + self.ring.len() - 1) & self.mask; // newest sample position
+            let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
+            let capb = self.bits_mask + 1;
             for group_lut in phase_lut.iter() {
-                // Pack 8 signs from ring into a byte with j=0 as newest, j increasing older
-                let mut byte: u8 = 0;
-                for j in 0..8 {
-                    let s = self.ring[idx];
-                    if s > 0.0 {
-                        byte |= 1u8 << j;
-                    }
-                    idx = (idx + self.ring.len() - 1) & self.mask;
-                }
+                let byte = self.byte_from_bits_rev(bidx);
                 sum += group_lut[byte as usize];
+                bidx = (bidx + capb - 8) & self.bits_mask;
             }
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
