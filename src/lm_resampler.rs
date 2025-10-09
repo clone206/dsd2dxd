@@ -25,7 +25,7 @@ use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 // ====================================================================================
 pub struct LMResampler {
     // Stage 1 half taps (right half including center if odd)
-    stage1_half: &'static [f64],
+    _stage1_half: &'static [f64],
     up_factor: u32, // L
     decim1: u32,    // 14 (M=294) or 7 (M=147)
     // Stage 2 (polyphase decimator by 7) optional (None for two-phase path)
@@ -45,7 +45,7 @@ impl LMResampler {
             294 => {
                 // Original cascade Stage1 definitions
                 let s = Self {
-                    stage1_half: &HTAPS_DDRX5_14TO1_EQ,
+                    _stage1_half: &HTAPS_DDRX5_14TO1_EQ,
                     up_factor: l,
                     decim1: 14,
                     // Stage 2 (polyphase decimator by 7)
@@ -71,7 +71,7 @@ impl LMResampler {
                     }
                     // Minimal placeholders (not used directly)
                     return Self {
-                        stage1_half: &HTAPS_DDRX10_21TO1_EQ,
+                        _stage1_half: &HTAPS_DDRX10_21TO1_EQ,
                         up_factor: l,
                         decim1: 21,
                         poly2: None,
@@ -121,7 +121,7 @@ impl LMResampler {
                         );
                 }
                 return Self {
-                    stage1_half,
+                    _stage1_half: stage1_half,
                     up_factor: l,
                     decim1: 7,
                     // Stage 2 (polyphase decimator by 7)
@@ -173,8 +173,8 @@ impl LMResampler {
 // Unified two‑phase L∈{10,20} / (21*7) path for DSD64 or DSD128 -> 384 kHz
 #[derive(Debug)]
 struct TwoPhaseLM147_384 {
-    stage1: Stage1PolyM21, // ×L /21 polyphase (L=10 or 20)
-    stage2: DecimFIRSym,   // /7 (2.688 MHz -> 384 kHz)
+    stage1: Stage1Poly,  // ×L /21 polyphase (L=10 or 20)
+    stage2: DecimFIRSym, // /7 (2.688 MHz -> 384 kHz)
 }
 
 impl TwoPhaseLM147_384 {
@@ -184,7 +184,7 @@ impl TwoPhaseLM147_384 {
             "TwoPhaseLM147_384 only supports L=10 or L=20"
         );
         Self {
-            stage1: Stage1PolyM21::new(l, &HTAPS_DDRX10_21TO1_EQ),
+            stage1: Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ, l, 21),
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
         }
     }
@@ -199,39 +199,55 @@ impl TwoPhaseLM147_384 {
     }
 }
 
-// Unified Stage1 polyphase for L ∈ {10,20} with m=21
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage1Mode {
+    SlotSim,
+    Accum,
+}
+
 #[derive(Debug)]
-struct Stage1PolyM21 {
+struct Stage1Poly {
+    // Shared
     phases: Vec<Vec<f64>>,
-    l: u32,         // 10 or 20
-    m: u32,         // 21
-    ring: Vec<f64>, // input sample history
+    l: u32,
+    m: u32,
+    ring: Vec<f64>,
     mask: usize,
     w: usize,
+    mode: Stage1Mode,
+    // SlotSim fields
+    high_index: u64,
+    delay_high: u64,
+    phase1: u32,
+    // Accum fields
     acc: u32,
     phase_mod: u32,
     input_count: u64,
     input_delay: u64,
+    // Common
     primed: bool,
 }
 
-impl Stage1PolyM21 {
-    fn new(l: u32, right_half: &[f64]) -> Self {
-        let m = 21u32;
-        // Rebuild full symmetric high‑rate taps
+impl Stage1Poly {
+    fn new(right_half: &[f64], l: u32, m: u32) -> Self {
+        // Rebuild full symmetric taps from half-side
         let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
         full.extend_from_slice(right_half);
-        let n = full.len();
-        // Build phases
         let mut phases = vec![Vec::new(); l as usize];
         for (i, &c) in full.iter().enumerate() {
             phases[i % l as usize].push(c);
         }
-        // Group delay high-rate -> input samples (ceil)
+        let n = full.len() as u64;
+        let delay_high = (n - 1) / 2; // (N-1)/2
         let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
-        let gd_high = (n as u64 - 1) / 2;
-        let input_delay = (gd_high + (l as u64 - 1)) / l as u64;
         let cap = max_len.next_power_of_two().max(128);
+        // Choose mode: keep accumulator only for m==21 (where we previously validated)
+        let mode = if m == 21 {
+            Stage1Mode::Accum
+        } else {
+            Stage1Mode::SlotSim
+        };
+        let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
         Self {
             phases,
             l,
@@ -239,6 +255,10 @@ impl Stage1PolyM21 {
             ring: vec![0.0; cap],
             mask: cap - 1,
             w: 0,
+            mode,
+            high_index: 0,
+            delay_high,
+            phase1: 0,
             acc: 0,
             phase_mod: 0,
             input_count: 0,
@@ -249,17 +269,83 @@ impl Stage1PolyM21 {
 
     #[inline]
     fn push_bit(&mut self, bit: u8) -> Option<f64> {
+        self.push(bit)
+    }
+
+    #[inline]
+    fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
+        match self.mode {
+            Stage1Mode::Accum => {
+                if let Some(y) = self.push(bit) {
+                    emit(y);
+                }
+            }
+            Stage1Mode::SlotSim => {
+                // Original slot simulation: write input once, simulate L high-rate slots
+                let s = if bit != 0 { 1.0 } else { -1.0 };
+                self.ring[self.w] = s;
+                self.w = (self.w + 1) & self.mask;
+                for _ in 0..self.l {
+                    self.sim_high_slot(&mut emit);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, bit: u8) -> Option<f64> {
+        match self.mode {
+            Stage1Mode::Accum => self.push_accum(bit),
+            Stage1Mode::SlotSim => {
+                let mut first = None;
+                self.push_all(bit, |y| {
+                    if first.is_none() {
+                        first = Some(y);
+                    }
+                });
+                first
+            }
+        }
+    }
+
+    #[inline]
+    fn sim_high_slot<F: FnMut(f64)>(&mut self, emit: &mut F) {
+        let idx_high = self.high_index;
+        self.high_index += 1;
+        if !self.primed {
+            if idx_high >= self.delay_high {
+                self.primed = true;
+                self.phase1 = 0;
+            }
+            return;
+        }
+        self.phase1 += 1;
+        if self.phase1 != self.m {
+            return;
+        }
+        self.phase1 = 0;
+        let phase = (idx_high % self.l as u64) as usize;
+        let taps = &self.phases[phase];
+        let mut sum = 0.0;
+        let mut sample_idx = (self.w + self.ring.len() - 1) & self.mask;
+        for &c in taps {
+            sum += c * self.ring[sample_idx];
+            sample_idx = (sample_idx + self.ring.len() - 1) & self.mask;
+        }
+        emit(sum);
+    }
+
+    #[inline]
+    fn push_accum(&mut self, bit: u8) -> Option<f64> {
         let s = if bit != 0 { 1.0 } else { -1.0 };
         self.ring[self.w] = s;
         self.w = (self.w + 1) & self.mask;
         self.input_count += 1;
-
         self.acc += self.l;
         if self.acc < self.m {
             return None;
         }
         self.acc -= self.m;
-
         if !self.primed {
             if self.input_count >= self.input_delay {
                 self.primed = true;
@@ -268,20 +354,15 @@ impl Stage1PolyM21 {
                 return None;
             }
         }
-
         let phase = self.phase_mod as usize;
         let taps = &self.phases[phase];
-
-        // Convolution taps[k] * x[n-k]
         let mut acc_sum = 0.0;
         let mut idx = (self.w + self.ring.len() - 1) & self.mask;
         for &c in taps {
             acc_sum += c * self.ring[idx];
             idx = (idx + self.ring.len() - 1) & self.mask;
         }
-
         self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
-
         Some(acc_sum)
     }
 }
@@ -293,15 +374,15 @@ impl Stage1PolyM21 {
 struct DecimFIRSym {
     full: Vec<f64>, // full symmetric taps
     len: usize,
-    half: usize,
-    has_center: bool,
+    _half: usize,
+    _has_center: bool,
     center: usize, // (len-1)/2
     decim: usize,  // decimation factor D
     ring: Vec<f64>,
     mask: usize,
-    w: usize,            // next write index
-    count: usize,        // total samples seen
-    left_half: Vec<f64>, // first half taps (outer->inner)
+    w: usize,             // next write index
+    count: usize,         // total samples seen
+    _left_half: Vec<f64>, // first half taps (outer->inner)
 }
 
 impl DecimFIRSym {
@@ -319,15 +400,15 @@ impl DecimFIRSym {
         Self {
             full,
             len,
-            half,
-            has_center,
+            _half: half,
+            _has_center: has_center,
             center,
             decim,
             ring: vec![0.0; cap],
             mask: cap - 1,
             w: 0,
             count: 0,
-            left_half,
+            _left_half: left_half,
         }
     }
 
@@ -355,108 +436,13 @@ impl DecimFIRSym {
     // ----- Convolution implementations -----
     #[inline(always)]
     unsafe fn convolve_scalar(&self) -> f64 {
-        let newest = (self.w + self.ring.len() - 1) & self.mask;
+        // Straight scalar convolution over full symmetric taps (already mirrored)
         let mut acc = 0.0;
-        for i in 0..self.half {
-            let tap = self.left_half[i];
-            let left_idx = (newest + self.ring.len() - (self.len - 1 - i)) & self.mask;
-            let right_idx = (newest + self.ring.len() - i) & self.mask;
-            acc += tap * (self.ring[left_idx] + self.ring[right_idx]);
-        }
-        if self.has_center {
-            let center_idx = (newest + self.ring.len() - (self.len - 1 - self.half)) & self.mask;
-            acc += self.full[self.half] * self.ring[center_idx];
+        let mut idx = (self.w + self.ring.len() - 1) & self.mask; // newest sample
+        for k in 0..self.len {
+            acc += self.full[k] * self.ring[idx];
+            idx = (idx + self.ring.len() - 1) & self.mask; // move backwards
         }
         acc
-    }
-}
-
-// (Legacy thread-local cache for slow Stage1 polyphase removed after unification.)
-
-// Unified Stage1 polyphase (merging former Slow + Generic variants)
-#[derive(Debug)]
-struct Stage1Poly {
-    phases: Vec<Vec<f64>>, // phases[r][k] = h[r + k*L]
-    l: u32,
-    m: u32,
-    ring: Vec<f64>,
-    mask: usize,
-    w: usize,
-    high_index: u64,
-    delay_high: u64,
-    phase1: u32,
-    primed: bool,
-    input_count: u64,
-}
-
-impl Stage1Poly {
-    // Accept half taps (right half including center if odd) and reconstruct full symmetric tap set.
-    fn new(right_half: &[f64], l: u32, m: u32) -> Self {
-        // Rebuild full symmetric taps: mirror of right_half (excluding implicit center duplication handled by simple reverse + extend)
-        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
-        full.extend_from_slice(right_half);
-        let mut phases = vec![Vec::new(); l as usize];
-        for (i, &c) in full.iter().enumerate() {
-            phases[i % l as usize].push(c);
-        }
-        let n = full.len() as u64;
-        let delay_high = (n - 1) / 2;
-        let max_len = phases.iter().map(|p| p.len()).max().unwrap_or(0);
-        let cap = max_len.next_power_of_two().max(64);
-        Self {
-            phases,
-            l,
-            m,
-            ring: vec![0.0; cap],
-            mask: cap - 1,
-            w: 0,
-            high_index: 0,
-            delay_high,
-            phase1: 0,
-            primed: false,
-            input_count: 0,
-        }
-    }
-    #[inline]
-    fn push(&mut self, bit: u8) -> Option<f64> {
-        let mut first: Option<f64> = None;
-        self.push_all(bit, |y| {
-            if first.is_none() {
-                first = Some(y)
-            }
-        });
-        first
-    }
-    #[inline]
-    fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
-        let s = if bit != 0 { 1.0 } else { -1.0 };
-        self.ring[self.w] = s;
-        self.w = (self.w + 1) & self.mask;
-        self.input_count += 1;
-        for _ in 0..self.l {
-            let idx_high = self.high_index;
-            self.high_index += 1;
-            if !self.primed {
-                if idx_high >= self.delay_high {
-                    self.primed = true;
-                    self.phase1 = 0;
-                }
-                continue;
-            }
-            self.phase1 += 1;
-            if self.phase1 != self.m {
-                continue;
-            }
-            self.phase1 = 0;
-            let phase = (idx_high % self.l as u64) as usize;
-            let taps = &self.phases[phase];
-            let mut sum = 0.0;
-            let mut sample_idx = (self.w + self.ring.len() - 1) & self.mask;
-            for &c in taps {
-                sum += c * self.ring[sample_idx];
-                sample_idx = (sample_idx + self.ring.len() - 1) & self.mask;
-            }
-            emit(sum);
-        }
     }
 }
