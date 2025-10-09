@@ -28,223 +28,109 @@ pub struct LMResampler {
     stage1_half: &'static [f64],
     up_factor: u32, // L
     decim1: u32,    // 14 (M=294) or 7 (M=147)
-    // Stage 2 (polyphase decimator by 7)
-    poly2: DecimFIRSym,
-    decim2: u32, // 7 (kept for latency formula)
-    // Stage 3 (polyphase decimator by 3)
-    poly3: DecimFIRSym,
-    decim3: u32, // 3
+    // Stage 2 (polyphase decimator by 7) optional (None for two-phase path)
+    poly2: Option<DecimFIRSym>,
+    // Stage 3 (polyphase decimator by 3) optional (None for two-phase path)
+    poly3: Option<DecimFIRSym>,
     // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
     // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
     two_phase_lm147_384: Option<TwoPhaseLM147_384>,
     // Unified Stage1 polyphase (replaces former Slow + Generic variants)
     stage1_poly: Option<Stage1Poly>,
     // Verbose flag retained for later diagnostics
-    verbose: bool,
 }
 impl LMResampler {
-    pub fn new(l: u32, m: i32, verbose: bool, first_channel: bool, out_rate: u32) -> Self {
+    pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
         match m {
             294 => {
                 // Original cascade Stage1 definitions
-                let stage1_half: &'static [f64] = &HTAPS_DDRX5_14TO1_EQ;
-                let full1 = (stage1_half.len() * 2) as u64;
-                let delay1 = (full1 - 1) / 2;
-                let poly2 = DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7);
-                let poly3 = DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3);
-                let stage1_poly_input_delay = if !first_channel {
-                    // group delay high-rate = delay1; convert to input samples (ceil / L)
-                    let input_delay = (delay1 + (l as u64 - 1)) / l as u64;
-                    if verbose {
-                        eprintln!(
-                            "[DBG] Stage1 polyphase (logical) enabled (L={} decim1=14) input_delay_in={}",
-                            l, input_delay
-                        );
-                    }
-                    Some(input_delay)
-                } else {
-                    None
-                };
-
                 let s = Self {
-                    stage1_half,
+                    stage1_half: &HTAPS_DDRX5_14TO1_EQ,
                     up_factor: l,
                     decim1: 14,
-
                     // Stage 2 (polyphase decimator by 7)
-                    poly2,
-                    decim2: 7,
+                    poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
                     // Stage 3 (polyphase decimator by 3)
-                    poly3,
-                    decim3: 3,
+                    poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
                     two_phase_lm147_384: None,
-                    stage1_poly: None,
-                    verbose,
+                    stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14)),
                 };
                 if verbose {
-                    if first_channel {
-                        eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=294 — STAGE1 DUMP (×L -> /14).",
-                            l
-                        );
-                    } else {
-                        eprintln!(
+                    eprintln!(
                             "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 polyphase].",
                             l
                         );
-                    }
                 }
                 s
             }
             147 => {
                 // DSD128 -> 384k two‑phase path (×10 -> /21 -> /7) DEFAULT for L=10
-                if l == 10 && out_rate == 384_000 {
+                if (l == 10 || l == 20) && out_rate == 384_000 {
                     if verbose {
-                        eprintln!("[DBG] Two-phase L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 384k");
+                        eprintln!("[DBG] Two-phase L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k", l);
                     }
-                    let tp = TwoPhaseLM147_384::new(l);
                     // Minimal placeholders (not used directly)
-                    let stage1_half: &'static [f64] = &HTAPS_DDRX10_21TO1_EQ; // placeholder (unused in two-phase)
-                    let dummy2 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
-                    let dummy3 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
                     return Self {
-                        stage1_half,
+                        stage1_half: &HTAPS_DDRX10_21TO1_EQ,
                         up_factor: l,
                         decim1: 21,
-
-                        poly2: dummy2,
-                        decim2: 7,
-                        poly3: dummy3,
-                        decim3: 3,
-                        two_phase_lm147_384: Some(tp),
+                        poly2: None,
+                        poly3: None,
+                        two_phase_lm147_384: Some(TwoPhaseLM147_384::new(l)),
                         stage1_poly: None,
-                        verbose,
-                    };
-                }
-
-                // Existing L=20 two‑phase 384k branch remains below
-                if l == 20 && out_rate == 384_000 {
-                    if verbose {
-                        eprintln!("[DBG] Two-phase L=20/M=147 path enabled: (×20 -> /21 (poly) -> /7) => 384k");
-                    }
-                    let tp = TwoPhaseLM147_384::new(l);
-                    // Placeholder FIR & decims (unused in this mode beyond latency scaffolding)
-                    let stage1_half: &'static [f64] = &HTAPS_DDRX10_21TO1_EQ; // placeholder
-                    let dummy2 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
-                    let dummy3 = DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7);
-                    return Self {
-                        stage1_half,
-                        up_factor: l,
-                        decim1: 21,
-
-                        poly2: dummy2,
-                        decim2: 7,
-                        poly3: dummy3,
-                        decim3: 3,
-                        two_phase_lm147_384: Some(tp),
-                        stage1_poly: None,
-                        verbose,
                     };
                 }
 
                 // (Existing selection logic unchanged, just swap Stage2/3 construction)
-                let (stage1_half, full1, right2, _full2, right3, _full3, label) =
-                    if l == 5 && out_rate == 384_000 {
-                        // DSD256 -> 384k path (L=5, M=147) reuses SAME Stage1 half taps as other 384k paths (DDRx10_7TO1) per request.
-                        // Second and third stage identical to other 384k (8MHz -> /7, 1MHz -> /3).
-                        (
-                            &HTAPS_DDRX10_7TO1_EQ[..],
-                            (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_8MHZ_7TO1_EQ[..],
-                            (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_1MHZ_3TO1_EQ[..],
-                            (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64,
-                            "384k (L=5 reuse DDRx10 taps, 8MHz, 1MHz)",
-                        )
-                    } else if (l == 10 || l == 20) && out_rate == 384_000 {
-                        (
-                            &HTAPS_DDRX10_7TO1_EQ[..],
-                            (HTAPS_DDRX10_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_8MHZ_7TO1_EQ[..],
-                            (HTAPS_8MHZ_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_1MHZ_3TO1_EQ[..],
-                            (HTAPS_1MHZ_3TO1_EQ.len() * 2) as u64,
-                            "384k (DDRx10, 8MHz, 1MHz)",
-                        )
-                    } else if l == 5 && out_rate == 96_000 {
-                        (
-                            &HTAPS_DSDX5_7TO1_EQ[..],
-                            (HTAPS_DSDX5_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_2MHZ_7TO1_EQ[..],
-                            (HTAPS_2MHZ_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_288K_3TO1_EQ[..],
-                            (HTAPS_288K_3TO1_EQ.len() * 2) as u64,
-                            "96k (DSD×5, 2MHz, 288k)",
-                        )
-                    } else {
-                        (
-                            &HTAPS_DDRX5_7TO_1_EQ[..],
-                            (HTAPS_DDRX5_7TO_1_EQ.len() * 2) as u64,
-                            &HTAPS_4MHZ_7TO1_EQ[..],
-                            (HTAPS_4MHZ_7TO1_EQ.len() * 2) as u64,
-                            &HTAPS_576K_3TO1_EQ[..],
-                            (HTAPS_576K_3TO1_EQ.len() * 2) as u64,
-                            "192k (DDR×5, 4MHz, 576k)",
-                        )
-                    };
-                let _stage1_half: &[f64] = if l == 5 && out_rate == 384_000 {
-                    &HTAPS_DDRX10_7TO1_EQ
+                let (stage1_half, right2, right3, label) = if l == 5 && out_rate == 384_000 {
+                    // DSD256 -> 384k path (L=5, M=147) reuses SAME Stage1 half taps as other 384k paths (DDRx10_7TO1) per request.
+                    // Second and third stage identical to other 384k (8MHz -> /7, 1MHz -> /3).
+                    (
+                        &HTAPS_DDRX10_7TO1_EQ[..],
+                        &HTAPS_8MHZ_7TO1_EQ[..],
+                        &HTAPS_1MHZ_3TO1_EQ[..],
+                        "384k (L=5 reuse DDRx10 taps, 8MHz, 1MHz)",
+                    )
                 } else if (l == 10 || l == 20) && out_rate == 384_000 {
-                    &HTAPS_DDRX10_7TO1_EQ
+                    (
+                        &HTAPS_DDRX10_7TO1_EQ[..],
+                        &HTAPS_8MHZ_7TO1_EQ[..],
+                        &HTAPS_1MHZ_3TO1_EQ[..],
+                        "384k (DDRx10, 8MHz, 1MHz)",
+                    )
                 } else if l == 5 && out_rate == 96_000 {
-                    &HTAPS_DSDX5_7TO1_EQ
+                    (
+                        &HTAPS_DSDX5_7TO1_EQ[..],
+                        &HTAPS_2MHZ_7TO1_EQ[..],
+                        &HTAPS_288K_3TO1_EQ[..],
+                        "96k (DSD×5, 2MHz, 288k)",
+                    )
                 } else {
-                    &HTAPS_DDRX5_7TO_1_EQ
-                };
-                let delay1 = (full1 - 1) / 2;
-                let poly2 = DecimFIRSym::new_from_half(right2, 7);
-                let poly3 = DecimFIRSym::new_from_half(right3, 3);
-                let stage1_poly_input_delay = if !first_channel {
-                    let input_delay = (delay1 + (l as u64 - 1)) / l as u64;
-                    if verbose {
-                        eprintln!(
-                            "[DBG] Stage1 polyphase (logical) enabled (L={} decim1=7) input_delay_in={}",
-                            l, input_delay
-                        );
-                    }
-                    Some(input_delay)
-                } else {
-                    None
+                    (
+                        &HTAPS_DDRX5_7TO_1_EQ[..],
+                        &HTAPS_4MHZ_7TO1_EQ[..],
+                        &HTAPS_576K_3TO1_EQ[..],
+                        "192k (DDR×5, 4MHz, 576k)",
+                    )
                 };
 
-                let s = Self {
+                if verbose {
+                    eprintln!(
+                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} [Stage2/3 polyphase].",
+                            l, label
+                        );
+                }
+                return Self {
                     stage1_half,
                     up_factor: l,
                     decim1: 7,
                     // Stage 2 (polyphase decimator by 7)
-                    poly2,
-                    decim2: 7,
+                    poly2: Some(DecimFIRSym::new_from_half(right2, 7)),
                     // Stage 3 (polyphase decimator by 3)
-                    poly3,
-                    decim3: 3,
+                    poly3: Some(DecimFIRSym::new_from_half(right3, 3)),
                     two_phase_lm147_384: None,
-                    stage1_poly: None,
-                    verbose,
+                    stage1_poly: Some(Stage1Poly::new(stage1_half, l, 7)),
                 };
-                if verbose {
-                    if first_channel {
-                        eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — STAGE1 DUMP (×L -> /7).",
-                            l
-                        );
-                    } else {
-                        eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} [Stage2/3 polyphase].",
-                            l, label
-                        );
-                    }
-                }
-                s
             }
             _ => panic!("Unsupported L/M combination: L={} M={}", l, m),
         }
@@ -256,43 +142,29 @@ impl LMResampler {
         if let Some(tp) = self.two_phase_lm147_384.as_mut() {
             return tp.push_bit(bit);
         }
-        // Unified Stage1 polyphase construction
-        if self.stage1_poly.is_none() {
-            self.stage1_poly = Some(Stage1Poly::new(
-                self.stage1_half,
-                self.up_factor,
-                self.decim1,
-            ));
-            if self.verbose && self.up_factor == 5 {
-                let total_m = (self.decim1 as u64) * (self.decim2 as u64) * (self.decim3 as u64);
-                eprintln!(
-                    "[DBG] Stage1Poly active: L={} first_stage=/{} total_decim={} ({} -> final).",
-                    self.up_factor,
-                    self.decim1,
-                    total_m,
-                    if total_m == 294 { "×5->/14->/7->/3" } else { "×5->/7->/7->/3" }
-                );
-            }
-        }
+        // Stage1Poly now always eagerly constructed in constructor for non two-phase paths.
         let poly = self.stage1_poly.as_mut().unwrap();
         let mut final_out: Option<f64> = None;
         // If L >= decim1 we may produce multiple Stage1 outputs per input sample.
-        if self.up_factor as u32 >= self.decim1 {
-            poly.push_all(bit, |y1| {
-                if let Some(y2) = self.poly2.push(y1) {
-                    if let Some(y3) = self.poly3.push(y2) {
-                        final_out = Some(y3); // keep last (chronological) output
+        if let (Some(ref mut p2), Some(ref mut p3)) = (self.poly2.as_mut(), self.poly3.as_mut()) {
+            if self.up_factor as u32 >= self.decim1 {
+                poly.push_all(bit, |y1| {
+                    if let Some(y2) = p2.push(y1) {
+                        if let Some(y3) = p3.push(y2) {
+                            final_out = Some(y3); // keep last output
+                        }
                     }
-                }
-            });
-        } else {
-            if let Some(y1) = poly.push(bit) {
-                if let Some(y2) = self.poly2.push(y1) {
-                    if let Some(y3) = self.poly3.push(y2) {
+                });
+            } else if let Some(y1) = poly.push(bit) {
+                if let Some(y2) = p2.push(y1) {
+                    if let Some(y3) = p3.push(y2) {
                         final_out = Some(y3);
                     }
                 }
             }
+        } else {
+            // Two-phase path uses separate structure; should not reach here with stage1_poly set
+            return None;
         }
         final_out
     }
@@ -303,7 +175,6 @@ impl LMResampler {
 struct TwoPhaseLM147_384 {
     stage1: Stage1PolyM21, // ×L /21 polyphase (L=10 or 20)
     stage2: DecimFIRSym,   // /7 (2.688 MHz -> 384 kHz)
-    l: u32,
 }
 
 impl TwoPhaseLM147_384 {
@@ -315,7 +186,6 @@ impl TwoPhaseLM147_384 {
         Self {
             stage1: Stage1PolyM21::new(l, &HTAPS_DDRX10_21TO1_EQ),
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
-            l,
         }
     }
     #[inline]
@@ -326,13 +196,6 @@ impl TwoPhaseLM147_384 {
             }
         }
         None
-    }
-    #[inline]
-    fn output_latency_frames(&self) -> f64 {
-        // Stage1 latency (input samples) scaled by L / (21*7) plus stage2 latency (scaled by /7)
-        let d1 = (self.stage1.input_delay() as f64) * (self.l as f64 / (21.0 * 7.0));
-        let d2 = (self.stage2.center_delay() as f64) / 7.0;
-        d1 + d2
     }
 }
 
@@ -421,11 +284,6 @@ impl Stage1PolyM21 {
 
         Some(acc_sum)
     }
-
-    #[inline]
-    fn input_delay(&self) -> u64 {
-        self.input_delay
-    }
 }
 
 // --- ====================================================================================
@@ -492,11 +350,6 @@ impl DecimFIRSym {
 
         let acc = unsafe { self.convolve_scalar() };
         Some(acc)
-    }
-
-    #[inline]
-    fn center_delay(&self) -> usize {
-        self.center
     }
 
     // ----- Convolution implementations -----
@@ -567,7 +420,11 @@ impl Stage1Poly {
     #[inline]
     fn push(&mut self, bit: u8) -> Option<f64> {
         let mut first: Option<f64> = None;
-        self.push_all(bit, |y| if first.is_none() { first = Some(y) });
+        self.push_all(bit, |y| {
+            if first.is_none() {
+                first = Some(y)
+            }
+        });
         first
     }
     #[inline]
@@ -580,17 +437,25 @@ impl Stage1Poly {
             let idx_high = self.high_index;
             self.high_index += 1;
             if !self.primed {
-                if idx_high >= self.delay_high { self.primed = true; self.phase1 = 0; }
+                if idx_high >= self.delay_high {
+                    self.primed = true;
+                    self.phase1 = 0;
+                }
                 continue;
             }
             self.phase1 += 1;
-            if self.phase1 != self.m { continue; }
+            if self.phase1 != self.m {
+                continue;
+            }
             self.phase1 = 0;
             let phase = (idx_high % self.l as u64) as usize;
             let taps = &self.phases[phase];
             let mut sum = 0.0;
             let mut sample_idx = (self.w + self.ring.len() - 1) & self.mask;
-            for &c in taps { sum += c * self.ring[sample_idx]; sample_idx = (sample_idx + self.ring.len() - 1) & self.mask; }
+            for &c in taps {
+                sum += c * self.ring[sample_idx];
+                sample_idx = (sample_idx + self.ring.len() - 1) & self.mask;
+            }
             emit(sum);
         }
     }

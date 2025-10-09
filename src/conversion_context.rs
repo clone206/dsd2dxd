@@ -93,7 +93,6 @@ impl ConversionContext {
                             ctx.upsample_ratio,
                             decim_ratio,
                             ctx.verbose_mode,
-                            i == 0,
                             ctx.out_ctx.rate as u32,
                         )
                     })
