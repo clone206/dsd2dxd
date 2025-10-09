@@ -169,17 +169,23 @@ impl LMResampler {
     pub fn push_byte_lm<F: FnMut(f64)>(&mut self, byte: u8, lsb_first: bool, mut emit: F) -> usize {
         let mut produced = 0usize;
         if lsb_first {
-            for b in 0..8 { self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit); }
+            for b in 0..8 {
+                self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit);
+            }
         } else {
-            for b in (0..8).rev() { self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit); }
+            for b in (0..8).rev() {
+                self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit);
+            }
         }
         produced
     }
 
     #[inline]
-    #[allow(dead_code)]
     fn maybe_emit<F: FnMut(f64)>(&mut self, bit: u8, produced: &mut usize, emit: &mut F) {
-        if let Some(y) = self.push_bit_lm(bit) { *produced += 1; emit(y); }
+        if let Some(y) = self.push_bit_lm(bit) {
+            *produced += 1;
+            emit(y);
+        }
     }
 }
 

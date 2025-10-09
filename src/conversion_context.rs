@@ -1,14 +1,14 @@
 use crate::audio_file::AudioFileFormat;
-use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::bit_reverse_u8;
+use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 // NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::dsdin_sys::DSD_64_RATE;
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD64_8TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
-    HTAPS_DSD256_64TO1_EQ, HTAPS_XLD,
+    HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ,
+    HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
 };
 use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
@@ -68,7 +68,12 @@ impl ConversionContext {
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
             float_data: vec![0.0; (dsd_bytes_per_chan * 8) / decim_ratio as usize],
-            pcm_data: vec![0; ((dsd_bytes_per_chan * 8) / decim_ratio as usize) * channels * bytes_per_sample],
+            pcm_data: vec![
+                0;
+                ((dsd_bytes_per_chan * 8) / decim_ratio as usize)
+                    * channels
+                    * bytes_per_sample
+            ],
             clips: 0,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
@@ -279,7 +284,9 @@ impl ConversionContext {
         eprintln!("");
 
         if self.out_ctx.output != 's' {
-            if let Err(e) = self.write_file() { eprintln!("Error writing file: {e}"); }
+            if let Err(e) = self.write_file() {
+                eprintln!("Error writing file: {e}");
+            }
         }
         let total_elapsed = wall_start.elapsed();
 
@@ -416,12 +423,23 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         };
         let mut produced = 0usize;
         for i in 0..block_remaining {
-            if produced >= buf_capacity { break; }
-            let byte_index = if stride == 0 { dsd_chan_offset + i } else { dsd_chan_offset + i * stride };
-            if byte_index >= self.dsd_data.len() { break; }
+            if produced >= buf_capacity {
+                break;
+            }
+            let byte_index = if stride == 0 {
+                dsd_chan_offset + i
+            } else {
+                dsd_chan_offset + i * stride
+            };
+            if byte_index >= self.dsd_data.len() {
+                break;
+            }
             let byte = self.dsd_data[byte_index];
             rs.push_byte_lm(byte, lsb_first, |y| {
-                if produced < buf_capacity { self.float_data[produced] = y; produced += 1; }
+                if produced < buf_capacity {
+                    self.float_data[produced] = y;
+                    produced += 1;
+                }
             });
         }
         if produced < buf_capacity {
@@ -489,7 +507,10 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             if self.in_ctx.audio_pos > 0 {
                 file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
                 self.verbose(
-                    &format!("Seeked to audio start position: {}", file.stream_position()?),
+                    &format!(
+                        "Seeked to audio start position: {}",
+                        file.stream_position()?
+                    ),
                     true,
                 );
             }
@@ -708,7 +729,10 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         // DSD128 (2x) explicit allow list
         if self.in_ctx.dsd_rate == 2 && ![16, 32, 64, 147, 294].contains(&self.decim_ratio) {
-            return Err("Only decimation value of 16, 32, 64, 147, or 294 allowed with DSD128 input.".into());
+            return Err(
+                "Only decimation value of 16, 32, 64, 147, or 294 allowed with DSD128 input."
+                    .into(),
+            );
         }
         // DSD64 (1x) allow list (8/16/32 always; 147 only with 'E')
         if self.in_ctx.dsd_rate == 1
@@ -725,7 +749,10 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
         // 294:1 constraint (only DSD128 + E)
         if self.decim_ratio == 294 && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E') {
-            return Err("294:1 decimation currently only supported for DSD128 with Equiripple filter.".into());
+            return Err(
+                "294:1 decimation currently only supported for DSD128 with Equiripple filter."
+                    .into(),
+            );
         }
         // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
         if self.decim_ratio == 147
@@ -842,10 +869,26 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             1
         } else if out_ctx.rate == 384_000 {
             // Specialized two-phase L choices for 384k: DSD64->L20, DSD128->L10, DSD256->L5
-            if in_ctx.dsd_rate == 1 { 20 } else if in_ctx.dsd_rate == 2 { 10 } else if in_ctx.dsd_rate == 4 { 5 } else { 5 }
+            if in_ctx.dsd_rate == 1 {
+                20
+            } else if in_ctx.dsd_rate == 2 {
+                10
+            } else if in_ctx.dsd_rate == 4 {
+                5
+            } else {
+                5
+            }
         } else if out_ctx.rate == 192_000 {
             // 192k: DSD64->L10, DSD128->L5, DSD256->L5 (reuses L5 path)
-            if in_ctx.dsd_rate == 1 { 10 } else if in_ctx.dsd_rate == 2 { 5 } else if in_ctx.dsd_rate == 4 { 5 } else { 5 }
+            if in_ctx.dsd_rate == 1 {
+                10
+            } else if in_ctx.dsd_rate == 2 {
+                5
+            } else if in_ctx.dsd_rate == 4 {
+                5
+            } else {
+                5
+            }
         } else if out_ctx.rate == 96_000 {
             5 // All current supported DSD rates use L=5 toward 96k
         } else {
