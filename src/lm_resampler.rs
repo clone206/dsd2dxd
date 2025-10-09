@@ -173,10 +173,6 @@ struct TwoPhaseLM147_384 {
 
 impl TwoPhaseLM147_384 {
     fn new(l: u32) -> Self {
-        debug_assert!(
-            l == 10 || l == 20,
-            "TwoPhaseLM147_384 only supports L=10 or L=20"
-        );
         Self {
             stage1: Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ, l, 21),
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
