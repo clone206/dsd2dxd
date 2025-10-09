@@ -88,7 +88,7 @@ impl ConversionContext {
             let ch = ctx.in_ctx.channels_num as usize;
             ctx.eq_lm_resamplers = Some(
                 (0..ch)
-                    .map(|i| {
+                    .map(|_i| {
                         LMResampler::new(
                             ctx.upsample_ratio,
                             decim_ratio,
@@ -279,7 +279,7 @@ impl ConversionContext {
         eprintln!("");
 
         if self.out_ctx.output != 's' {
-            self.write_file();
+            if let Err(e) = self.write_file() { eprintln!("Error writing file: {e}"); }
         }
         let total_elapsed = wall_start.elapsed();
 
@@ -416,44 +416,13 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         };
         let mut produced = 0usize;
         for i in 0..block_remaining {
-            if produced >= buf_capacity {
-                break;
-            }
-            let byte_index = if stride == 0 {
-                dsd_chan_offset + i
-            } else {
-                dsd_chan_offset + i * stride
-            };
-            if byte_index >= self.dsd_data.len() {
-                break;
-            }
+            if produced >= buf_capacity { break; }
+            let byte_index = if stride == 0 { dsd_chan_offset + i } else { dsd_chan_offset + i * stride };
+            if byte_index >= self.dsd_data.len() { break; }
             let byte = self.dsd_data[byte_index];
-            // iterate bits in correct order
-            if lsb_first {
-                for b in 0..8 {
-                    if produced >= buf_capacity {
-                        break;
-                    }
-                    let bit = (byte >> b) & 1;
-                    let got = rs.push_bit_lm(bit);
-                    if let Some(y) = got {
-                        self.float_data[produced] = y;
-                        produced += 1;
-                    }
-                }
-            } else {
-                for b in (0..8).rev() {
-                    if produced >= buf_capacity {
-                        break;
-                    }
-                    let bit = (byte >> b) & 1;
-                    let got = rs.push_bit_lm(bit);
-                    if let Some(y) = got {
-                        self.float_data[produced] = y;
-                        produced += 1;
-                    }
-                }
-            }
+            rs.push_byte_lm(byte, lsb_first, |y| {
+                if produced < buf_capacity { self.float_data[produced] = y; produced += 1; }
+            });
         }
         if produced < buf_capacity {
             self.float_data[produced..buf_capacity].fill(0.0);
@@ -461,7 +430,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         produced
     }
 
-    // NEW: Produce one channel via Equiripple 32:1 integer path (BytePrecalcDecimator)
     fn process_precalc_channel(
         &mut self,
         chan: usize,

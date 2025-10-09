@@ -162,6 +162,25 @@ impl LMResampler {
         }
         final_out
     }
+
+    // Process 8 DSD bits packed in one byte; bit order controlled by lsb_first.
+    // Returns number of PCM outputs produced (0..=8, though typically << 8).
+    #[allow(dead_code)]
+    pub fn push_byte_lm<F: FnMut(f64)>(&mut self, byte: u8, lsb_first: bool, mut emit: F) -> usize {
+        let mut produced = 0usize;
+        if lsb_first {
+            for b in 0..8 { self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit); }
+        } else {
+            for b in (0..8).rev() { self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit); }
+        }
+        produced
+    }
+
+    #[inline]
+    #[allow(dead_code)]
+    fn maybe_emit<F: FnMut(f64)>(&mut self, bit: u8, produced: &mut usize, emit: &mut F) {
+        if let Some(y) = self.push_bit_lm(bit) { *produced += 1; emit(y); }
+    }
 }
 
 // Unified two‑phase L∈{10,20} / (21*7) path for DSD64 or DSD128 -> 384 kHz
