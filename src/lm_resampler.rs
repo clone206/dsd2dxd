@@ -24,10 +24,10 @@ use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 // Stage1 dump now supported for any M: output after first stage (×L -> /decim1).
 // ====================================================================================
 pub struct LMResampler {
-    // Stage 1 half taps (right half including center if odd)
-    _stage1_half: &'static [f64],
     up_factor: u32, // L
     decim1: u32,    // 14 (M=294) or 7 (M=147)
+    // Unified Stage1 polyphase (replaces former Slow + Generic variants)
+    stage1_poly: Option<Stage1Poly>,
     // Stage 2 (polyphase decimator by 7) optional (None for two-phase path)
     poly2: Option<DecimFIRSym>,
     // Stage 3 (polyphase decimator by 3) optional (None for two-phase path)
@@ -35,9 +35,6 @@ pub struct LMResampler {
     // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
     // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
     two_phase_lm147_384: Option<TwoPhaseLM147_384>,
-    // Unified Stage1 polyphase (replaces former Slow + Generic variants)
-    stage1_poly: Option<Stage1Poly>,
-    // Verbose flag retained for later diagnostics
 }
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
@@ -45,7 +42,6 @@ impl LMResampler {
             294 => {
                 // Original cascade Stage1 definitions
                 let s = Self {
-                    _stage1_half: &HTAPS_DDRX5_14TO1_EQ,
                     up_factor: l,
                     decim1: 14,
                     // Stage 2 (polyphase decimator by 7)
@@ -71,7 +67,6 @@ impl LMResampler {
                     }
                     // Minimal placeholders (not used directly)
                     return Self {
-                        _stage1_half: &HTAPS_DDRX10_21TO1_EQ,
                         up_factor: l,
                         decim1: 21,
                         poly2: None,
@@ -121,7 +116,6 @@ impl LMResampler {
                         );
                 }
                 return Self {
-                    _stage1_half: stage1_half,
                     up_factor: l,
                     decim1: 7,
                     // Stage 2 (polyphase decimator by 7)
@@ -372,12 +366,13 @@ impl Stage1Poly {
 // Lightweight integer polyphase decimator structure (D=7 or 3)
 #[derive(Debug)]
 struct DecimFIRSym {
-    full: Vec<f64>, // full symmetric taps
-    len: usize,
+    _full: Vec<f64>, // full symmetric taps
+    _len: usize,
     _half: usize,
     _has_center: bool,
-    center: usize, // (len-1)/2
-    decim: usize,  // decimation factor D
+    center: usize,         // (len-1)/2
+    decim: usize,          // decimation factor D
+    phases: Vec<Vec<f64>>, // polyphase components h[p + k*D]
     ring: Vec<f64>,
     mask: usize,
     w: usize,             // next write index
@@ -397,13 +392,19 @@ impl DecimFIRSym {
         // Ring capacity: next power of two >= len + decim (margin)
         let cap = (len + decim).next_power_of_two();
         let left_half = full[..half].to_vec();
+        // Build polyphase decomposition: phases[p][k] = h[p + k*D]
+        let mut phases: Vec<Vec<f64>> = vec![Vec::new(); decim];
+        for (i, &c) in full.iter().enumerate() {
+            phases[i % decim].push(c);
+        }
         Self {
-            full,
-            len,
+            _full: full,
+            _len: len,
             _half: half,
             _has_center: has_center,
             center,
             decim,
+            phases,
             ring: vec![0.0; cap],
             mask: cap - 1,
             w: 0,
@@ -429,20 +430,24 @@ impl DecimFIRSym {
             return None;
         }
 
-        let acc = unsafe { self.convolve_scalar() };
+        let acc = unsafe { self.convolve_polyphase() };
         Some(acc)
     }
 
     // ----- Convolution implementations -----
     #[inline(always)]
-    unsafe fn convolve_scalar(&self) -> f64 {
-        // Straight scalar convolution over full symmetric taps (already mirrored)
-        let mut acc = 0.0;
-        let mut idx = (self.w + self.ring.len() - 1) & self.mask; // newest sample
-        for k in 0..self.len {
-            acc += self.full[k] * self.ring[idx];
-            idx = (idx + self.ring.len() - 1) & self.mask; // move backwards
+    unsafe fn convolve_polyphase(&self) -> f64 {
+        // Polyphase evaluation: y = Σ_p Σ_k h[p + kD] * x[t - (p + kD)]
+        // We walk each phase p starting from newest - p and stride by D.
+        let newest = (self.w + self.ring.len() - 1) & self.mask; // index of x[t]
+        let mut total = 0.0;
+        for (p, phase_taps) in self.phases.iter().enumerate() {
+            let mut idx = (newest + self.ring.len() - p) & self.mask; // x[t - p]
+            for &c in phase_taps {
+                total += c * self.ring[idx];
+                idx = (idx + self.ring.len() - self.decim) & self.mask; // move back D samples
+            }
         }
-        acc
+        total
     }
 }
