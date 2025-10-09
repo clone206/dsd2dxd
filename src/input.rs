@@ -2,9 +2,6 @@ use crate::dsd::Dsd;
 use crate::dsdin_sys::{DSD_FORMAT_DSDIFF, DSD_FORMAT_DSF};
 use std::error::Error;
 use std::fs::File;
-use std::io; // add this
-use std::io::{Read, Seek, SeekFrom}; // existing
-use std::mem; // add
 use std::path::{Path, PathBuf};
 
 pub struct InputContext {
@@ -254,7 +251,5 @@ impl InputContext {
         }
     }
 
-    fn lower_cmp(a: char, b: char) -> bool {
-        a.to_ascii_lowercase() == b
-    }
+    // removed unused lower_cmp helper
 }

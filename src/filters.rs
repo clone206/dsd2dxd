@@ -1468,6 +1468,7 @@ pub const HTAPS_DDR_32TO1_CHEB: [f64; 300] = [
  * 2nd half of 1st of 2 phases targeting 192K from DSD64 (upsampled to 10xDSD first)
  * Lax Fstop, .01DB ripple to 21K, 160db stopband rejection from
  */
+#[allow(dead_code)]
 pub const HTAPS_DSDX10_21TO1_EQ: [f64; 103] = [
     0.02558676779467,
     0.02550546153414,
@@ -1579,6 +1580,7 @@ pub const HTAPS_DSDX10_21TO1_EQ: [f64; 103] = [
  * Fs: 1344000
  * .1db ripple to 21K, -144db stopband rejection from 96K
  */
+#[allow(dead_code)]
 pub const HTAPS_1_34MHZ_7TO1_EQ: [f64; 55] = [
     0.0674946955486,
     0.06628039596161,
@@ -1825,6 +1827,7 @@ pub const HTAPS_576K_3TO1_EQ: [f64; 22] = [
  * Equiripple.
  * 294:1 decimation.
  */
+#[allow(dead_code)]
 pub const HTAPS_DDRX5_294TO1_EQ: [f64; 3373] = [
     0.002086255528428,
     0.002086224181282,
@@ -7941,6 +7944,7 @@ pub const HTAPS_DSD256_64TO1_EQ: [f64; 435] = [
  * Fpass: 22000, .1db ripple
  * Fstop: 50000, 140db attenuation
  */
+#[allow(dead_code)]
 pub const HTAPS_2MHZ_21TO1_EQ: [f64; 200] = [
     0.03053153379421,
     0.03043200333966,

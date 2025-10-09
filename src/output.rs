@@ -1,7 +1,6 @@
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::fs::File;
-use std::io::Write;
 use std::path::Path;
 
 pub struct OutputContext {

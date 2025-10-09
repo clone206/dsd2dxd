@@ -24,8 +24,6 @@ use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 // Stage1 dump now supported for any M: output after first stage (×L -> /decim1).
 // ====================================================================================
 pub struct LMResampler {
-    up_factor: u32, // L
-    decim1: u32,    // 14 (M=294) or 7 (M=147)
     // Unified Stage1 polyphase (replaces former Slow + Generic variants)
     stage1_poly: Option<Stage1Poly>,
     // Stage 2 (polyphase decimator by 7) optional (None for two-phase path)
@@ -41,15 +39,14 @@ impl LMResampler {
         match m {
             294 => {
                 // Original cascade Stage1 definitions
+                let s1 = Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14);
                 let s = Self {
-                    up_factor: l,
-                    decim1: 14,
                     // Stage 2 (polyphase decimator by 7)
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
                     // Stage 3 (polyphase decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
                     two_phase_lm147_384: None,
-                    stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14)),
+                    stage1_poly: Some(s1),
                 };
                 if verbose {
                     eprintln!(
@@ -67,8 +64,6 @@ impl LMResampler {
                     }
                     // Minimal placeholders (not used directly)
                     return Self {
-                        up_factor: l,
-                        decim1: 21,
                         poly2: None,
                         poly3: None,
                         two_phase_lm147_384: Some(TwoPhaseLM147_384::new(l)),
@@ -100,13 +95,29 @@ impl LMResampler {
                         &HTAPS_288K_3TO1_EQ[..],
                         "96k (DSD×5, 2MHz, 288k)",
                     )
-                } else {
+                } else if l == 10 && out_rate == 192_000 {
                     (
-                        &HTAPS_DDRX5_7TO_1_EQ[..],
+                        &HTAPS_DDRX10_7TO1_EQ[..],
                         &HTAPS_4MHZ_7TO1_EQ[..],
                         &HTAPS_576K_3TO1_EQ[..],
-                        "192k (DDR×5, 4MHz, 576k)",
+                        "192k (DDRx10, 4MHz, 576k)",
                     )
+                } else {
+                    if l == 10 {
+                        (
+                            &HTAPS_DDRX10_7TO1_EQ[..],
+                            &HTAPS_4MHZ_7TO1_EQ[..],
+                            &HTAPS_576K_3TO1_EQ[..],
+                            "192k (DDRx10, 4MHz, 576k)",
+                        )
+                    } else {
+                        (
+                            &HTAPS_DDRX5_7TO_1_EQ[..],
+                            &HTAPS_4MHZ_7TO1_EQ[..],
+                            &HTAPS_576K_3TO1_EQ[..],
+                            "192k (DDR×5, 4MHz, 576k)",
+                        )
+                    }
                 };
 
                 if verbose {
@@ -115,77 +126,62 @@ impl LMResampler {
                             l, label
                         );
                 }
+                let s1 = Stage1Poly::new(stage1_half, l, 7);
                 return Self {
-                    up_factor: l,
-                    decim1: 7,
                     // Stage 2 (polyphase decimator by 7)
                     poly2: Some(DecimFIRSym::new_from_half(right2, 7)),
                     // Stage 3 (polyphase decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(right3, 3)),
                     two_phase_lm147_384: None,
-                    stage1_poly: Some(Stage1Poly::new(stage1_half, l, 7)),
+                    stage1_poly: Some(s1),
                 };
             }
             _ => panic!("Unsupported L/M combination: L={} M={}", l, m),
         }
     }
 
-    // Unified push. Breaks early once an output is produced.
-    #[inline]
-    pub fn push_bit_lm(&mut self, bit: u8) -> Option<f64> {
-        if let Some(tp) = self.two_phase_lm147_384.as_mut() {
-            return tp.push_bit(bit);
-        }
-        // Stage1Poly now always eagerly constructed in constructor for non two-phase paths.
-        let poly = self.stage1_poly.as_mut().unwrap();
-        let mut final_out: Option<f64> = None;
-        // If L >= decim1 we may produce multiple Stage1 outputs per input sample.
-        if let (Some(ref mut p2), Some(ref mut p3)) = (self.poly2.as_mut(), self.poly3.as_mut()) {
-            if self.up_factor as u32 >= self.decim1 {
-                poly.push_all(bit, |y1| {
-                    if let Some(y2) = p2.push(y1) {
-                        if let Some(y3) = p3.push(y2) {
-                            final_out = Some(y3); // keep last output
-                        }
-                    }
-                });
-            } else if let Some(y1) = poly.push(bit) {
-                if let Some(y2) = p2.push(y1) {
-                    if let Some(y3) = p3.push(y2) {
-                        final_out = Some(y3);
-                    }
-                }
-            }
-        } else {
-            // Two-phase path uses separate structure; should not reach here with stage1_poly set
-            return None;
-        }
-        final_out
-    }
-
     // Process 8 DSD bits packed in one byte; bit order controlled by lsb_first.
     // Returns number of PCM outputs produced (0..=8, though typically << 8).
-    #[allow(dead_code)]
     pub fn push_byte_lm<F: FnMut(f64)>(&mut self, byte: u8, lsb_first: bool, mut emit: F) -> usize {
+        // Two-phase path: delegate to specialized struct
+        if let Some(tp) = self.two_phase_lm147_384.as_mut() {
+            return tp.push_byte(byte, lsb_first, emit);
+        }
+        // Single-phase cascade: Stage1 -> /7 -> /3
+        let (Some(ref mut s1), Some(ref mut p2), Some(ref mut p3)) = (
+            self.stage1_poly.as_mut(),
+            self.poly2.as_mut(),
+            self.poly3.as_mut(),
+        ) else {
+            return 0;
+        };
         let mut produced = 0usize;
         if lsb_first {
             for b in 0..8 {
-                self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit);
+                let bit = (byte >> b) & 1;
+                s1.push_all(bit, |y1| {
+                    if let Some(y2) = p2.push(y1) {
+                        if let Some(y3) = p3.push(y2) {
+                            emit(y3);
+                            produced += 1;
+                        }
+                    }
+                });
             }
         } else {
             for b in (0..8).rev() {
-                self.maybe_emit((byte >> b) & 1, &mut produced, &mut emit);
+                let bit = (byte >> b) & 1;
+                s1.push_all(bit, |y1| {
+                    if let Some(y2) = p2.push(y1) {
+                        if let Some(y3) = p3.push(y2) {
+                            emit(y3);
+                            produced += 1;
+                        }
+                    }
+                });
             }
         }
         produced
-    }
-
-    #[inline]
-    fn maybe_emit<F: FnMut(f64)>(&mut self, bit: u8, produced: &mut usize, emit: &mut F) {
-        if let Some(y) = self.push_bit_lm(bit) {
-            *produced += 1;
-            emit(y);
-        }
     }
 }
 
@@ -203,14 +199,32 @@ impl TwoPhaseLM147_384 {
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
         }
     }
+
     #[inline]
-    fn push_bit(&mut self, bit: u8) -> Option<f64> {
-        if let Some(y1) = self.stage1.push_bit(bit) {
-            if let Some(y2) = self.stage2.push(y1) {
-                return Some(y2);
+    fn push_byte<F: FnMut(f64)>(&mut self, byte: u8, lsb_first: bool, mut emit: F) -> usize {
+        let mut produced = 0usize;
+        if lsb_first {
+            for b in 0..8 {
+                let bit = (byte >> b) & 1;
+                self.stage1.push_all(bit, |y1| {
+                    if let Some(y2) = self.stage2.push(y1) {
+                        emit(y2);
+                        produced += 1;
+                    }
+                });
+            }
+        } else {
+            for b in (0..8).rev() {
+                let bit = (byte >> b) & 1;
+                self.stage1.push_all(bit, |y1| {
+                    if let Some(y2) = self.stage2.push(y1) {
+                        emit(y2);
+                        produced += 1;
+                    }
+                });
             }
         }
-        None
+        produced
     }
 }
 
@@ -283,17 +297,10 @@ impl Stage1Poly {
     }
 
     #[inline]
-    fn push_bit(&mut self, bit: u8) -> Option<f64> {
-        self.push(bit)
-    }
-
-    #[inline]
     fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
         match self.mode {
             Stage1Mode::Accum => {
-                if let Some(y) = self.push(bit) {
-                    emit(y);
-                }
+                self.push_accum_all(bit, emit);
             }
             Stage1Mode::SlotSim => {
                 // Original slot simulation: write input once, simulate L high-rate slots
@@ -303,22 +310,6 @@ impl Stage1Poly {
                 for _ in 0..self.l {
                     self.sim_high_slot(&mut emit);
                 }
-            }
-        }
-    }
-
-    #[inline]
-    fn push(&mut self, bit: u8) -> Option<f64> {
-        match self.mode {
-            Stage1Mode::Accum => self.push_accum(bit),
-            Stage1Mode::SlotSim => {
-                let mut first = None;
-                self.push_all(bit, |y| {
-                    if first.is_none() {
-                        first = Some(y);
-                    }
-                });
-                first
             }
         }
     }
@@ -350,35 +341,37 @@ impl Stage1Poly {
         emit(sum);
     }
 
-    #[inline]
-    fn push_accum(&mut self, bit: u8) -> Option<f64> {
+    // Accumulator mode: emit all outputs scheduled for this input bit
+    fn push_accum_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
         let s = if bit != 0 { 1.0 } else { -1.0 };
         self.ring[self.w] = s;
         self.w = (self.w + 1) & self.mask;
         self.input_count += 1;
         self.acc += self.l;
-        if self.acc < self.m {
-            return None;
-        }
-        self.acc -= self.m;
-        if !self.primed {
-            if self.input_count >= self.input_delay {
-                self.primed = true;
-            } else {
-                self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
-                return None;
+        // Possibly produce multiple outputs if acc exceeds m multiple times
+        while self.acc >= self.m {
+            self.acc -= self.m;
+            if !self.primed {
+                if self.input_count >= self.input_delay {
+                    self.primed = true;
+                } else {
+                    // Advance phase even when not emitting to keep alignment
+                    self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+                    continue;
+                }
             }
+            let phase = self.phase_mod as usize;
+            let taps = &self.phases[phase];
+            let mut sum = 0.0;
+            // Use newest index; phase selects which subfilter (tap subset) to apply
+            let mut idx = (self.w + self.ring.len() - 1) & self.mask;
+            for &c in taps {
+                sum += c * self.ring[idx];
+                idx = (idx + self.ring.len() - 1) & self.mask;
+            }
+            emit(sum);
+            self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
-        let phase = self.phase_mod as usize;
-        let taps = &self.phases[phase];
-        let mut acc_sum = 0.0;
-        let mut idx = (self.w + self.ring.len() - 1) & self.mask;
-        for &c in taps {
-            acc_sum += c * self.ring[idx];
-            idx = (idx + self.ring.len() - 1) & self.mask;
-        }
-        self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
-        Some(acc_sum)
     }
 }
 
