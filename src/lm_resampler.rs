@@ -80,6 +80,11 @@ static ST1_USE_LUT: OnceLock<Option<bool>> = OnceLock::new();
 static DEC_USE_POLY_GLOBAL: OnceLock<Option<bool>> = OnceLock::new();
 static DEC_USE_POLY_7: OnceLock<Option<bool>> = OnceLock::new();
 static DEC_USE_POLY_3: OnceLock<Option<bool>> = OnceLock::new();
+// Fixed-capacity LM staging buffers (overridable via env)
+// DSD2DXD_S1TMP_CAP: capacity for Stage1->Stage2 buffer (default 131072 samples)
+// DSD2DXD_S2TMP_CAP: capacity for Stage2->Stage3 buffer (default 32768 samples)
+static S1TMP_CAP: OnceLock<usize> = OnceLock::new();
+static S2TMP_CAP: OnceLock<usize> = OnceLock::new();
 
 #[inline]
 fn env_usize(name: &str, default: usize) -> usize {
@@ -364,6 +369,8 @@ pub struct LMResampler {
 }
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
+        let s1_cap = *S1TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S1TMP_CAP", 131_072));
+        let s2_cap = *S2TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S2TMP_CAP", 32_768));
         match m {
             294 => {
                 // Original cascade Stage1 definitions
@@ -375,14 +382,19 @@ impl LMResampler {
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
                     two_phase_lm147_384: None,
                     stage1_poly: Some(s1),
-                    s1_tmp: Vec::new(),
-                    s2_tmp: Vec::new(),
+                    s1_tmp: Vec::with_capacity(s1_cap),
+                    s2_tmp: Vec::with_capacity(s2_cap),
                 };
                 if verbose {
                     eprintln!(
                             "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 polyphase].",
                             l
                         );
+                    eprintln!(
+                        "[DBG] LM buffers: s1_tmp_cap={} s2_tmp_cap={}",
+                        s.s1_tmp.capacity(),
+                        s.s2_tmp.capacity()
+                    );
                 }
                 s
             }
@@ -398,8 +410,8 @@ impl LMResampler {
                         poly3: None,
                         two_phase_lm147_384: Some(TwoPhaseLM147_384::new(l)),
                         stage1_poly: None,
-                        s1_tmp: Vec::new(),
-                        s2_tmp: Vec::new(),
+                        s1_tmp: Vec::with_capacity(s1_cap),
+                        s2_tmp: Vec::with_capacity(s2_cap),
                     };
                 }
 
@@ -459,16 +471,24 @@ impl LMResampler {
                         );
                 }
                 let s1 = Stage1Poly::new(stage1_half, l, 7);
-                return Self {
+                let me = Self {
                     // Stage 2 (polyphase decimator by 7)
                     poly2: Some(DecimFIRSym::new_from_half(right2, 7)),
                     // Stage 3 (polyphase decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(right3, 3)),
                     two_phase_lm147_384: None,
                     stage1_poly: Some(s1),
-                    s1_tmp: Vec::new(),
-                    s2_tmp: Vec::new(),
+                    s1_tmp: Vec::with_capacity(s1_cap),
+                    s2_tmp: Vec::with_capacity(s2_cap),
                 };
+                if verbose {
+                    eprintln!(
+                        "[DBG] LM buffers: s1_tmp_cap={} s2_tmp_cap={}",
+                        me.s1_tmp.capacity(),
+                        me.s2_tmp.capacity()
+                    );
+                }
+                return me;
             }
             _ => panic!("Unsupported L/M combination: L={} M={}", l, m),
         }
@@ -491,33 +511,45 @@ impl LMResampler {
             return 0;
         };
 
-        // Stage 1: accumulate all y1 into reusable temporary buffer
-        self.s1_tmp.clear();
-        self.s1_tmp.reserve(bytes.len());
-        for &byte in bytes {
-            if lsb_first {
-                for b in 0..8 {
-                    let bit = (byte >> b) & 1;
-                    s1.push_all(bit, |y1| self.s1_tmp.push(y1));
-                }
-            } else {
-                for b in (0..8).rev() {
-                    let bit = (byte >> b) & 1;
-                    s1.push_all(bit, |y1| self.s1_tmp.push(y1));
+        // Process in chunks so s1_tmp never grows beyond its fixed capacity
+        let y1_per_byte_ub = ((8 * s1.l as usize) + (s1.m as usize) - 1) / (s1.m as usize);
+        let y1_per_byte_ub = y1_per_byte_ub.max(1);
+        let max_bytes_chunk = (self.s1_tmp.capacity() / y1_per_byte_ub).max(1);
+        let mut produced_total = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() && produced_total < out.len() {
+            let take = core::cmp::min(max_bytes_chunk, bytes.len() - i);
+            self.s1_tmp.clear();
+            // Stage 1: accumulate y1 into s1_tmp (bounded by chunk sizing)
+            for &byte in &bytes[i..i + take] {
+                if lsb_first {
+                    for b in 0..8 {
+                        let bit = (byte >> b) & 1;
+                        s1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                    }
+                } else {
+                    for b in (0..8).rev() {
+                        let bit = (byte >> b) & 1;
+                        s1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                    }
                 }
             }
+            // Stage 2: ensure s2_tmp length <= capacity and process
+            let stage2_cap = self
+                .s1_tmp
+                .len()
+                .saturating_add(8)
+                .min(self.s2_tmp.capacity().max(8));
+            if self.s2_tmp.len() < stage2_cap {
+                self.s2_tmp.resize(stage2_cap, 0.0);
+            }
+            let n2 = p2.process_block(&self.s1_tmp, &mut self.s2_tmp);
+            // Stage 3: into out slice at current offset
+            let n3 = p3.process_block(&self.s2_tmp[..n2], &mut out[produced_total..]);
+            produced_total += n3;
+            i += take;
         }
-
-        // Stage 2: process block into reusable temporary buffer
-        let stage2_cap = self.s1_tmp.len().saturating_add(8);
-        if self.s2_tmp.len() < stage2_cap {
-            self.s2_tmp.resize(stage2_cap, 0.0);
-        }
-        let n2 = p2.process_block(&self.s1_tmp, &mut self.s2_tmp);
-
-        // Stage 3: process block into output slice
-        let n3 = p3.process_block(&self.s2_tmp[..n2], out);
-        n3
+        produced_total
     }
 }
 
@@ -528,14 +560,17 @@ struct TwoPhaseLM147_384 {
     stage2: DecimFIRSym, // /7 (2.688 MHz -> 384 kHz)
     // Reusable buffer for stage1 outputs in block processing
     s1_tmp: Vec<f64>,
+    l: u32,
 }
 
 impl TwoPhaseLM147_384 {
     fn new(l: u32) -> Self {
+        let s1_cap = *S1TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S1TMP_CAP", 131_072));
         Self {
             stage1: Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ, l, 21),
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
-            s1_tmp: Vec::new(),
+            s1_tmp: Vec::with_capacity(s1_cap),
+            l,
         }
     }
 
@@ -544,24 +579,35 @@ impl TwoPhaseLM147_384 {
     // Block-style processing for two-phase (Stage1 /21 -> /7) path.
     #[inline]
     fn process_bytes(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
-        // Stage 1: collect all stage1 outputs into reusable buffer
-        self.s1_tmp.clear();
-        self.s1_tmp.reserve(bytes.len());
-        for &byte in bytes {
-            if lsb_first {
-                for b in 0..8 {
-                    let bit = (byte >> b) & 1;
-                    self.stage1.push_all(bit, |y1| self.s1_tmp.push(y1));
-                }
-            } else {
-                for b in (0..8).rev() {
-                    let bit = (byte >> b) & 1;
-                    self.stage1.push_all(bit, |y1| self.s1_tmp.push(y1));
+        // Process in chunks to respect fixed s1_tmp capacity
+        let y1_per_byte_ub = ((8 * self.l as usize) + 21 - 1) / 21; // ceil(8*L/21)
+        let y1_per_byte_ub = y1_per_byte_ub.max(1);
+        let max_bytes_chunk = (self.s1_tmp.capacity() / y1_per_byte_ub).max(1);
+        let mut produced_total = 0usize;
+        let mut i = 0usize;
+        while i < bytes.len() && produced_total < out.len() {
+            let take = core::cmp::min(max_bytes_chunk, bytes.len() - i);
+            self.s1_tmp.clear();
+            for &byte in &bytes[i..i + take] {
+                if lsb_first {
+                    for b in 0..8 {
+                        let bit = (byte >> b) & 1;
+                        self.stage1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                    }
+                } else {
+                    for b in (0..8).rev() {
+                        let bit = (byte >> b) & 1;
+                        self.stage1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                    }
                 }
             }
+            let n = self
+                .stage2
+                .process_block(&self.s1_tmp, &mut out[produced_total..]);
+            produced_total += n;
+            i += take;
         }
-        // Stage 2: block process to output
-        self.stage2.process_block(&self.s1_tmp, out)
+        produced_total
     }
 }
 
