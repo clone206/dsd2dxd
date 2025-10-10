@@ -400,28 +400,21 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     }
 
     // Unified L/M rational path channel processor
-    fn process_eq_lm_channel(
+    // Unified per-channel processing: handles both LM (rational) and integer paths.
+    // Returns the number of frames produced into self.float_data for this channel.
+    fn process_channel(
         &mut self,
         chan: usize,
         block_remaining: usize,
         dsd_chan_offset: usize,
         dsd_stride: isize,
+        estimate_frames: usize,
         buf_capacity: usize,
+        lm_mode: bool,
     ) -> usize {
-        if self.float_data.len() < buf_capacity {
-            return 0;
-        }
-        let Some(resamps) = self.eq_lm_resamplers.as_mut() else {
-            return 0;
-        };
-        let rs = &mut resamps[chan];
+        // Build contiguous per-channel byte buffer with proper bit endianness.
         let lsb_first = self.in_ctx.lsbit_first != 0;
-        let stride = if dsd_stride >= 0 {
-            dsd_stride as usize
-        } else {
-            0
-        };
-        // Gather this channel's bytes into a contiguous slice like process_precalc_channel
+        let stride = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
         let mut chan_bytes = Vec::with_capacity(block_remaining);
         for i in 0..block_remaining {
             let byte_index = if stride == 0 {
@@ -429,53 +422,33 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             } else {
                 dsd_chan_offset + i * stride
             };
-            if byte_index >= self.dsd_data.len() {
-                break;
-            }
+            if byte_index >= self.dsd_data.len() { break; }
             let b = self.dsd_data[byte_index];
             chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
         }
-        let produced = rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data[..buf_capacity]);
-        if produced < buf_capacity {
-            self.float_data[produced..buf_capacity].fill(0.0);
-        }
-        produced
-    }
 
-    fn process_precalc_channel(
-        &mut self,
-        chan: usize,
-        block_remaining: usize,
-        dsd_chan_offset: usize,
-        dsd_stride: isize,
-        out_frames: usize,
-    ) {
-        let Some(ref mut v) = self.precalc_decims else {
-            return;
-        };
-        let dec = &mut v[chan];
-        let lsb_first = self.in_ctx.lsbit_first != 0;
-        let stride = if dsd_stride >= 0 {
-            dsd_stride as usize
-        } else {
-            0
-        };
-        let mut chan_bytes = Vec::with_capacity(block_remaining);
-        for i in 0..block_remaining {
-            let byte_index = if stride == 0 {
-                dsd_chan_offset + i
-            } else {
-                dsd_chan_offset + i * stride
-            };
-            if byte_index >= self.dsd_data.len() {
-                break;
+        if lm_mode {
+            // LM path: use rational resampler, honor actual produced count
+            let Some(resamps) = self.eq_lm_resamplers.as_mut() else { return 0; };
+            let rs = &mut resamps[chan];
+            let produced = rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data[..buf_capacity]);
+            if produced < buf_capacity {
+                self.float_data[produced..buf_capacity].fill(0.0);
             }
-            let b = self.dsd_data[byte_index];
-            chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
-        }
-        let produced = dec.process_bytes(&chan_bytes, &mut self.float_data[..out_frames]);
-        if produced < out_frames {
-            self.float_data[produced..out_frames].fill(0.0);
+            produced
+        } else {
+            // Integer path: use precalc decimator; conventionally return the estimate
+            let Some(ref mut v) = self.precalc_decims else { return 0; };
+            let dec = &mut v[chan];
+            // Clear just in case and process into the first estimate_frames slots
+            if estimate_frames > 0 {
+                self.float_data[..estimate_frames].fill(0.0);
+                let produced = dec.process_bytes(&chan_bytes, &mut self.float_data[..estimate_frames]);
+                if produced < estimate_frames {
+                    self.float_data[produced..estimate_frames].fill(0.0);
+                }
+            }
+            estimate_frames
         }
     }
 
@@ -603,27 +576,16 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             for chan in 0..channels {
                 let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
 
-                if lm_mode {
-                    let produced = self.process_eq_lm_channel(
-                        chan,
-                        block_remaining,
-                        dsd_chan_offset,
-                        self.in_ctx.dsd_stride as isize,
-                        buf_needed,
-                    );
-                    if chan == 0 { frames_used_per_chan = produced; } else { debug_assert_eq!(frames_used_per_chan, produced); }
-                } else {
-                    // Integer path
-                    self.float_data[..estimate_frames].fill(0.0);
-                    self.process_precalc_channel(
-                        chan,
-                        block_remaining,
-                        dsd_chan_offset,
-                        self.in_ctx.dsd_stride as isize,
-                        estimate_frames,
-                    );
-                    frames_used_per_chan = estimate_frames;
-                }
+                let produced = self.process_channel(
+                    chan,
+                    block_remaining,
+                    dsd_chan_offset,
+                    self.in_ctx.dsd_stride as isize,
+                    estimate_frames,
+                    buf_needed,
+                    lm_mode,
+                );
+                if chan == 0 { frames_used_per_chan = produced; } else { debug_assert_eq!(frames_used_per_chan, produced); }
 
                 // Output / packing per channel
                 if self.out_ctx.output == 's' {
