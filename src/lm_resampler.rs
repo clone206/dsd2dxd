@@ -39,7 +39,7 @@ static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
 // ------------------------------------------------------------------------------------
 // Tuning knobs (via env) for chunk sizing in Stage1 and DecimFIRSym
 // Sensible baked-in defaults (used when env vars are unset):
-//   Stage1: TARGET≈128 groups, aligned to M (ALIGN=M)
+//   Stage1: TARGET≈96 groups, aligned to M (ALIGN=M)
 //   Decimator: TARGET≈64 taps, aligned to D (ALIGN=decim)
 // Stage1 env vars (override defaults):
 //   DSD2DXD_STAGE1_CHUNK_MULT   (usize, default 0)   -> if >0, chunk = M * MULT
@@ -68,12 +68,12 @@ static ST1_PAR_AUTO: OnceLock<bool> = OnceLock::new();
 static ST1_PAR_MAX: OnceLock<usize> = OnceLock::new();
 
 // Stage1 LUT usage toggle: allow disabling LUTs and using direct tap-by-tap evaluation.
-// Env var: DSD2DXD_STAGE1_USE_LUT (true if unset)
+// Env var: DSD2DXD_STAGE1_USE_LUT (default: off when unset => use direct taps)
 static ST1_USE_LUT: OnceLock<Option<bool>> = OnceLock::new();
 
 // Decimator polyphase toggle: allow disabling polyphase and using direct convolution.
 // Env vars:
-//   DSD2DXD_DECIM_USE_POLY   => global default (true if unset)
+//   DSD2DXD_DECIM_USE_POLY   => global default (false if unset; direct conv is default)
 //   DSD2DXD_DECIM7_USE_POLY  => override for decim=7
 //   DSD2DXD_DECIM3_USE_POLY  => override for decim=3
 static DEC_USE_POLY_GLOBAL: OnceLock<Option<bool>> = OnceLock::new();
@@ -124,7 +124,7 @@ fn get_stage1_chunk_params() -> (usize, usize, usize) {
     // Allow zeros as sentinels to enable baked defaults downstream (ALIGN=M, TARGET=128)
     let mult = *ST1_MULT.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_MULT", 0));
     let align = *ST1_ALIGN.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_ALIGN", 0));
-    let target = *ST1_TARGET.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_TARGET", 128));
+    let target = *ST1_TARGET.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_TARGET", 96));
     (mult, align, target)
 }
 
@@ -204,7 +204,8 @@ fn decim_use_poly(decim: usize) -> bool {
     let global = DEC_USE_POLY_GLOBAL.get_or_init(|| {
         if env_present("DSD2DXD_DECIM_USE_POLY") { Some(env_bool("DSD2DXD_DECIM_USE_POLY", true)) } else { None }
     });
-    global.unwrap_or(true)
+    // Default to direct (polyphase disabled) when unset
+    global.unwrap_or(false)
 }
 
 #[inline]
@@ -309,6 +310,9 @@ pub struct LMResampler {
     // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
     // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
     two_phase_lm147_384: Option<TwoPhaseLM147_384>,
+    // Reusable internal buffers for block processing to avoid per-call allocations
+    s1_tmp: Vec<f64>,
+    s2_tmp: Vec<f64>,
 }
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
@@ -323,6 +327,8 @@ impl LMResampler {
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
                     two_phase_lm147_384: None,
                     stage1_poly: Some(s1),
+                    s1_tmp: Vec::new(),
+                    s2_tmp: Vec::new(),
                 };
                 if verbose {
                     eprintln!(
@@ -344,6 +350,8 @@ impl LMResampler {
                         poly3: None,
                         two_phase_lm147_384: Some(TwoPhaseLM147_384::new(l)),
                         stage1_poly: None,
+                        s1_tmp: Vec::new(),
+                        s2_tmp: Vec::new(),
                     };
                 }
 
@@ -410,6 +418,8 @@ impl LMResampler {
                     poly3: Some(DecimFIRSym::new_from_half(right3, 3)),
                     two_phase_lm147_384: None,
                     stage1_poly: Some(s1),
+                    s1_tmp: Vec::new(),
+                    s2_tmp: Vec::new(),
                 };
             }
             _ => panic!("Unsupported L/M combination: L={} M={}", l, m),
@@ -459,6 +469,48 @@ impl LMResampler {
         }
         produced
     }
+
+    // Block-style processing to reduce per-byte call overhead.
+    // Returns number of PCM frames produced into `out`.
+    pub fn process_bytes_lm(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
+        // Two-phase path delegates to specialized helper
+        if let Some(tp) = self.two_phase_lm147_384.as_mut() {
+            return tp.process_bytes(bytes, lsb_first, out);
+        }
+        let (Some(ref mut s1), Some(ref mut p2), Some(ref mut p3)) = (
+            self.stage1_poly.as_mut(),
+            self.poly2.as_mut(),
+            self.poly3.as_mut(),
+        ) else {
+            return 0;
+        };
+
+        // Stage 1: accumulate all y1 into reusable temporary buffer
+        self.s1_tmp.clear();
+        self.s1_tmp.reserve(bytes.len());
+        for &byte in bytes {
+            if lsb_first {
+                for b in 0..8 {
+                    let bit = (byte >> b) & 1;
+                    s1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                }
+            } else {
+                for b in (0..8).rev() {
+                    let bit = (byte >> b) & 1;
+                    s1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                }
+            }
+        }
+
+        // Stage 2: process block into reusable temporary buffer
+        let stage2_cap = self.s1_tmp.len().saturating_add(8);
+        if self.s2_tmp.len() < stage2_cap { self.s2_tmp.resize(stage2_cap, 0.0); }
+        let n2 = p2.process_block(&self.s1_tmp, &mut self.s2_tmp);
+
+        // Stage 3: process block into output slice
+        let n3 = p3.process_block(&self.s2_tmp[..n2], out);
+        n3
+    }
 }
 
 // Unified two‑phase L∈{10,20} / (21*7) path for DSD64 or DSD128 -> 384 kHz
@@ -466,6 +518,8 @@ impl LMResampler {
 struct TwoPhaseLM147_384 {
     stage1: Stage1Poly,  // ×L /21 polyphase (L=10 or 20)
     stage2: DecimFIRSym, // /7 (2.688 MHz -> 384 kHz)
+    // Reusable buffer for stage1 outputs in block processing
+    s1_tmp: Vec<f64>,
 }
 
 impl TwoPhaseLM147_384 {
@@ -473,6 +527,7 @@ impl TwoPhaseLM147_384 {
         Self {
             stage1: Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ, l, 21),
             stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
+            s1_tmp: Vec::new(),
         }
     }
 
@@ -501,6 +556,29 @@ impl TwoPhaseLM147_384 {
             }
         }
         produced
+    }
+
+    // Block-style processing for two-phase (Stage1 /21 -> /7) path.
+    #[inline]
+    fn process_bytes(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
+        // Stage 1: collect all stage1 outputs into reusable buffer
+        self.s1_tmp.clear();
+        self.s1_tmp.reserve(bytes.len());
+        for &byte in bytes {
+            if lsb_first {
+                for b in 0..8 {
+                    let bit = (byte >> b) & 1;
+                    self.stage1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                }
+            } else {
+                for b in (0..8).rev() {
+                    let bit = (byte >> b) & 1;
+                    self.stage1.push_all(bit, |y1| self.s1_tmp.push(y1));
+                }
+            }
+        }
+        // Stage 2: block process to output
+        self.stage2.process_block(&self.s1_tmp, out)
     }
 }
 
@@ -957,6 +1035,37 @@ impl DecimFIRSym {
             unsafe { self.convolve_direct() }
         };
         Some(acc)
+    }
+
+    // Block processing: feed a slice of inputs and write produced outputs into `out`.
+    // Returns number of output samples written.
+    #[inline]
+    fn process_block(&mut self, input: &[f64], out: &mut [f64]) -> usize {
+        let mut produced = 0usize;
+        for &x in input {
+            // Write newest sample
+            self.ring[self.w] = x;
+            self.w = (self.w + 1) & self.mask;
+            let t = self.count;
+            self.count += 1;
+
+            // Need at least center samples of history
+            if t < self.center { continue; }
+            // Output only when (t - center) aligned to decimation grid
+            if (t - self.center) % self.decim != 0 { continue; }
+
+            let acc = if decim_use_poly(self.decim) {
+                let chunk_len = compute_decim_chunk_len(self.decim);
+                unsafe { self.convolve_polyphase_chunked(chunk_len) }
+            } else {
+                unsafe { self.convolve_direct() }
+            };
+            if produced < out.len() {
+                out[produced] = acc;
+                produced += 1;
+            }
+        }
+        produced
     }
 
     // ----- Convolution implementations -----
