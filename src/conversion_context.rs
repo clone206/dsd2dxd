@@ -412,21 +412,37 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         dsd_stride: isize,
         buf_capacity: usize,
     ) -> usize {
-        if self.float_data.len() < buf_capacity { return 0; }
-        let Some(resamps) = self.eq_lm_resamplers.as_mut() else { return 0; };
+        if self.float_data.len() < buf_capacity {
+            return 0;
+        }
+        let Some(resamps) = self.eq_lm_resamplers.as_mut() else {
+            return 0;
+        };
         let rs = &mut resamps[chan];
         let lsb_first = self.in_ctx.lsbit_first != 0;
-        let stride = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
+        let stride = if dsd_stride >= 0 {
+            dsd_stride as usize
+        } else {
+            0
+        };
         // Gather this channel's bytes into a contiguous slice like process_precalc_channel
         let mut chan_bytes = Vec::with_capacity(block_remaining);
         for i in 0..block_remaining {
-            let byte_index = if stride == 0 { dsd_chan_offset + i } else { dsd_chan_offset + i * stride };
-            if byte_index >= self.dsd_data.len() { break; }
+            let byte_index = if stride == 0 {
+                dsd_chan_offset + i
+            } else {
+                dsd_chan_offset + i * stride
+            };
+            if byte_index >= self.dsd_data.len() {
+                break;
+            }
             let b = self.dsd_data[byte_index];
             chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
         }
         let produced = rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data[..buf_capacity]);
-        if produced < buf_capacity { self.float_data[produced..buf_capacity].fill(0.0); }
+        if produced < buf_capacity {
+            self.float_data[produced..buf_capacity].fill(0.0);
+        }
         produced
     }
 

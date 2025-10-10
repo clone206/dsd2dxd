@@ -17,8 +17,8 @@ use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
 use std::env;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 // no extra traits needed
 
@@ -31,7 +31,8 @@ struct Stage1LutKey {
     hash: u64,
 }
 
-static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Vec<Vec<Vec<f64>>>>>>> = OnceLock::new();
+static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Vec<Vec<Vec<f64>>>>>>> =
+    OnceLock::new();
 
 // One-time config diagnostics guards
 static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
@@ -82,7 +83,10 @@ static DEC_USE_POLY_3: OnceLock<Option<bool>> = OnceLock::new();
 
 #[inline]
 fn env_usize(name: &str, default: usize) -> usize {
-    env::var(name).ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(default)
+    env::var(name)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 #[inline]
@@ -91,7 +95,10 @@ fn env_bool(name: &str, default: bool) -> bool {
         .ok()
         .map(|v| {
             let v = v.trim();
-            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on") || v.eq_ignore_ascii_case("yes")
+            v == "1"
+                || v.eq_ignore_ascii_case("true")
+                || v.eq_ignore_ascii_case("on")
+                || v.eq_ignore_ascii_case("yes")
         })
         .unwrap_or(default)
 }
@@ -108,14 +115,20 @@ fn any_env_present(names: &[&str]) -> bool {
 
 #[inline]
 fn round_up_to_multiple(x: usize, a: usize) -> usize {
-    if a == 0 { return x; }
-    if x == 0 { return 0; }
+    if a == 0 {
+        return x;
+    }
+    if x == 0 {
+        return 0;
+    }
     ((x + a - 1) / a) * a
 }
 
 #[inline]
 fn round_down_to_multiple(x: usize, a: usize) -> usize {
-    if a == 0 { return x; }
+    if a == 0 {
+        return x;
+    }
     (x / a) * a
 }
 
@@ -139,20 +152,32 @@ fn compute_stage1_chunk(total_groups: usize, m: usize, _l: u32) -> usize {
     } else {
         round_up_to_multiple(128, m)
     };
-    if chunk == 0 { chunk = m.max(1); }
+    if chunk == 0 {
+        chunk = m.max(1);
+    }
     // Default ALIGN=M if unset
-    if align == 0 { align = m.max(1); }
-    if chunk > total_groups { chunk = total_groups; }
+    if align == 0 {
+        align = m.max(1);
+    }
+    if chunk > total_groups {
+        chunk = total_groups;
+    }
     // apply alignment by rounding down; keep within [min, total_groups]
     let min_allowed = align.min(total_groups).max(1);
-    chunk = round_down_to_multiple(chunk, align).max(min_allowed).min(total_groups);
+    chunk = round_down_to_multiple(chunk, align)
+        .max(min_allowed)
+        .min(total_groups);
     chunk
 }
 
 #[inline]
 fn stage1_use_lut() -> bool {
     let opt = ST1_USE_LUT.get_or_init(|| {
-        if env_present("DSD2DXD_STAGE1_USE_LUT") { Some(env_bool("DSD2DXD_STAGE1_USE_LUT", false)) } else { None }
+        if env_present("DSD2DXD_STAGE1_USE_LUT") {
+            Some(env_bool("DSD2DXD_STAGE1_USE_LUT", false))
+        } else {
+            None
+        }
     });
     opt.unwrap_or(false)
 }
@@ -176,10 +201,17 @@ fn compute_decim_chunk_len(decim: usize) -> usize {
     } else {
         round_up_to_multiple(64, decim)
     };
-    if chunk == 0 { chunk = decim.max(1); }
-    if align == 0 { align = decim.max(1); }
+    if chunk == 0 {
+        chunk = decim.max(1);
+    }
+    if align == 0 {
+        align = decim.max(1);
+    }
     // ensure reasonable minimum and apply alignment (round down)
-    chunk = round_down_to_multiple(chunk, align).max(align).max(decim).min(usize::MAX / 2);
+    chunk = round_down_to_multiple(chunk, align)
+        .max(align)
+        .max(decim)
+        .min(usize::MAX / 2);
     chunk
 }
 
@@ -189,20 +221,36 @@ fn decim_use_poly(decim: usize) -> bool {
     match decim {
         7 => {
             let local = DEC_USE_POLY_7.get_or_init(|| {
-                if env_present("DSD2DXD_DECIM7_USE_POLY") { Some(env_bool("DSD2DXD_DECIM7_USE_POLY", true)) } else { None }
+                if env_present("DSD2DXD_DECIM7_USE_POLY") {
+                    Some(env_bool("DSD2DXD_DECIM7_USE_POLY", true))
+                } else {
+                    None
+                }
             });
-            if let Some(b) = *local { return b; }
+            if let Some(b) = *local {
+                return b;
+            }
         }
         3 => {
             let local = DEC_USE_POLY_3.get_or_init(|| {
-                if env_present("DSD2DXD_DECIM3_USE_POLY") { Some(env_bool("DSD2DXD_DECIM3_USE_POLY", true)) } else { None }
+                if env_present("DSD2DXD_DECIM3_USE_POLY") {
+                    Some(env_bool("DSD2DXD_DECIM3_USE_POLY", true))
+                } else {
+                    None
+                }
             });
-            if let Some(b) = *local { return b; }
+            if let Some(b) = *local {
+                return b;
+            }
         }
         _ => {}
     }
     let global = DEC_USE_POLY_GLOBAL.get_or_init(|| {
-        if env_present("DSD2DXD_DECIM_USE_POLY") { Some(env_bool("DSD2DXD_DECIM_USE_POLY", true)) } else { None }
+        if env_present("DSD2DXD_DECIM_USE_POLY") {
+            Some(env_bool("DSD2DXD_DECIM_USE_POLY", true))
+        } else {
+            None
+        }
     });
     // Default to direct (polyphase disabled) when unset
     global.unwrap_or(false)
@@ -426,49 +474,7 @@ impl LMResampler {
         }
     }
 
-    // Process 8 DSD bits packed in one byte; bit order controlled by lsb_first.
-    // Returns number of PCM outputs produced (0..=8, though typically << 8).
-    pub fn push_byte_lm<F: FnMut(f64)>(&mut self, byte: u8, lsb_first: bool, mut emit: F) -> usize {
-        // Two-phase path: delegate to specialized struct
-        if let Some(tp) = self.two_phase_lm147_384.as_mut() {
-            return tp.push_byte(byte, lsb_first, emit);
-        }
-        // Single-phase cascade: Stage1 -> /7 -> /3
-        let (Some(ref mut s1), Some(ref mut p2), Some(ref mut p3)) = (
-            self.stage1_poly.as_mut(),
-            self.poly2.as_mut(),
-            self.poly3.as_mut(),
-        ) else {
-            return 0;
-        };
-        let mut produced = 0usize;
-        if lsb_first {
-            for b in 0..8 {
-                let bit = (byte >> b) & 1;
-                s1.push_all(bit, |y1| {
-                    if let Some(y2) = p2.push(y1) {
-                        if let Some(y3) = p3.push(y2) {
-                            emit(y3);
-                            produced += 1;
-                        }
-                    }
-                });
-            }
-        } else {
-            for b in (0..8).rev() {
-                let bit = (byte >> b) & 1;
-                s1.push_all(bit, |y1| {
-                    if let Some(y2) = p2.push(y1) {
-                        if let Some(y3) = p3.push(y2) {
-                            emit(y3);
-                            produced += 1;
-                        }
-                    }
-                });
-            }
-        }
-        produced
-    }
+    // Removed legacy per-byte path (push_byte_lm); block processing is the default
 
     // Block-style processing to reduce per-byte call overhead.
     // Returns number of PCM frames produced into `out`.
@@ -504,7 +510,9 @@ impl LMResampler {
 
         // Stage 2: process block into reusable temporary buffer
         let stage2_cap = self.s1_tmp.len().saturating_add(8);
-        if self.s2_tmp.len() < stage2_cap { self.s2_tmp.resize(stage2_cap, 0.0); }
+        if self.s2_tmp.len() < stage2_cap {
+            self.s2_tmp.resize(stage2_cap, 0.0);
+        }
         let n2 = p2.process_block(&self.s1_tmp, &mut self.s2_tmp);
 
         // Stage 3: process block into output slice
@@ -531,32 +539,7 @@ impl TwoPhaseLM147_384 {
         }
     }
 
-    #[inline]
-    fn push_byte<F: FnMut(f64)>(&mut self, byte: u8, lsb_first: bool, mut emit: F) -> usize {
-        let mut produced = 0usize;
-        if lsb_first {
-            for b in 0..8 {
-                let bit = (byte >> b) & 1;
-                self.stage1.push_all(bit, |y1| {
-                    if let Some(y2) = self.stage2.push(y1) {
-                        emit(y2);
-                        produced += 1;
-                    }
-                });
-            }
-        } else {
-            for b in (0..8).rev() {
-                let bit = (byte >> b) & 1;
-                self.stage1.push_all(bit, |y1| {
-                    if let Some(y2) = self.stage2.push(y1) {
-                        emit(y2);
-                        produced += 1;
-                    }
-                });
-            }
-        }
-        produced
-    }
+    // Removed legacy per-byte path (push_byte); block processing is the default
 
     // Block-style processing for two-phase (Stage1 /21 -> /7) path.
     #[inline]
@@ -581,7 +564,6 @@ impl TwoPhaseLM147_384 {
         self.stage2.process_block(&self.s1_tmp, out)
     }
 }
-
 
 #[derive(Debug)]
 struct Stage1Poly {
@@ -617,7 +599,7 @@ impl Stage1Poly {
         // Full symmetric taps length when mirroring right_half as [rev(right_half), right_half]
         let n = (right_half.len() * 2) as u64;
         let delay_high = (n - 1) / 2; // (N-1)/2
-        // Max taps per phase is ceil(n / l)
+                                      // Max taps per phase is ceil(n / l)
         let max_len = ((n as usize) + l as usize - 1) / l as usize;
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
@@ -629,7 +611,11 @@ impl Stage1Poly {
             ring_bits: vec![0u64; (cap + 63) / 64],
             bits_mask: cap - 1,
             wbits: 0,
-            mode: if m == 21 { Stage1Mode::Accum } else { Stage1Mode::SlotSim },
+            mode: if m == 21 {
+                Stage1Mode::Accum
+            } else {
+                Stage1Mode::SlotSim
+            },
             delay_high,
             high_index: 0,
             phase1: 0,
@@ -643,16 +629,18 @@ impl Stage1Poly {
         };
 
         // One-time Stage1 diagnostics when env vars are set (prints to stderr, without -v)
-        if ST1_DIAG_ONCE.set(()).is_ok() && any_env_present(&[
-            "DSD2DXD_STAGE1_CHUNK_MULT",
-            "DSD2DXD_STAGE1_CHUNK_TARGET",
-            "DSD2DXD_STAGE1_CHUNK_ALIGN",
-            "DSD2DXD_STAGE1_PAR_THREADS",
-            "DSD2DXD_STAGE1_PAR_MIN_GROUPS",
-            "DSD2DXD_STAGE1_PAR_AUTO",
-            "DSD2DXD_STAGE1_PAR_MAX",
-            "DSD2DXD_STAGE1_USE_LUT",
-        ]) {
+        if ST1_DIAG_ONCE.set(()).is_ok()
+            && any_env_present(&[
+                "DSD2DXD_STAGE1_CHUNK_MULT",
+                "DSD2DXD_STAGE1_CHUNK_TARGET",
+                "DSD2DXD_STAGE1_CHUNK_ALIGN",
+                "DSD2DXD_STAGE1_PAR_THREADS",
+                "DSD2DXD_STAGE1_PAR_MIN_GROUPS",
+                "DSD2DXD_STAGE1_PAR_AUTO",
+                "DSD2DXD_STAGE1_PAR_MAX",
+                "DSD2DXD_STAGE1_USE_LUT",
+            ])
+        {
             // Report groups/phase range and effective chunk + threading summary
             let lut_ref = me.lut.as_ref();
             let (min_g, max_g) = if lut_ref.is_empty() {
@@ -662,8 +650,12 @@ impl Stage1Poly {
                 let mut max_g = 0usize;
                 for phase in lut_ref.iter() {
                     let g = phase.len();
-                    if g < min_g { min_g = g; }
-                    if g > max_g { max_g = g; }
+                    if g < min_g {
+                        min_g = g;
+                    }
+                    if g > max_g {
+                        max_g = g;
+                    }
                 }
                 (min_g, max_g)
             };
@@ -671,18 +663,33 @@ impl Stage1Poly {
             let example_groups = max_g;
             let chunk_eff = if example_groups > 0 {
                 compute_stage1_chunk(example_groups, m as usize, l)
-            } else { 0 };
+            } else {
+                0
+            };
             let (threads_fixed, min_groups_thr) = Self::get_stage1_parallel_params();
-            let auto = *ST1_PAR_AUTO.get_or_init(|| env::var("DSD2DXD_STAGE1_PAR_AUTO").map(|v| v=="1"||v.eq_ignore_ascii_case("true")).unwrap_or(false));
-            let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
-            let hw = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            let auto = *ST1_PAR_AUTO.get_or_init(|| {
+                env::var("DSD2DXD_STAGE1_PAR_AUTO")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+            });
+            let par_max =
+                *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
+            let hw = thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
             let effective_threads = if threads_fixed > 0 {
                 threads_fixed.min(example_groups).max(1)
             } else if auto {
                 example_groups.min(hw).min(par_max).max(1)
-            } else { 0 };
+            } else {
+                0
+            };
             let engaged = effective_threads > 0 && example_groups >= min_groups_thr;
-            let par_max_str = if par_max == usize::MAX { "unlimited".to_string() } else { par_max.to_string() };
+            let par_max_str = if par_max == usize::MAX {
+                "unlimited".to_string()
+            } else {
+                par_max.to_string()
+            };
             let mode = if stage1_use_lut() { "lut" } else { "direct" };
             eprintln!(
                 "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
@@ -721,12 +728,11 @@ impl Stage1Poly {
             let bit = idx & 63;
             let one = ((self.ring_bits[word] >> bit) & 1) as u8;
             b |= one << k; // bit k is the sample at (start_idx - k)
-            // subtract 1 modulo capacity: (idx - 1) & mask == (idx + mask) & mask
+                           // subtract 1 modulo capacity: (idx - 1) & mask == (idx + mask) & mask
             idx = (idx + self.bits_mask) & self.bits_mask;
         }
         b
     }
-
 
     #[inline]
     fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
@@ -838,7 +844,11 @@ impl Stage1Poly {
     }
 
     #[inline]
-    fn byte_from_bits_newest_first_static(ring_bits: &[u64], bits_mask: usize, start_idx: usize) -> u8 {
+    fn byte_from_bits_newest_first_static(
+        ring_bits: &[u64],
+        bits_mask: usize,
+        start_idx: usize,
+    ) -> u8 {
         let mut b: u8 = 0;
         let mut idx = start_idx;
         for k in 0..8u8 {
@@ -854,7 +864,8 @@ impl Stage1Poly {
     #[inline]
     fn get_stage1_parallel_params() -> (usize, usize) {
         let threads = *ST1_PAR_THREADS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_THREADS", 0));
-        let min_groups = *ST1_PAR_MIN_GROUPS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MIN_GROUPS", 128));
+        let min_groups =
+            *ST1_PAR_MIN_GROUPS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MIN_GROUPS", 128));
         (threads, min_groups)
     }
 
@@ -867,11 +878,17 @@ impl Stage1Poly {
             return 0.0;
         }
         let (mut threads, min_groups) = Self::get_stage1_parallel_params();
-        let auto = *ST1_PAR_AUTO.get_or_init(|| env::var("DSD2DXD_STAGE1_PAR_AUTO").map(|v| v=="1"||v.eq_ignore_ascii_case("true")).unwrap_or(false));
+        let auto = *ST1_PAR_AUTO.get_or_init(|| {
+            env::var("DSD2DXD_STAGE1_PAR_AUTO")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+        });
         let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
 
         if threads == 0 && auto {
-            let hw = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            let hw = thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
             threads = total_groups.min(hw).min(par_max).max(1);
         }
         if threads == 0 || total_groups < min_groups {
@@ -891,7 +908,9 @@ impl Stage1Poly {
             for (ti, part) in partials.iter_mut().enumerate() {
                 let start = (ti * total_groups) / threads;
                 let end = ((ti + 1) * total_groups) / threads;
-                if start >= end { continue; }
+                if start >= end {
+                    continue;
+                }
                 let phase_lut_ref = phase_lut;
                 let ring_bits_ref = ring_bits;
                 scope.spawn(move || {
@@ -899,7 +918,8 @@ impl Stage1Poly {
                     // Starting index for group `start`: bidx_base - 8*start
                     let mut idx = (bidx_base + capb - ((start as usize) << 3)) & bits_mask;
                     for g in start..end {
-                        let byte = Self::byte_from_bits_newest_first_static(ring_bits_ref, bits_mask, idx);
+                        let byte =
+                            Self::byte_from_bits_newest_first_static(ring_bits_ref, bits_mask, idx);
                         let group_lut = &phase_lut_ref[g];
                         sum += group_lut[byte as usize];
                         idx = (idx + capb - 8) & bits_mask;
@@ -916,7 +936,9 @@ impl Stage1Poly {
     #[inline]
     fn sum_phase_direct(&self, phase: usize) -> f64 {
         let taps = &self.phase_taps[phase];
-        if taps.is_empty() { return 0.0; }
+        if taps.is_empty() {
+            return 0.0;
+        }
         let mut sum = 0.0f64;
         let mut idx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
         let capb = self.bits_mask + 1;
@@ -1009,33 +1031,7 @@ impl DecimFIRSym {
         me
     }
 
-    #[inline]
-    fn push(&mut self, x: f64) -> Option<f64> {
-        // Write newest sample
-        self.ring[self.w] = x;
-        self.w = (self.w + 1) & self.mask;
-        let t = self.count;
-        self.count += 1;
-
-        // Need at least center samples of history
-        if t < self.center {
-            return None;
-        }
-        // Output only when (t - center) aligned to decimation grid
-        if (t - self.center) % self.decim != 0 {
-            return None;
-        }
-
-        // Choose convolution path based on env toggle
-        let acc = if decim_use_poly(self.decim) {
-            // Use chunked polyphase convolution to improve cache/locality of ring accesses.
-            let chunk_len = compute_decim_chunk_len(self.decim);
-            unsafe { self.convolve_polyphase_chunked(chunk_len) }
-        } else {
-            unsafe { self.convolve_direct() }
-        };
-        Some(acc)
-    }
+    // Removed legacy per-sample push(); use process_block for efficiency
 
     // Block processing: feed a slice of inputs and write produced outputs into `out`.
     // Returns number of output samples written.
@@ -1050,9 +1046,13 @@ impl DecimFIRSym {
             self.count += 1;
 
             // Need at least center samples of history
-            if t < self.center { continue; }
+            if t < self.center {
+                continue;
+            }
             // Output only when (t - center) aligned to decimation grid
-            if (t - self.center) % self.decim != 0 { continue; }
+            if (t - self.center) % self.decim != 0 {
+                continue;
+            }
 
             let acc = if decim_use_poly(self.decim) {
                 let chunk_len = compute_decim_chunk_len(self.decim);
@@ -1095,7 +1095,9 @@ impl DecimFIRSym {
         let cap = self.ring.len();
         for (p, phase_taps) in self.phases.iter().enumerate() {
             let n = phase_taps.len();
-            if n == 0 { continue; }
+            if n == 0 {
+                continue;
+            }
             let idx0 = (newest + cap - p) & self.mask; // x[t - p]
             let mut k = 0usize;
             while k < n {
