@@ -67,6 +67,10 @@ static ST1_PAR_MIN_GROUPS: OnceLock<usize> = OnceLock::new();
 static ST1_PAR_AUTO: OnceLock<bool> = OnceLock::new();
 static ST1_PAR_MAX: OnceLock<usize> = OnceLock::new();
 
+// Stage1 LUT usage toggle: allow disabling LUTs and using direct tap-by-tap evaluation.
+// Env var: DSD2DXD_STAGE1_USE_LUT (true if unset)
+static ST1_USE_LUT: OnceLock<Option<bool>> = OnceLock::new();
+
 // Decimator polyphase toggle: allow disabling polyphase and using direct convolution.
 // Env vars:
 //   DSD2DXD_DECIM_USE_POLY   => global default (true if unset)
@@ -143,6 +147,14 @@ fn compute_stage1_chunk(total_groups: usize, m: usize, _l: u32) -> usize {
     let min_allowed = align.min(total_groups).max(1);
     chunk = round_down_to_multiple(chunk, align).max(min_allowed).min(total_groups);
     chunk
+}
+
+#[inline]
+fn stage1_use_lut() -> bool {
+    let opt = ST1_USE_LUT.get_or_init(|| {
+        if env_present("DSD2DXD_STAGE1_USE_LUT") { Some(env_bool("DSD2DXD_STAGE1_USE_LUT", false)) } else { None }
+    });
+    opt.unwrap_or(false)
 }
 
 #[inline]
@@ -263,6 +275,17 @@ fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<Vec<f64>>>
     let arc = Arc::new(lut);
     cache.lock().unwrap().insert(key, arc.clone());
     arc
+}
+
+fn build_stage1_phases_from_right_half(right_half: &[f64], l: u32) -> Vec<Vec<f64>> {
+    // Reconstruct full symmetric taps and polyphase decomposition
+    let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+    full.extend_from_slice(right_half);
+    let mut phases: Vec<Vec<f64>> = vec![Vec::new(); l as usize];
+    for (i, &c) in full.iter().enumerate() {
+        phases[i % l as usize].push(c);
+    }
+    phases
 }
 
 // Toggle slow-domain Stage1 polyphase (debug / diagnostic).
@@ -496,6 +519,8 @@ struct Stage1Poly {
     // Precomputed byte-LUTs: lut[phase][group][pattern 0..255] => partial sum for 8 taps
     // Phase taps are evaluated newest-first; group 0 covers the newest 8 taps, group 1 the next 8, etc.
     lut: Arc<Vec<Vec<Vec<f64>>>>,
+    // Direct evaluation taps per phase (same order as LUT grouping, newest-first)
+    phase_taps: Vec<Vec<f64>>,
     // Legacy SlotSim fields removed
     delay_high: u64,
     high_index: u64,
@@ -519,6 +544,7 @@ impl Stage1Poly {
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
         let lut = get_or_build_stage1_lut(right_half, l);
+        let phase_taps = build_stage1_phases_from_right_half(right_half, l);
         let me = Self {
             l,
             m,
@@ -530,6 +556,7 @@ impl Stage1Poly {
             high_index: 0,
             phase1: 0,
             lut,
+            phase_taps,
             acc: 0,
             phase_mod: 0,
             input_count: 0,
@@ -546,6 +573,7 @@ impl Stage1Poly {
             "DSD2DXD_STAGE1_PAR_MIN_GROUPS",
             "DSD2DXD_STAGE1_PAR_AUTO",
             "DSD2DXD_STAGE1_PAR_MAX",
+            "DSD2DXD_STAGE1_USE_LUT",
         ]) {
             // Report groups/phase range and effective chunk + threading summary
             let lut_ref = me.lut.as_ref();
@@ -577,9 +605,10 @@ impl Stage1Poly {
             } else { 0 };
             let engaged = effective_threads > 0 && example_groups >= min_groups_thr;
             let par_max_str = if par_max == usize::MAX { "unlimited".to_string() } else { par_max.to_string() };
+            let mode = if stage1_use_lut() { "lut" } else { "direct" };
             eprintln!(
-                "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
-                l, m, min_g, max_g, chunk_eff, st1_mult, st1_target, st1_align
+                "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
+                l, m, min_g, max_g, chunk_eff, mode, st1_mult, st1_target, st1_align
             );
             eprintln!(
                 "[CFG] Stage1 threading: fixed={}, auto={}, hw={}, min_groups={}, max={}, effective_threads_for_groups={}, engaged={}",
@@ -654,10 +683,13 @@ impl Stage1Poly {
         }
         self.phase1 = 0;
         let phase = (idx_high % self.l as u64) as usize;
-        // LUT approach over bit-packed ring
-        let phase_lut = &self.lut[phase];
-        // Optional parallel path; falls back to chunked if disabled/not beneficial
-        let sum = self.sum_phase_groups_threaded(phase_lut);
+        // Compute using LUT or direct taps based on env toggle
+        let sum = if stage1_use_lut() {
+            let phase_lut = &self.lut[phase];
+            self.sum_phase_groups_threaded(phase_lut)
+        } else {
+            self.sum_phase_direct(phase)
+        };
         emit(sum);
     }
 
@@ -680,10 +712,13 @@ impl Stage1Poly {
                 }
             }
             let phase = self.phase_mod as usize;
-            // Use precomputed LUTs over 8-sample groups using bit-packed ring
-            let phase_lut = &self.lut[phase];
-            // Optional parallel path; falls back to chunked if disabled/not beneficial
-            let sum = self.sum_phase_groups_threaded(phase_lut);
+            // Use LUTs or direct taps based on env toggle
+            let sum = if stage1_use_lut() {
+                let phase_lut = &self.lut[phase];
+                self.sum_phase_groups_threaded(phase_lut)
+            } else {
+                self.sum_phase_direct(phase)
+            };
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
@@ -796,6 +831,26 @@ impl Stage1Poly {
             }
         });
         partials.into_iter().sum()
+    }
+
+    // Direct evaluation of the active phase using per-tap signs from the bit ring.
+    // Equivalent to LUT path but without lookup tables.
+    #[inline]
+    fn sum_phase_direct(&self, phase: usize) -> f64 {
+        let taps = &self.phase_taps[phase];
+        if taps.is_empty() { return 0.0; }
+        let mut sum = 0.0f64;
+        let mut idx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
+        let capb = self.bits_mask + 1;
+        for &c in taps {
+            let word = idx >> 6;
+            let bit = idx & 63;
+            let one = (self.ring_bits[word] >> bit) & 1;
+            let sign = if one == 1 { 1.0 } else { -1.0 };
+            sum += c * sign;
+            idx = (idx + capb - 1) & self.bits_mask; // move to older bit
+        }
+        sum
     }
 }
 
