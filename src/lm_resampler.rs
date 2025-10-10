@@ -18,6 +18,8 @@ use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 
 use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::env;
+use std::thread;
 // no extra traits needed
 
 // Global LUT cache for Stage1, shared across instances/channels.
@@ -30,6 +32,168 @@ struct Stage1LutKey {
 }
 
 static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Vec<Vec<Vec<f64>>>>>>> = OnceLock::new();
+
+// One-time config diagnostics guards
+static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
+
+// ------------------------------------------------------------------------------------
+// Tuning knobs (via env) for chunk sizing in Stage1 and DecimFIRSym
+// Sensible baked-in defaults (used when env vars are unset):
+//   Stage1: TARGET≈128 groups, aligned to M (ALIGN=M)
+//   Decimator: TARGET≈64 taps, aligned to D (ALIGN=decim)
+// Stage1 env vars (override defaults):
+//   DSD2DXD_STAGE1_CHUNK_MULT   (usize, default 0)   -> if >0, chunk = M * MULT
+//   DSD2DXD_STAGE1_CHUNK_TARGET (usize, default 128) -> if >0, round up to multiple of M near TARGET
+//   DSD2DXD_STAGE1_CHUNK_ALIGN  (usize, default 0)   -> if 0, ALIGN=M; else round chunk down to multiple of ALIGN
+// Decimator env vars (override defaults):
+//   DSD2DXD_DECIM_CHUNK_MULT    (usize, default 0)   -> if >0, chunk = decim * MULT
+//   DSD2DXD_DECIM_CHUNK_TARGET  (usize, default 64)  -> if >0, round up to multiple of decim near TARGET
+//   DSD2DXD_DECIM_CHUNK_ALIGN   (usize, default 0)   -> if 0, ALIGN=decim; else round chunk down to multiple of ALIGN
+
+static ST1_MULT: OnceLock<usize> = OnceLock::new();
+static ST1_ALIGN: OnceLock<usize> = OnceLock::new();
+static ST1_TARGET: OnceLock<usize> = OnceLock::new();
+static DEC_MULT: OnceLock<usize> = OnceLock::new();
+static DEC_ALIGN: OnceLock<usize> = OnceLock::new();
+static DEC_TARGET: OnceLock<usize> = OnceLock::new();
+
+// Stage1 threading controls (optional, default disabled)
+// DSD2DXD_STAGE1_PAR_THREADS: fixed number of threads per output (default 0 = disabled unless AUTO)
+// DSD2DXD_STAGE1_PAR_MIN_GROUPS: minimum LUT groups to enable threading (default 128)
+// DSD2DXD_STAGE1_PAR_AUTO: if set to 1/true, auto threads = min(groups, hw_threads, PAR_MAX) when PAR_THREADS==0
+// DSD2DXD_STAGE1_PAR_MAX: cap the auto thread count (default: unlimited)
+static ST1_PAR_THREADS: OnceLock<usize> = OnceLock::new();
+static ST1_PAR_MIN_GROUPS: OnceLock<usize> = OnceLock::new();
+static ST1_PAR_AUTO: OnceLock<bool> = OnceLock::new();
+static ST1_PAR_MAX: OnceLock<usize> = OnceLock::new();
+
+// Decimator polyphase toggle: allow disabling polyphase and using direct convolution.
+// Env vars:
+//   DSD2DXD_DECIM_USE_POLY   => global default (true if unset)
+//   DSD2DXD_DECIM7_USE_POLY  => override for decim=7
+//   DSD2DXD_DECIM3_USE_POLY  => override for decim=3
+static DEC_USE_POLY_GLOBAL: OnceLock<Option<bool>> = OnceLock::new();
+static DEC_USE_POLY_7: OnceLock<Option<bool>> = OnceLock::new();
+static DEC_USE_POLY_3: OnceLock<Option<bool>> = OnceLock::new();
+
+#[inline]
+fn env_usize(name: &str, default: usize) -> usize {
+    env::var(name).ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(default)
+}
+
+#[inline]
+fn env_bool(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|v| {
+            let v = v.trim();
+            v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on") || v.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(default)
+}
+
+#[inline]
+fn env_present(name: &str) -> bool {
+    env::var_os(name).is_some()
+}
+
+#[inline]
+fn any_env_present(names: &[&str]) -> bool {
+    names.iter().any(|n| env_present(n))
+}
+
+#[inline]
+fn round_up_to_multiple(x: usize, a: usize) -> usize {
+    if a == 0 { return x; }
+    if x == 0 { return 0; }
+    ((x + a - 1) / a) * a
+}
+
+#[inline]
+fn round_down_to_multiple(x: usize, a: usize) -> usize {
+    if a == 0 { return x; }
+    (x / a) * a
+}
+
+#[inline]
+fn get_stage1_chunk_params() -> (usize, usize, usize) {
+    // Allow zeros as sentinels to enable baked defaults downstream (ALIGN=M, TARGET=128)
+    let mult = *ST1_MULT.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_MULT", 0));
+    let align = *ST1_ALIGN.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_ALIGN", 0));
+    let target = *ST1_TARGET.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_TARGET", 128));
+    (mult, align, target)
+}
+
+#[inline]
+fn compute_stage1_chunk(total_groups: usize, m: usize, _l: u32) -> usize {
+    let (mult, mut align, target) = get_stage1_chunk_params();
+    // Default chunk: round TARGET≈128 up to multiple of M
+    let mut chunk = if target > 0 {
+        round_up_to_multiple(target, m)
+    } else if mult > 0 {
+        m.saturating_mul(mult)
+    } else {
+        round_up_to_multiple(128, m)
+    };
+    if chunk == 0 { chunk = m.max(1); }
+    // Default ALIGN=M if unset
+    if align == 0 { align = m.max(1); }
+    if chunk > total_groups { chunk = total_groups; }
+    // apply alignment by rounding down; keep within [min, total_groups]
+    let min_allowed = align.min(total_groups).max(1);
+    chunk = round_down_to_multiple(chunk, align).max(min_allowed).min(total_groups);
+    chunk
+}
+
+#[inline]
+fn get_decim_chunk_params() -> (usize, usize, usize) {
+    // Allow zeros as sentinels to enable baked defaults downstream (ALIGN=D, TARGET=64)
+    let mult = *DEC_MULT.get_or_init(|| env_usize("DSD2DXD_DECIM_CHUNK_MULT", 0));
+    let align = *DEC_ALIGN.get_or_init(|| env_usize("DSD2DXD_DECIM_CHUNK_ALIGN", 0));
+    let target = *DEC_TARGET.get_or_init(|| env_usize("DSD2DXD_DECIM_CHUNK_TARGET", 64));
+    (mult, align, target)
+}
+
+#[inline]
+fn compute_decim_chunk_len(decim: usize) -> usize {
+    let (mult, mut align, target) = get_decim_chunk_params();
+    let mut chunk = if target > 0 {
+        round_up_to_multiple(target, decim)
+    } else if mult > 0 {
+        decim.saturating_mul(mult)
+    } else {
+        round_up_to_multiple(64, decim)
+    };
+    if chunk == 0 { chunk = decim.max(1); }
+    if align == 0 { align = decim.max(1); }
+    // ensure reasonable minimum and apply alignment (round down)
+    chunk = round_down_to_multiple(chunk, align).max(align).max(decim).min(usize::MAX / 2);
+    chunk
+}
+
+#[inline]
+fn decim_use_poly(decim: usize) -> bool {
+    // Per-factor override takes precedence, then global, else default true
+    match decim {
+        7 => {
+            let local = DEC_USE_POLY_7.get_or_init(|| {
+                if env_present("DSD2DXD_DECIM7_USE_POLY") { Some(env_bool("DSD2DXD_DECIM7_USE_POLY", true)) } else { None }
+            });
+            if let Some(b) = *local { return b; }
+        }
+        3 => {
+            let local = DEC_USE_POLY_3.get_or_init(|| {
+                if env_present("DSD2DXD_DECIM3_USE_POLY") { Some(env_bool("DSD2DXD_DECIM3_USE_POLY", true)) } else { None }
+            });
+            if let Some(b) = *local { return b; }
+        }
+        _ => {}
+    }
+    let global = DEC_USE_POLY_GLOBAL.get_or_init(|| {
+        if env_present("DSD2DXD_DECIM_USE_POLY") { Some(env_bool("DSD2DXD_DECIM_USE_POLY", true)) } else { None }
+    });
+    global.unwrap_or(true)
+}
 
 #[inline]
 fn hash_f64_slice_fnv1a(v: &[f64]) -> u64 {
@@ -372,6 +536,56 @@ impl Stage1Poly {
             input_delay,
             primed: false,
         };
+
+        // One-time Stage1 diagnostics when env vars are set (prints to stderr, without -v)
+        if ST1_DIAG_ONCE.set(()).is_ok() && any_env_present(&[
+            "DSD2DXD_STAGE1_CHUNK_MULT",
+            "DSD2DXD_STAGE1_CHUNK_TARGET",
+            "DSD2DXD_STAGE1_CHUNK_ALIGN",
+            "DSD2DXD_STAGE1_PAR_THREADS",
+            "DSD2DXD_STAGE1_PAR_MIN_GROUPS",
+            "DSD2DXD_STAGE1_PAR_AUTO",
+            "DSD2DXD_STAGE1_PAR_MAX",
+        ]) {
+            // Report groups/phase range and effective chunk + threading summary
+            let lut_ref = me.lut.as_ref();
+            let (min_g, max_g) = if lut_ref.is_empty() {
+                (0usize, 0usize)
+            } else {
+                let mut min_g = usize::MAX;
+                let mut max_g = 0usize;
+                for phase in lut_ref.iter() {
+                    let g = phase.len();
+                    if g < min_g { min_g = g; }
+                    if g > max_g { max_g = g; }
+                }
+                (min_g, max_g)
+            };
+            let (st1_mult, st1_align, st1_target) = get_stage1_chunk_params();
+            let example_groups = max_g;
+            let chunk_eff = if example_groups > 0 {
+                compute_stage1_chunk(example_groups, m as usize, l)
+            } else { 0 };
+            let (threads_fixed, min_groups_thr) = Self::get_stage1_parallel_params();
+            let auto = *ST1_PAR_AUTO.get_or_init(|| env::var("DSD2DXD_STAGE1_PAR_AUTO").map(|v| v=="1"||v.eq_ignore_ascii_case("true")).unwrap_or(false));
+            let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
+            let hw = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            let effective_threads = if threads_fixed > 0 {
+                threads_fixed.min(example_groups).max(1)
+            } else if auto {
+                example_groups.min(hw).min(par_max).max(1)
+            } else { 0 };
+            let engaged = effective_threads > 0 && example_groups >= min_groups_thr;
+            let par_max_str = if par_max == usize::MAX { "unlimited".to_string() } else { par_max.to_string() };
+            eprintln!(
+                "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
+                l, m, min_g, max_g, chunk_eff, st1_mult, st1_target, st1_align
+            );
+            eprintln!(
+                "[CFG] Stage1 threading: fixed={}, auto={}, hw={}, min_groups={}, max={}, effective_threads_for_groups={}, engaged={}",
+                threads_fixed, auto, hw, min_groups_thr, par_max_str, effective_threads, engaged
+            );
+        }
         me
     }
 
@@ -442,14 +656,8 @@ impl Stage1Poly {
         let phase = (idx_high % self.l as u64) as usize;
         // LUT approach over bit-packed ring
         let phase_lut = &self.lut[phase];
-        let mut sum = 0.0;
-        let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index (wbits-1)
-        let capb = self.bits_mask + 1;
-        for group_lut in phase_lut.iter() {
-            let byte = self.byte_from_bits_newest_first(bidx);
-            sum += group_lut[byte as usize];
-            bidx = (bidx + capb - 8) & self.bits_mask;
-        }
+        // Optional parallel path; falls back to chunked if disabled/not beneficial
+        let sum = self.sum_phase_groups_threaded(phase_lut);
         emit(sum);
     }
 
@@ -472,19 +680,122 @@ impl Stage1Poly {
                 }
             }
             let phase = self.phase_mod as usize;
-            let mut sum = 0.0;
             // Use precomputed LUTs over 8-sample groups using bit-packed ring
             let phase_lut = &self.lut[phase];
-            let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
-            let capb = self.bits_mask + 1;
-            for group_lut in phase_lut.iter() {
-                let byte = self.byte_from_bits_newest_first(bidx);
-                sum += group_lut[byte as usize];
-                bidx = (bidx + capb - 8) & self.bits_mask;
-            }
+            // Optional parallel path; falls back to chunked if disabled/not beneficial
+            let sum = self.sum_phase_groups_threaded(phase_lut);
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
+    }
+}
+
+impl Stage1Poly {
+    // Sum all phase groups using the bit-packed ring and per-group LUTs, but
+    // process groups in chunks of up to `chunk_bytes` to reduce loop overhead
+    // and improve locality of byte extraction. Behavior is identical to the
+    // simple per-group loop.
+    #[inline]
+    fn sum_phase_groups_chunked(&self, phase_lut: &Vec<Vec<f64>>, chunk_bytes: usize) -> f64 {
+        let mut sum = 0.0;
+        let total_groups = phase_lut.len();
+        if total_groups == 0 {
+            return 0.0;
+        }
+        let mut bidx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
+        let capb = self.bits_mask + 1;
+        let mut g = 0usize;
+        while g < total_groups {
+            let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
+            // Extract bytes for this chunk and accumulate
+            let mut k = 0usize;
+            while k < this_chunk {
+                // For group (g + k), the head bit index is bidx - 8*(k)
+                let idx = (bidx + capb - ((k as usize) << 3)) & self.bits_mask;
+                let byte = self.byte_from_bits_newest_first(idx);
+                let group_lut = &phase_lut[g + k];
+                sum += group_lut[byte as usize];
+                k += 1;
+            }
+            // Advance bidx by the number of groups processed in this chunk
+            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & self.bits_mask;
+            g += this_chunk;
+        }
+        sum
+    }
+
+    #[inline]
+    fn byte_from_bits_newest_first_static(ring_bits: &[u64], bits_mask: usize, start_idx: usize) -> u8 {
+        let mut b: u8 = 0;
+        let mut idx = start_idx;
+        for k in 0..8u8 {
+            let word = idx >> 6;
+            let bit = idx & 63;
+            let one = ((ring_bits[word] >> bit) & 1) as u8;
+            b |= one << k;
+            idx = (idx + bits_mask) & bits_mask;
+        }
+        b
+    }
+
+    #[inline]
+    fn get_stage1_parallel_params() -> (usize, usize) {
+        let threads = *ST1_PAR_THREADS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_THREADS", 0));
+        let min_groups = *ST1_PAR_MIN_GROUPS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MIN_GROUPS", 128));
+        (threads, min_groups)
+    }
+
+    // Optional threaded summation of all groups using scoped threads. Enabled only when
+    // DSD2DXD_STAGE1_PAR_THREADS > 0 and total_groups >= min_groups. For safer iteration,
+    // we restrict to m==21 by default, matching the heavy Accum path.
+    fn sum_phase_groups_threaded(&self, phase_lut: &Vec<Vec<f64>>) -> f64 {
+        let total_groups = phase_lut.len();
+        if total_groups == 0 {
+            return 0.0;
+        }
+        let (mut threads, min_groups) = Self::get_stage1_parallel_params();
+        let auto = *ST1_PAR_AUTO.get_or_init(|| env::var("DSD2DXD_STAGE1_PAR_AUTO").map(|v| v=="1"||v.eq_ignore_ascii_case("true")).unwrap_or(false));
+        let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
+
+        if threads == 0 && auto {
+            let hw = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            threads = total_groups.min(hw).min(par_max).max(1);
+        }
+        if threads == 0 || total_groups < min_groups {
+            // Fallback to chunked path with baked defaults
+            let chunk = compute_stage1_chunk(total_groups, self.m as usize, self.l);
+            return self.sum_phase_groups_chunked(phase_lut, chunk);
+        }
+
+        let threads = threads.min(total_groups).max(1);
+        let capb = self.bits_mask + 1;
+        let bidx_base = (self.wbits + self.bits_mask) & self.bits_mask;
+        let ring_bits = &self.ring_bits;
+        let bits_mask = self.bits_mask;
+
+        let mut partials = vec![0.0f64; threads];
+        thread::scope(|scope| {
+            for (ti, part) in partials.iter_mut().enumerate() {
+                let start = (ti * total_groups) / threads;
+                let end = ((ti + 1) * total_groups) / threads;
+                if start >= end { continue; }
+                let phase_lut_ref = phase_lut;
+                let ring_bits_ref = ring_bits;
+                scope.spawn(move || {
+                    let mut sum = 0.0f64;
+                    // Starting index for group `start`: bidx_base - 8*start
+                    let mut idx = (bidx_base + capb - ((start as usize) << 3)) & bits_mask;
+                    for g in start..end {
+                        let byte = Self::byte_from_bits_newest_first_static(ring_bits_ref, bits_mask, idx);
+                        let group_lut = &phase_lut_ref[g];
+                        sum += group_lut[byte as usize];
+                        idx = (idx + capb - 8) & bits_mask;
+                    }
+                    *part = sum;
+                });
+            }
+        });
+        partials.into_iter().sum()
     }
 }
 
@@ -524,7 +835,7 @@ impl DecimFIRSym {
         for (i, &c) in full.iter().enumerate() {
             phases[i % decim].push(c);
         }
-        Self {
+        let me = Self {
             _full: full,
             _len: len,
             _half: half,
@@ -537,7 +848,32 @@ impl DecimFIRSym {
             w: 0,
             count: 0,
             _left_half: left_half,
+        };
+
+        // One-time decimator diagnostics per decim factor when env vars are set
+        if any_env_present(&[
+            "DSD2DXD_DECIM_CHUNK_MULT",
+            "DSD2DXD_DECIM_CHUNK_TARGET",
+            "DSD2DXD_DECIM_CHUNK_ALIGN",
+            "DSD2DXD_DECIM_USE_POLY",
+            "DSD2DXD_DECIM7_USE_POLY",
+            "DSD2DXD_DECIM3_USE_POLY",
+        ]) {
+            static DECIM_DIAG_ONCE: OnceLock<Mutex<HashMap<usize, bool>>> = OnceLock::new();
+            let printed_map = DECIM_DIAG_ONCE.get_or_init(|| Mutex::new(HashMap::new()));
+            let mut guard = printed_map.lock().unwrap();
+            if !guard.contains_key(&decim) {
+                let (mult, align, target) = get_decim_chunk_params();
+                let chunk_eff = compute_decim_chunk_len(decim);
+                let use_poly = decim_use_poly(decim);
+                eprintln!(
+                    "[CFG] Decimator D={}: taps={} center={} chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>D])",
+                    decim, len, center, chunk_eff, if use_poly {"polyphase"} else {"direct"}, mult, target, align
+                );
+                guard.insert(decim, true);
+            }
         }
+        me
     }
 
     #[inline]
@@ -557,12 +893,20 @@ impl DecimFIRSym {
             return None;
         }
 
-        let acc = unsafe { self.convolve_polyphase() };
+        // Choose convolution path based on env toggle
+        let acc = if decim_use_poly(self.decim) {
+            // Use chunked polyphase convolution to improve cache/locality of ring accesses.
+            let chunk_len = compute_decim_chunk_len(self.decim);
+            unsafe { self.convolve_polyphase_chunked(chunk_len) }
+        } else {
+            unsafe { self.convolve_direct() }
+        };
         Some(acc)
     }
 
     // ----- Convolution implementations -----
     #[inline(always)]
+    #[allow(dead_code)]
     unsafe fn convolve_polyphase(&self) -> f64 {
         // Polyphase evaluation: y = Σ_p Σ_k h[p + kD] * x[t - (p + kD)]
         // We walk each phase p starting from newest - p and stride by D.
@@ -574,6 +918,49 @@ impl DecimFIRSym {
                 total += c * self.ring[idx];
                 idx = (idx + self.ring.len() - self.decim) & self.mask; // move back D samples
             }
+        }
+        total
+    }
+
+    // Chunked variant of the polyphase convolution. Processes inner tap loops in
+    // chunks to reduce loop overhead and improve index arithmetic locality.
+    #[inline(always)]
+    unsafe fn convolve_polyphase_chunked(&self, chunk_len: usize) -> f64 {
+        let newest = (self.w + self.ring.len() - 1) & self.mask; // index of x[t]
+        let mut total = 0.0;
+        let cap = self.ring.len();
+        for (p, phase_taps) in self.phases.iter().enumerate() {
+            let n = phase_taps.len();
+            if n == 0 { continue; }
+            let idx0 = (newest + cap - p) & self.mask; // x[t - p]
+            let mut k = 0usize;
+            while k < n {
+                let take = core::cmp::min(chunk_len, n - k);
+                // Compute starting index for this chunk (k-th tap)
+                let mut idx = (idx0 + cap - (self.decim * k) % cap) & self.mask;
+                // Accumulate this chunk
+                let end = k + take;
+                while k < end {
+                    let c = *phase_taps.get_unchecked(k);
+                    total += c * *self.ring.get_unchecked(idx);
+                    idx = (idx + cap - self.decim) & self.mask;
+                    k += 1;
+                }
+            }
+        }
+        total
+    }
+
+    // Direct full-rate symmetric FIR convolution (no polyphase decomposition).
+    // Evaluates y[t] = sum_{k=0..len-1} h[k] * x[t - k] when push() determines an output is due.
+    #[inline(always)]
+    unsafe fn convolve_direct(&self) -> f64 {
+        let newest = (self.w + self.ring.len() - 1) & self.mask; // index of x[t]
+        let mut total = 0.0;
+        let mut idx = newest;
+        for &c in &self._full {
+            total += c * *self.ring.get_unchecked(idx);
+            idx = (idx + self.ring.len() - 1) & self.mask;
         }
         total
     }
