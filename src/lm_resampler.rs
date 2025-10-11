@@ -3,20 +3,14 @@ enum Stage1Mode {
     SlotSim,
     Accum,
 }
-use crate::filters::HTAPS_1MHZ_3TO1_EQ;
 use crate::filters::HTAPS_288K_3TO1_EQ;
 use crate::filters::HTAPS_2MHZ_7TO1_EQ;
-use crate::filters::HTAPS_4MHZ_7TO1_EQ;
-use crate::filters::HTAPS_576K_3TO1_EQ;
-use crate::filters::HTAPS_8MHZ_7TO1_EQ;
 use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DSDX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX10_21TO1_EQ;
-use crate::filters::HTAPS_DDRX10_7TO1_EQ;
 use crate::filters::HTAPS_DSDX5_7TO1_EQ;
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
-use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -27,7 +21,6 @@ use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
 // Global LUT cache for Stage1, shared across instances/channels.
 // Keyed by (L, len(right_half), hash(contents of right_half)) to avoid rebuilding.
 type Stage1LutTable = Vec<Vec<[f64; 256]>>;
-type Stage1LutTableF32 = Vec<Vec<[f32; 256]>>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Stage1LutKey {
     l: u32,
@@ -37,8 +30,7 @@ struct Stage1LutKey {
 
 static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Stage1LutTable>>>> =
     OnceLock::new();
-static STAGE1_LUT_CACHE_F32: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Stage1LutTableF32>>>> =
-    OnceLock::new();
+// f32 LUT variant removed; we always use f64 LUTs now.
 
 // One-time config diagnostics guards
 static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
@@ -66,11 +58,7 @@ static ST1_PAR_MIN_GROUPS: OnceLock<usize> = OnceLock::new();
 static ST1_PAR_AUTO: OnceLock<bool> = OnceLock::new();
 static ST1_PAR_MAX: OnceLock<usize> = OnceLock::new();
 
-// Stage1 LUT usage toggle: allow disabling LUTs and using direct tap-by-tap evaluation.
-// Env var: DSD2DXD_STAGE1_USE_LUT (default: ON when unset => use LUT; set to 0/false to disable)
-static ST1_USE_LUT: OnceLock<Option<bool>> = OnceLock::new();
-// Stage1 LUT precision toggle (default: f64). Set to 1/true for f32 LUTs
-static ST1_LUT_F32: OnceLock<bool> = OnceLock::new();
+// Stage1 LUT toggles removed: LUT is always enabled with f64 precision.
 // Fixed-capacity LM staging buffers (overridable via env)
 // DSD2DXD_S1TMP_CAP: capacity for Stage1->Stage2 buffer (default 131072 samples)
 // DSD2DXD_S2TMP_CAP: capacity for Stage2->Stage3 buffer (default 32768 samples)
@@ -171,17 +159,7 @@ fn compute_stage1_chunk(total_groups: usize, m: usize, _l: u32) -> usize {
     chunk
 }
 
-#[inline]
-fn stage1_use_lut() -> bool {
-    let opt = ST1_USE_LUT.get_or_init(|| {
-        if env_present("DSD2DXD_STAGE1_USE_LUT") {
-            Some(env_bool("DSD2DXD_STAGE1_USE_LUT", true))
-        } else {
-            None
-        }
-    });
-    opt.unwrap_or(true)
-}
+// stage1_use_lut removed: LUT is always used
 
 // (Polyphase decimator env toggles removed)
 
@@ -255,69 +233,9 @@ fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f64; 256]
     arc
 }
 
-fn build_stage1_lut_from_right_half_f32(right_half: &[f64], l: u32) -> Vec<Vec<[f32; 256]>> {
-    let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
-    full.extend_from_slice(right_half);
-    let mut phases: Vec<Vec<f64>> = vec![Vec::new(); l as usize];
-    for (i, &c) in full.iter().enumerate() {
-        phases[i % l as usize].push(c);
-    }
-    let mut out: Vec<Vec<[f32; 256]>> = Vec::with_capacity(phases.len());
-    for taps in &phases {
-        let n = taps.len();
-        let groups = (n + 7) / 8;
-        let mut phase_lut: Vec<[f32; 256]> = Vec::with_capacity(groups);
-        for g in 0..groups {
-            let base = g * 8;
-            let mut coeffs: [f64; 8] = [0.0; 8];
-            for j in 0..8 {
-                let idx = base + j;
-                if idx < n {
-                    coeffs[j] = taps[idx];
-                }
-            }
-            let mut group_lut = [0.0f32; 256];
-            for b in 0u16..256u16 {
-                let mut sum = 0.0f64;
-                for j in 0..8 {
-                    let sign = if (b >> j) & 1 == 1 { 1.0 } else { -1.0 };
-                    sum += coeffs[j] * sign;
-                }
-                group_lut[b as usize] = sum as f32;
-            }
-            phase_lut.push(group_lut);
-        }
-        out.push(phase_lut);
-    }
-    out
-}
+// f32 LUT builders/cache removed
 
-fn get_or_build_stage1_lut_f32(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f32; 256]>>> {
-    let key = Stage1LutKey {
-        l,
-        n: right_half.len() as u32,
-        hash: hash_f64_slice_fnv1a(right_half),
-    };
-    let cache = STAGE1_LUT_CACHE_F32.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(found) = cache.lock().unwrap().get(&key) {
-        return found.clone();
-    }
-    let lut = build_stage1_lut_from_right_half_f32(right_half, l);
-    let arc = Arc::new(lut);
-    cache.lock().unwrap().insert(key, arc.clone());
-    arc
-}
-
-fn build_stage1_phases_from_right_half(right_half: &[f64], l: u32) -> Vec<Vec<f64>> {
-    // Reconstruct full symmetric taps and polyphase decomposition
-    let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
-    full.extend_from_slice(right_half);
-    let mut phases: Vec<Vec<f64>> = vec![Vec::new(); l as usize];
-    for (i, &c) in full.iter().enumerate() {
-        phases[i % l as usize].push(c);
-    }
-    phases
-}
+// Direct-eval phase taps builder removed (always using LUT now)
 
 // Toggle slow-domain Stage1 polyphase (debug / diagnostic).
 // Set to true to enable Stage1PolySlow path; keep false for production.
@@ -758,12 +676,7 @@ impl TwoPhaseLM147 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum S1EvalMode {
-    Direct,
-    LutF64,
-    LutF32,
-}
+// S1EvalMode removed: only LUT(f64) path remains
 
 #[derive(Debug)]
 struct Stage1Poly {
@@ -776,13 +689,8 @@ struct Stage1Poly {
     bits_mask: usize, // same capacity as ring (power of 2) - 1
     wbits: usize,     // next write bit index
     mode: Stage1Mode,
-    // Precomputed LUTs (chosen precision): f64 by default, or f32 when enabled
+    // Precomputed LUTs (f64 only)
     lut_f64: Option<Arc<Vec<Vec<[f64; 256]>>>>,
-    lut_f32: Option<Arc<Vec<Vec<[f32; 256]>>>>,
-    // Pre-dispatched evaluation mode to avoid repeated env/lookups per output
-    s1_mode: S1EvalMode,
-    // Direct evaluation taps per phase (same order as LUT grouping, newest-first)
-    phase_taps: Vec<Vec<f64>>,
     // Byte-oriented ring mirroring newest-first 8-bit windows per input bit
     byte_ring: Vec<u8>,
     byte_mask: usize,
@@ -810,38 +718,11 @@ impl Stage1Poly {
         let max_len = ((n as usize) + l as usize - 1) / l as usize;
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
-        let use_f32 = *ST1_LUT_F32.get_or_init(|| env_bool("DSD2DXD_STAGE1_LUT_F32", false));
-        let use_lut = stage1_use_lut();
-        let phase_taps = build_stage1_phases_from_right_half(right_half, l);
-        let (lut_f64, lut_f32, s1_mode): (
-            Option<Arc<Vec<Vec<[f64; 256]>>>>,
-            Option<Arc<Vec<Vec<[f32; 256]>>>>,
-            S1EvalMode,
-        ) = if use_lut {
-            if use_f32 {
-                (
-                    None,
-                    Some(get_or_build_stage1_lut_f32(right_half, l)),
-                    S1EvalMode::LutF32,
-                )
-            } else {
-                (
-                    Some(get_or_build_stage1_lut(right_half, l)),
-                    None,
-                    S1EvalMode::LutF64,
-                )
-            }
-        } else {
-            (None, None, S1EvalMode::Direct)
-        };
+        // Always use f64 LUTs
+        let lut_f64: Option<Arc<Vec<Vec<[f64; 256]>>>> = Some(get_or_build_stage1_lut(right_half, l));
         // Determine maximum groups across phases to size the byte ring
         let mut groups_max = 0usize;
         if let Some(ref tbl) = lut_f64 {
-            for phase in tbl.iter() {
-                groups_max = groups_max.max(phase.len());
-            }
-        }
-        if let Some(ref tbl) = lut_f32 {
             for phase in tbl.iter() {
                 groups_max = groups_max.max(phase.len());
             }
@@ -862,9 +743,6 @@ impl Stage1Poly {
             high_index: 0,
             phase1: 0,
             lut_f64,
-            lut_f32,
-            s1_mode,
-            phase_taps,
             byte_ring: vec![0u8; byte_cap],
             byte_mask: byte_cap - 1,
             wbyte: 0,
@@ -886,28 +764,10 @@ impl Stage1Poly {
                 "DSD2DXD_STAGE1_PAR_MIN_GROUPS",
                 "DSD2DXD_STAGE1_PAR_AUTO",
                 "DSD2DXD_STAGE1_PAR_MAX",
-                "DSD2DXD_STAGE1_USE_LUT",
             ])
         {
             // Report groups/phase range and effective chunk + threading summary
             let (min_g, max_g) = if let Some(ref tbl) = me.lut_f64 {
-                if tbl.is_empty() {
-                    (0, 0)
-                } else {
-                    let mut min_g = usize::MAX;
-                    let mut max_g = 0usize;
-                    for phase in tbl.iter() {
-                        let g = phase.len();
-                        if g < min_g {
-                            min_g = g;
-                        }
-                        if g > max_g {
-                            max_g = g;
-                        }
-                    }
-                    (min_g, max_g)
-                }
-            } else if let Some(ref tbl) = me.lut_f32 {
                 if tbl.is_empty() {
                     (0, 0)
                 } else {
@@ -958,14 +818,9 @@ impl Stage1Poly {
             } else {
                 par_max.to_string()
             };
-            let mode = match s1_mode {
-                S1EvalMode::Direct => "direct",
-                S1EvalMode::LutF64 => "lut(f64)",
-                S1EvalMode::LutF32 => "lut(f32)",
-            };
             eprintln!(
-                "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
-                l, m, min_g, max_g, chunk_eff, mode, st1_mult, st1_target, st1_align
+                "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode=lut(f64) (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
+                l, m, min_g, max_g, chunk_eff, st1_mult, st1_target, st1_align
             );
             eprintln!(
                 "[CFG] Stage1 threading: fixed={}, auto={}, hw={}, min_groups={}, max={}, effective_threads_for_groups={}, engaged={}",
@@ -1014,7 +869,7 @@ impl Stage1Poly {
 
     #[inline]
     fn sim_high_slot<F: FnMut(f64)>(&mut self, emit: &mut F) {
-        let idx_high = self.high_index;
+    let idx_high = self.high_index;
         self.high_index += 1;
         if !self.primed {
             if idx_high >= self.delay_high {
@@ -1029,19 +884,8 @@ impl Stage1Poly {
         }
         self.phase1 = 0;
         let phase = (idx_high % self.l as u64) as usize;
-        // Compute using pre-dispatched mode (no per-output env checks)
-        let sum = match self.s1_mode {
-            S1EvalMode::Direct => self.sum_phase_direct(phase),
-            S1EvalMode::LutF64 => {
-                // Safety: present when mode selected
-                let tbl = self.lut_f64.as_ref().unwrap();
-                self.sum_phase_groups_threaded(&tbl[phase][..])
-            }
-            S1EvalMode::LutF32 => {
-                let tbl = self.lut_f32.as_ref().unwrap();
-                self.sum_phase_groups_threaded_f32(&tbl[phase][..])
-            }
-        };
+        let tbl = self.lut_f64.as_ref().unwrap();
+        let sum = self.sum_phase_groups_threaded(&tbl[phase][..]);
         emit(sum);
     }
 
@@ -1064,18 +908,8 @@ impl Stage1Poly {
                 }
             }
             let phase = self.phase_mod as usize;
-            // Use pre-dispatched mode (no per-output env checks)
-            let sum = match self.s1_mode {
-                S1EvalMode::Direct => self.sum_phase_direct(phase),
-                S1EvalMode::LutF64 => {
-                    let tbl = self.lut_f64.as_ref().unwrap();
-                    self.sum_phase_groups_threaded(&tbl[phase][..])
-                }
-                S1EvalMode::LutF32 => {
-                    let tbl = self.lut_f32.as_ref().unwrap();
-                    self.sum_phase_groups_threaded_f32(&tbl[phase][..])
-                }
-            };
+            let tbl = self.lut_f64.as_ref().unwrap();
+            let sum = self.sum_phase_groups_threaded(&tbl[phase][..]);
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
@@ -1245,168 +1079,7 @@ impl Stage1Poly {
         });
         partials.into_iter().sum()
     }
-
-    fn sum_phase_groups_threaded_f32(&self, phase_lut: &[[f32; 256]]) -> f64 {
-        let total_groups = phase_lut.len();
-        if total_groups == 0 {
-            return 0.0;
-        }
-        let (mut threads, min_groups) = Self::get_stage1_parallel_params();
-        let auto = *ST1_PAR_AUTO.get_or_init(|| {
-            env::var("DSD2DXD_STAGE1_PAR_AUTO")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        });
-        let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
-
-        if threads == 0 && auto {
-            let hw = thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1);
-            threads = total_groups.min(hw).min(par_max).max(1);
-        }
-        if threads == 0 || total_groups < min_groups {
-            let chunk = compute_stage1_chunk(total_groups, self.m as usize, self.l);
-            return self.sum_phase_groups_chunked_f32(phase_lut, chunk);
-        }
-
-        let threads = threads.min(total_groups).max(1);
-        let capb = self.byte_mask + 1;
-        let bidx_base = (self.wbyte + self.byte_mask) & self.byte_mask; // newest byte index (time t)
-        let byte_ring = &self.byte_ring;
-        let byte_mask = self.byte_mask;
-
-        let mut partials = vec![0.0f64; threads];
-        thread::scope(|scope| {
-            for (ti, part) in partials.iter_mut().enumerate() {
-                let start = (ti * total_groups) / threads;
-                let end = ((ti + 1) * total_groups) / threads;
-                if start >= end {
-                    continue;
-                }
-                let phase_lut_ref = phase_lut;
-                scope.spawn(move || {
-                    let mut sum = 0.0f64;
-                    let mut idx = (bidx_base + capb - ((start as usize) << 3)) & byte_mask;
-                    for g in start..end {
-                        let byte = byte_ring[idx] as usize;
-                        sum += phase_lut_ref[g][byte] as f64;
-                        idx = (idx + capb - 8) & byte_mask;
-                    }
-                    *part = sum;
-                });
-            }
-        });
-        partials.into_iter().sum()
-    }
-
-    #[inline]
-    fn sum_phase_groups_chunked_f32(&self, phase_lut: &[[f32; 256]], chunk_bytes: usize) -> f64 {
-        let mut sum = 0.0f64;
-        let total_groups = phase_lut.len();
-        if total_groups == 0 {
-            return 0.0;
-        }
-        let mut bidx = (self.wbyte + self.byte_mask) & self.byte_mask; // newest byte
-        let capb = self.byte_mask + 1;
-        let mask = self.byte_mask;
-        let mut g = 0usize;
-        while g < total_groups {
-            let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
-            let mut k = 0usize;
-            // 8-way unroll with 4 accumulators
-            while k + 8 <= this_chunk {
-                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
-                let idx1 = (idx0 + capb - 8) & mask;
-                let idx2 = (idx1 + capb - 8) & mask;
-                let idx3 = (idx2 + capb - 8) & mask;
-                let idx4 = (idx3 + capb - 8) & mask;
-                let idx5 = (idx4 + capb - 8) & mask;
-                let idx6 = (idx5 + capb - 8) & mask;
-                let idx7 = (idx6 + capb - 8) & mask;
-
-                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
-                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
-                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
-                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
-                let b4 = unsafe { *self.byte_ring.get_unchecked(idx4) } as usize;
-                let b5 = unsafe { *self.byte_ring.get_unchecked(idx5) } as usize;
-                let b6 = unsafe { *self.byte_ring.get_unchecked(idx6) } as usize;
-                let b7 = unsafe { *self.byte_ring.get_unchecked(idx7) } as usize;
-
-                let mut s0 = 0.0f64;
-                let mut s1 = 0.0f64;
-                let mut s2 = 0.0f64;
-                let mut s3 = 0.0f64;
-                unsafe {
-                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0) as f64;
-                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1) as f64;
-                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2) as f64;
-                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3) as f64;
-                    s0 += *phase_lut.get_unchecked(g + k + 4).get_unchecked(b4) as f64;
-                    s1 += *phase_lut.get_unchecked(g + k + 5).get_unchecked(b5) as f64;
-                    s2 += *phase_lut.get_unchecked(g + k + 6).get_unchecked(b6) as f64;
-                    s3 += *phase_lut.get_unchecked(g + k + 7).get_unchecked(b7) as f64;
-                }
-                sum += (s0 + s1) + (s2 + s3);
-                k += 8;
-            }
-            // 4-way unroll with 4 accumulators
-            while k + 4 <= this_chunk {
-                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
-                let idx1 = (idx0 + capb - 8) & mask;
-                let idx2 = (idx1 + capb - 8) & mask;
-                let idx3 = (idx2 + capb - 8) & mask;
-                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
-                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
-                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
-                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
-                let mut s0 = 0.0f64;
-                let mut s1 = 0.0f64;
-                let mut s2 = 0.0f64;
-                let mut s3 = 0.0f64;
-                unsafe {
-                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0) as f64;
-                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1) as f64;
-                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2) as f64;
-                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3) as f64;
-                }
-                sum += (s0 + s1) + (s2 + s3);
-                k += 4;
-            }
-            while k < this_chunk {
-                let idx = (bidx + capb - ((k as usize) << 3)) & mask;
-                let byte = unsafe { *self.byte_ring.get_unchecked(idx) } as usize;
-                unsafe { sum += *phase_lut.get_unchecked(g + k).get_unchecked(byte) as f64; }
-                k += 1;
-            }
-            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & mask;
-            g += this_chunk;
-        }
-        sum
-    }
-
-    // Direct evaluation of the active phase using per-tap signs from the bit ring.
-    // Equivalent to LUT path but without lookup tables.
-    #[inline]
-    fn sum_phase_direct(&self, phase: usize) -> f64 {
-        let taps = &self.phase_taps[phase];
-        if taps.is_empty() {
-            return 0.0;
-        }
-        let mut sum = 0.0f64;
-        let mut idx = (self.wbits + self.bits_mask) & self.bits_mask; // newest bit index
-        let capb = self.bits_mask + 1;
-        for &c in taps {
-            let word = idx >> 6;
-            let bit = idx & 63;
-            let one = unsafe { (*self.ring_bits.get_unchecked(word) >> bit) & 1 };
-            let sign = if one == 1 { 1.0 } else { -1.0 };
-            sum += c * sign;
-            idx = (idx + capb - 1) & self.bits_mask; // move to older bit
-        }
-        sum
-    }
+    // Direct-eval path removed; LUT is always used
 }
 
 // --- ====================================================================================
