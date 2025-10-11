@@ -230,7 +230,7 @@ pub struct LMResampler {
     poly3: Option<DecimFIRSym>,
     // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
     // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
-    two_phase_lm147_384: Option<TwoPhaseLM147>,
+    two_phase_lm147: Option<TwoPhaseLM147>,
     // Reusable internal SPSC ring buffers via ringbuf crate
     s1_prod: HeapProd<f64>,
     s1_cons: HeapCons<f64>,
@@ -263,7 +263,7 @@ impl LMResampler {
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
                     // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
-                    two_phase_lm147_384: None,
+                    two_phase_lm147: None,
                     stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14)),
                     s1_prod,
                     s1_cons,
@@ -283,7 +283,7 @@ impl LMResampler {
                     return Self {
                         poly2: None,
                         poly3: None,
-                        two_phase_lm147_384: Some(TwoPhaseLM147::new(l, out_rate)),
+                        two_phase_lm147: Some(TwoPhaseLM147::new(l, out_rate)),
                         stage1_poly: None,
                         s1_prod,
                         s1_cons,
@@ -302,7 +302,7 @@ impl LMResampler {
                     return Self {
                         poly2: None,
                         poly3: None,
-                        two_phase_lm147_384: Some(TwoPhaseLM147::new(l, out_rate)),
+                        two_phase_lm147: Some(TwoPhaseLM147::new(l, out_rate)),
                         stage1_poly: None,
                         s1_prod,
                         s1_cons,
@@ -325,7 +325,7 @@ impl LMResampler {
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ[..], 7)),
                     // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ[..], 3)),
-                    two_phase_lm147_384: None,
+                    two_phase_lm147: None,
                     s1_prod,
                     s1_cons,
                     s2_prod,
@@ -345,7 +345,7 @@ impl LMResampler {
     #[inline(always)]
     pub fn process_bytes_lm(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
         // Two-phase path delegates to specialized helper
-        if let Some(tp) = self.two_phase_lm147_384.as_mut() {
+        if let Some(tp) = self.two_phase_lm147.as_mut() {
             return tp.process_bytes(bytes, lsb_first, out);
         }
         let (Some(ref mut s1), Some(ref mut p2), Some(ref mut p3)) = (
