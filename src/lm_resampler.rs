@@ -1195,34 +1195,37 @@ impl Stage1Poly {
         // Start at last written rolling byte (newest 8-bit window)
         let mut bidx = (self.wbyte + self.byte_mask) & self.byte_mask; // newest byte index (time t)
         let capb = self.byte_mask + 1;
+        let mask = self.byte_mask;
         let mut g = 0usize;
         while g < total_groups {
             let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
             // Extract bytes for this chunk and accumulate (unrolled by 4)
             let mut k = 0usize;
             while k + 4 <= this_chunk {
-                let idx0 = (bidx + capb - ((k as usize) << 3)) & self.byte_mask;
-                let idx1 = (idx0 + capb - 8) & self.byte_mask;
-                let idx2 = (idx1 + capb - 8) & self.byte_mask;
-                let idx3 = (idx2 + capb - 8) & self.byte_mask;
-                let b0 = self.byte_ring[idx0] as usize;
-                let b1 = self.byte_ring[idx1] as usize;
-                let b2 = self.byte_ring[idx2] as usize;
-                let b3 = self.byte_ring[idx3] as usize;
-                sum += phase_lut[g + k][b0];
-                sum += phase_lut[g + k + 1][b1];
-                sum += phase_lut[g + k + 2][b2];
-                sum += phase_lut[g + k + 3][b3];
+                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
+                let idx1 = (idx0 + capb - 8) & mask;
+                let idx2 = (idx1 + capb - 8) & mask;
+                let idx3 = (idx2 + capb - 8) & mask;
+                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
+                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
+                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
+                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
+                unsafe {
+                    sum += *phase_lut.get_unchecked(g + k).get_unchecked(b0);
+                    sum += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1);
+                    sum += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2);
+                    sum += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3);
+                }
                 k += 4;
             }
             while k < this_chunk {
-                let idx = (bidx + capb - ((k as usize) << 3)) & self.byte_mask;
-                let byte = self.byte_ring[idx] as usize;
-                sum += phase_lut[g + k][byte];
+                let idx = (bidx + capb - ((k as usize) << 3)) & mask;
+                let byte = unsafe { *self.byte_ring.get_unchecked(idx) } as usize;
+                unsafe { sum += *phase_lut.get_unchecked(g + k).get_unchecked(byte); }
                 k += 1;
             }
             // Advance bidx by the number of groups processed in this chunk
-            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & self.byte_mask;
+            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & mask;
             g += this_chunk;
         }
         sum
@@ -1361,32 +1364,35 @@ impl Stage1Poly {
         }
         let mut bidx = (self.wbyte + self.byte_mask) & self.byte_mask; // newest byte
         let capb = self.byte_mask + 1;
+        let mask = self.byte_mask;
         let mut g = 0usize;
         while g < total_groups {
             let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
             let mut k = 0usize;
             while k + 4 <= this_chunk {
-                let idx0 = (bidx + capb - ((k as usize) << 3)) & self.byte_mask;
-                let idx1 = (idx0 + capb - 8) & self.byte_mask;
-                let idx2 = (idx1 + capb - 8) & self.byte_mask;
-                let idx3 = (idx2 + capb - 8) & self.byte_mask;
-                let b0 = self.byte_ring[idx0] as usize;
-                let b1 = self.byte_ring[idx1] as usize;
-                let b2 = self.byte_ring[idx2] as usize;
-                let b3 = self.byte_ring[idx3] as usize;
-                sum += phase_lut[g + k][b0] as f64;
-                sum += phase_lut[g + k + 1][b1] as f64;
-                sum += phase_lut[g + k + 2][b2] as f64;
-                sum += phase_lut[g + k + 3][b3] as f64;
+                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
+                let idx1 = (idx0 + capb - 8) & mask;
+                let idx2 = (idx1 + capb - 8) & mask;
+                let idx3 = (idx2 + capb - 8) & mask;
+                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
+                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
+                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
+                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
+                unsafe {
+                    sum += *phase_lut.get_unchecked(g + k).get_unchecked(b0) as f64;
+                    sum += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1) as f64;
+                    sum += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2) as f64;
+                    sum += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3) as f64;
+                }
                 k += 4;
             }
             while k < this_chunk {
-                let idx = (bidx + capb - ((k as usize) << 3)) & self.byte_mask;
-                let byte = self.byte_ring[idx] as usize;
-                sum += phase_lut[g + k][byte] as f64;
+                let idx = (bidx + capb - ((k as usize) << 3)) & mask;
+                let byte = unsafe { *self.byte_ring.get_unchecked(idx) } as usize;
+                unsafe { sum += *phase_lut.get_unchecked(g + k).get_unchecked(byte) as f64; }
                 k += 1;
             }
-            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & self.byte_mask;
+            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & mask;
             g += this_chunk;
         }
         sum
@@ -1406,7 +1412,7 @@ impl Stage1Poly {
         for &c in taps {
             let word = idx >> 6;
             let bit = idx & 63;
-            let one = (self.ring_bits[word] >> bit) & 1;
+            let one = unsafe { (*self.ring_bits.get_unchecked(word) >> bit) & 1 };
             let sign = if one == 1 { 1.0 } else { -1.0 };
             sum += c * sign;
             idx = (idx + capb - 1) & self.bits_mask; // move to older bit
