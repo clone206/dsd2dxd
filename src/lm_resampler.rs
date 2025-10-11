@@ -3,14 +3,14 @@ enum Stage1Mode {
     SlotSim,
     Accum,
 }
+use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
 use crate::filters::HTAPS_288K_3TO1_EQ;
 use crate::filters::HTAPS_2MHZ_7TO1_EQ;
-use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
-use crate::filters::HTAPS_DSDX10_21TO1_EQ;
-use crate::filters::HTAPS_DDRX10_21TO1_EQ;
-use crate::filters::HTAPS_DSDX5_7TO1_EQ;
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
+use crate::filters::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
+use crate::filters::HTAPS_DSDX10_21TO1_EQ;
+use crate::filters::HTAPS_DSDX5_7TO1_EQ;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -242,8 +242,8 @@ pub struct LMResampler {
 }
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
-    let s1_cap = S1TMP_CAP;
-    let s2_cap = S2TMP_CAP;
+        let s1_cap = S1TMP_CAP;
+        let s2_cap = S2TMP_CAP;
         // Build ring buffers
         let s1_rb = HeapRb::<f64>::new(s1_cap.max(2));
         let (s1_prod, s1_cons) = s1_rb.split();
@@ -252,14 +252,19 @@ impl LMResampler {
         match m {
             294 => {
                 // Original cascade Stage1 definitions
-                let s1 = Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14);
-                let s = Self {
+                if verbose {
+                    eprintln!(
+                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
+                            l
+                        );
+                }
+                return Self {
                     // Stage 2 (decimator by 7)
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
                     // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
                     two_phase_lm147_384: None,
-                    stage1_poly: Some(s1),
+                    stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14)),
                     s1_prod,
                     s1_cons,
                     s2_prod,
@@ -267,17 +272,6 @@ impl LMResampler {
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
                 };
-                if verbose {
-                    eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
-                            l
-                        );
-                    eprintln!(
-                        "[DBG] LM ring caps: s1_tmp_cap={} , s2_tmp_cap={}",
-                        s1_cap, s2_cap
-                    );
-                }
-                s
             }
             147 => {
                 // DSD128 -> 384k two‑phase path (×10 -> /21 -> /7) DEFAULT for L=10
@@ -319,32 +313,19 @@ impl LMResampler {
                     };
                 }
 
-                // (Existing selection logic unchanged, just swap Stage2/3 construction)
-                let (stage1_half, right2, right3, label) = if l == 5 && out_rate == 96_000 {
-                    (
-                        &HTAPS_DSDX5_7TO1_EQ[..],
-                        &HTAPS_2MHZ_7TO1_EQ[..],
-                        &HTAPS_288K_3TO1_EQ[..],
-                        "96k (DSD×5, 2MHz, 288k)",
-                    )
-                } else {
-                    panic!("Unsupported L={} M=147 out_rate={} for Stage1/2/3 selection", l, out_rate);
-                };
-
                 if verbose {
                     eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} [Stage2/3 direct].",
-                            l, label
+                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) [Stage2/3 direct] => 96K",
+                            l
                         );
                 }
-                let s1 = Stage1Poly::new(stage1_half, l, 7);
-                let me = Self {
+                return Self {
+                    stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX5_7TO1_EQ[..], l, 7)),
                     // Stage 2 (decimator by 7)
-                    poly2: Some(DecimFIRSym::new_from_half(right2, 7)),
+                    poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ[..], 7)),
                     // Stage 3 (decimator by 3)
-                    poly3: Some(DecimFIRSym::new_from_half(right3, 3)),
+                    poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ[..], 3)),
                     two_phase_lm147_384: None,
-                    stage1_poly: Some(s1),
                     s1_prod,
                     s1_cons,
                     s2_prod,
@@ -352,13 +333,6 @@ impl LMResampler {
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
                 };
-                if verbose {
-                    eprintln!(
-                        "[DBG] LM ring caps: s1_tmp_cap={} , s2_tmp_cap={}",
-                        s1_cap, s2_cap
-                    );
-                }
-                return me;
             }
             _ => panic!("Unsupported L/M combination: L={} M={}", l, m),
         }
@@ -518,7 +492,7 @@ struct TwoPhaseLM147 {
 
 impl TwoPhaseLM147 {
     fn new(l: u32, out_rate: u32) -> Self {
-    let rb = HeapRb::<f64>::new(S1TMP_CAP.max(2));
+        let rb = HeapRb::<f64>::new(S1TMP_CAP.max(2));
         let (s1_prod, s1_cons) = rb.split();
         // Select tap sets based on target output rate
         //  - 384k: use DDRX10_21TO1 first stage and 2.68MHz /7 second stage
@@ -664,8 +638,9 @@ impl Stage1Poly {
         let max_len = ((n as usize) + l as usize - 1) / l as usize;
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
-        // Always use f64 LUTs
-        let lut_f64: Option<Arc<Vec<Vec<[f64; 256]>>>> = Some(get_or_build_stage1_lut(right_half, l));
+                                                                    // Always use f64 LUTs
+        let lut_f64: Option<Arc<Vec<Vec<[f64; 256]>>>> =
+            Some(get_or_build_stage1_lut(right_half, l));
         // Determine maximum groups across phases to size the byte ring
         let mut groups_max = 0usize;
         if let Some(ref tbl) = lut_f64 {
@@ -783,7 +758,7 @@ impl Stage1Poly {
 
     #[inline]
     fn sim_high_slot<F: FnMut(f64)>(&mut self, emit: &mut F) {
-    let idx_high = self.high_index;
+        let idx_high = self.high_index;
         self.high_index += 1;
         if !self.primed {
             if idx_high >= self.delay_high {
@@ -798,10 +773,10 @@ impl Stage1Poly {
         }
         self.phase1 = 0;
         let phase = (idx_high % self.l as u64) as usize;
-    let tbl = self.lut_f64.as_ref().unwrap();
-    // Use chunked summation with baked chunk size
-    let chunk = compute_stage1_chunk(tbl[phase].len(), self.m as usize, self.l);
-    let sum = self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
+        let tbl = self.lut_f64.as_ref().unwrap();
+        // Use chunked summation with baked chunk size
+        let chunk = compute_stage1_chunk(tbl[phase].len(), self.m as usize, self.l);
+        let sum = self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
         emit(sum);
     }
 
@@ -831,13 +806,10 @@ impl Stage1Poly {
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
     }
-}
 
-impl Stage1Poly {
     // Sum all phase groups using the bit-packed ring and per-group LUTs, but
     // process groups in chunks of up to `chunk_bytes` to reduce loop overhead
-    // and improve locality of byte extraction. Behavior is identical to the
-    // simple per-group loop.
+    // and improve locality of byte extraction.
     #[inline]
     fn sum_phase_groups_chunked(&self, phase_lut: &[[f64; 256]], chunk_bytes: usize) -> f64 {
         let mut sum = 0.0;
@@ -917,7 +889,9 @@ impl Stage1Poly {
             while k < this_chunk {
                 let idx = (bidx + capb - ((k as usize) << 3)) & mask;
                 let byte = unsafe { *self.byte_ring.get_unchecked(idx) } as usize;
-                unsafe { sum += *phase_lut.get_unchecked(g + k).get_unchecked(byte); }
+                unsafe {
+                    sum += *phase_lut.get_unchecked(g + k).get_unchecked(byte);
+                }
                 k += 1;
             }
             // Advance bidx by the number of groups processed in this chunk
@@ -942,13 +916,13 @@ struct DecimFIRSym {
     _len: usize,
     _half: usize,
     _has_center: bool,
-    center: usize,         // (len-1)/2, used for initial output schedule
-    decim: usize,          // decimation factor D
+    center: usize, // (len-1)/2, used for initial output schedule
+    decim: usize,  // decimation factor D
     ring: Vec<f64>,
     mask: usize,
-    w: usize,             // next write index
-    count: usize,         // total samples seen
-    next_out_t: usize,    // next t index at which an output is due
+    w: usize,          // next write index
+    count: usize,      // total samples seen
+    next_out_t: usize, // next t index at which an output is due
 }
 
 impl DecimFIRSym {
@@ -963,7 +937,7 @@ impl DecimFIRSym {
         // Ring capacity: next power of two >= len + decim (margin)
         let cap = (len + decim).next_power_of_two();
         // No polyphase decomposition: direct symmetric convolution
-        let me = Self {
+        return Self {
             _full: full,
             _len: len,
             _half: half,
@@ -976,7 +950,6 @@ impl DecimFIRSym {
             count: 0,
             next_out_t: center,
         };
-        me
     }
 
     // Removed legacy per-sample push(); use process_block for efficiency
@@ -1009,9 +982,7 @@ impl DecimFIRSym {
         produced
     }
 
-    // ----- Convolution implementations -----
-
-    // Direct full-rate symmetric FIR convolution (no polyphase decomposition).
+    // Direct full-rate symmetric FIR convolution
     // Evaluates y[t] = sum_{k=0..len-1} h[k] * x[t - k] when push() determines an output is due.
     #[inline(always)]
     unsafe fn convolve_direct(&self) -> f64 {
@@ -1027,7 +998,7 @@ impl DecimFIRSym {
         let center = self.center;
 
         // Indices for front (newest side) and back (oldest side)
-        let mut idx_front = newest;                              // x[t - 0]
+        let mut idx_front = newest; // x[t - 0]
         let mut idx_back = (newest + cap - (len - 1)) & self.mask; // x[t - (len-1)]
 
         let mut k = 0usize;
@@ -1038,7 +1009,7 @@ impl DecimFIRSym {
             total += c * (xf + xb);
             // advance indices
             idx_front = (idx_front + cap - 1) & self.mask; // older by 1
-            idx_back = (idx_back + 1) & self.mask;         // newer by 1
+            idx_back = (idx_back + 1) & self.mask; // newer by 1
             k += 1;
         }
 
