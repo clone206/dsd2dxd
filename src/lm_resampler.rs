@@ -21,7 +21,7 @@ use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 // no extra traits needed
-use ringbuf::{traits::*, HeapRb, HeapCons, HeapProd};
+use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
 
 // Global LUT cache for Stage1, shared across instances/channels.
 // Keyed by (L, len(right_half), hash(contents of right_half)) to avoid rebuilding.
@@ -360,7 +360,9 @@ fn build_stage1_lut_from_right_half_f32(right_half: &[f64], l: u32) -> Vec<Vec<[
             let mut coeffs: [f64; 8] = [0.0; 8];
             for j in 0..8 {
                 let idx = base + j;
-                if idx < n { coeffs[j] = taps[idx]; }
+                if idx < n {
+                    coeffs[j] = taps[idx];
+                }
             }
             let mut group_lut = [0.0f32; 256];
             for b in 0u16..256u16 {
@@ -379,9 +381,15 @@ fn build_stage1_lut_from_right_half_f32(right_half: &[f64], l: u32) -> Vec<Vec<[
 }
 
 fn get_or_build_stage1_lut_f32(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f32; 256]>>> {
-    let key = Stage1LutKey { l, n: right_half.len() as u32, hash: hash_f64_slice_fnv1a(right_half) };
+    let key = Stage1LutKey {
+        l,
+        n: right_half.len() as u32,
+        hash: hash_f64_slice_fnv1a(right_half),
+    };
     let cache = STAGE1_LUT_CACHE_F32.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(found) = cache.lock().unwrap().get(&key) { return found.clone(); }
+    if let Some(found) = cache.lock().unwrap().get(&key) {
+        return found.clone();
+    }
     let lut = build_stage1_lut_from_right_half_f32(right_half, l);
     let arc = Arc::new(lut);
     cache.lock().unwrap().insert(key, arc.clone());
@@ -426,6 +434,8 @@ pub struct LMResampler {
     s2_prod: HeapProd<f64>,
     s2_cons: HeapCons<f64>,
     s2_scratch: Vec<f64>,
+    // Reusable buffer for batching Stage1 outputs before pushing to s1 ring
+    s1_scratch: Vec<f64>,
 }
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
@@ -454,6 +464,7 @@ impl LMResampler {
                     s2_prod,
                     s2_cons,
                     s2_scratch: Vec::new(),
+                    s1_scratch: Vec::new(),
                 };
                 if verbose {
                     eprintln!(
@@ -484,6 +495,7 @@ impl LMResampler {
                         s2_prod,
                         s2_cons,
                         s2_scratch: Vec::new(),
+                        s1_scratch: Vec::new(),
                     };
                 }
 
@@ -555,6 +567,7 @@ impl LMResampler {
                     s2_prod,
                     s2_cons,
                     s2_scratch: Vec::new(),
+                    s1_scratch: Vec::new(),
                 };
                 if verbose {
                     eprintln!(
@@ -618,122 +631,117 @@ impl LMResampler {
         let mut produced_total = 0usize;
         let mut i = 0usize;
 
-        // helper to drain Stage3 (s2 -> out), ensuring out capacity
+        // Drain Stage3 (s2 -> out) as much as fits into out
         let drain_stage3 = |p3: &mut DecimFIRSym, out: &mut [f64], produced: &mut usize| {
             while !self.s2_cons.is_empty() && *produced < out.len() {
                 let max_in = (out.len() - *produced) * p3.decim;
+                if max_in == 0 {
+                    break;
+                }
                 let (s2a, _s2b) = self.s2_cons.as_slices();
-                if s2a.is_empty() { break; }
+                if s2a.is_empty() {
+                    break;
+                }
                 let take = core::cmp::min(s2a.len(), max_in);
-                if take == 0 { break; }
                 let n3 = p3.process_block(&s2a[..take], &mut out[*produced..]);
-                unsafe { self.s2_cons.advance_read_index(take); }
+                unsafe {
+                    self.s2_cons.advance_read_index(take);
+                }
                 *produced += n3;
-                if *produced >= out.len() { break; }
+                if n3 == 0 {
+                    break;
+                }
             }
         };
 
-        while (i < bytes.len()) || (!self.s1_cons.is_empty()) || (!self.s2_cons.is_empty()) {
-            if produced_total >= out.len() && i >= bytes.len() { break; }
+        // Move as much as possible from s1 -> s2 given current vacancies
+        let mut bridge_s1_to_s2 = |p2: &mut DecimFIRSym| loop {
+            if self.s1_cons.is_empty() {
+                break;
+            }
+            let (vac_a, _vac_b) = self.s2_prod.vacant_slices();
+            let first_run = vac_a.len();
+            if first_run == 0 {
+                break;
+            }
+            let (in1a, _in1b) = self.s1_cons.as_slices();
+            if in1a.is_empty() {
+                break;
+            }
+            let max_in_for_out2 = first_run.saturating_mul(p2.decim);
+            let take_in = core::cmp::min(in1a.len(), max_in_for_out2);
+            if take_in == 0 {
+                break;
+            }
+            if self.s2_scratch.len() < first_run {
+                self.s2_scratch.resize(first_run, 0.0);
+            }
+            let n2 = p2.process_block(&in1a[..take_in], &mut self.s2_scratch[..first_run]);
+            unsafe {
+                self.s1_cons.advance_read_index(take_in);
+            }
+            if n2 > 0 {
+                let wrote = self.s2_prod.push_slice(&self.s2_scratch[..n2]);
+                debug_assert_eq!(wrote, n2);
+            }
+            if n2 == 0 {
+                break;
+            }
+        };
 
-            // Stage 1: write bytes into s1 ring as space allows, with backpressure to avoid drops
+        while i < bytes.len() || !self.s1_cons.is_empty() || !self.s2_cons.is_empty() {
+            if produced_total >= out.len() && i >= bytes.len() {
+                break;
+            }
+
+            // Fill Stage1 ring in batches bounded by ring vacancy and worst-case outputs/byte
             if i < bytes.len() {
-                let free = self.s1_prod.vacant_len();
-                let max_bytes = free / y1_per_byte_ub;
-                if max_bytes == 0 {
-                    // Try to free downstream space
+                let mut free = self.s1_prod.vacant_len();
+                if free < y1_per_byte_ub {
+                    // Free downstream and retry
+                    bridge_s1_to_s2(p2);
                     drain_stage3(p3, out, &mut produced_total);
-                } else {
+                    free = self.s1_prod.vacant_len();
+                }
+                let max_bytes = free / y1_per_byte_ub;
+                if max_bytes > 0 {
                     let take = core::cmp::min(max_bytes, bytes.len() - i);
-                    // Helper to write a Stage1 output sample ensuring no drops
-                    let mut write_s1 = |y1: f64| {
-                        // Try to write, if full then drain downstream and retry
-                        if self.s1_prod.try_push(y1).is_err() {
-                            // Move some from s1 -> s2 using available contiguous writable space
-                            let (in1a, _in1b) = self.s1_cons.as_slices();
-                            if !in1a.is_empty() {
-                                // Bound the write to the first vacant run to avoid wrap interactions
-                                let (vac_a, _vac_b) = self.s2_prod.vacant_slices();
-                                let first_run = vac_a.len();
-                                if first_run > 0 {
-                                    let max_in_for_out2 = first_run.saturating_mul(p2.decim);
-                                    let take_in = core::cmp::min(in1a.len(), max_in_for_out2);
-                                    if take_in > 0 {
-                                        // Produce into a small temp buffer limited to first_run, then push_slice
-                                        if self.s2_scratch.len() < first_run {
-                                            self.s2_scratch.resize(first_run, 0.0);
-                                        }
-                                        let n2 = p2.process_block(&in1a[..take_in], &mut self.s2_scratch[..first_run]);
-                                        unsafe { self.s1_cons.advance_read_index(take_in); }
-                                        if n2 > 0 {
-                                            let wrote = self.s2_prod.push_slice(&self.s2_scratch[..n2]);
-                                            debug_assert_eq!(wrote, n2);
-                                        }
-                                    }
-                                }
-                            }
-                            // Drain s2 -> out to free additional space
-                            drain_stage3(p3, out, &mut produced_total);
-                            // Retry once
-                            let _ = self.s1_prod.try_push(y1);
-                        }
-                    };
+                    // Generate Stage1 outputs for this chunk into s1_scratch
+                    self.s1_scratch.clear();
+                    let target_cap = take.saturating_mul(y1_per_byte_ub);
+                    if self.s1_scratch.capacity() < target_cap {
+                        self.s1_scratch
+                            .reserve(target_cap - self.s1_scratch.capacity());
+                    }
                     for &byte in &bytes[i..i + take] {
                         if lsb_first {
                             for b in 0..8 {
                                 let bit = (byte >> b) & 1;
-                                s1.push_all(bit, |y1| write_s1(y1));
+                                s1.push_all(bit, |y1| self.s1_scratch.push(y1));
                             }
                         } else {
                             for b in (0..8).rev() {
                                 let bit = (byte >> b) & 1;
-                                s1.push_all(bit, |y1| write_s1(y1));
+                                s1.push_all(bit, |y1| self.s1_scratch.push(y1));
                             }
                         }
                     }
+                    // Push all generated y1 in one go (fits by construction)
+                    let wrote = self.s1_prod.push_slice(&self.s1_scratch);
+                    debug_assert_eq!(wrote, self.s1_scratch.len());
                     i += take;
                 }
             }
 
-            // Stage 2: move from s1 ring to s2 ring; bound input by the contiguous writable chunk
-            loop {
-                if self.s1_cons.is_empty() { break; }
-                if self.s2_prod.vacant_len() == 0 {
-                    if produced_total < out.len() {
-                        drain_stage3(p3, out, &mut produced_total);
-                        if self.s2_prod.vacant_len() == 0 { break; }
-                    } else {
-                        break;
-                    }
-                }
-                let (in1a, _in1b) = self.s1_cons.as_slices();
-                if in1a.is_empty() { break; }
-                // Bound to first vacant run to reduce wrap interaction
-                let (vac_a, _vac_b) = self.s2_prod.vacant_slices();
-                let first_run = vac_a.len();
-                if first_run == 0 { break; }
-                let max_in_for_out2 = first_run.saturating_mul(p2.decim);
-                let take_in = core::cmp::min(in1a.len(), max_in_for_out2);
-                if take_in == 0 { break; }
-                if self.s2_scratch.len() < first_run {
-                    self.s2_scratch.resize(first_run, 0.0);
-                }
-                let n2 = p2.process_block(&in1a[..take_in], &mut self.s2_scratch[..first_run]);
-                unsafe { self.s1_cons.advance_read_index(take_in); }
-                if n2 > 0 {
-                    let wrote = self.s2_prod.push_slice(&self.s2_scratch[..n2]);
-                    debug_assert_eq!(wrote, n2);
-                }
-            }
-
-            // Stage 3: drain to out
+            // Bridge s1 -> s2 as far as possible, then drain s2 -> out
+            bridge_s1_to_s2(p2);
             if produced_total < out.len() {
                 drain_stage3(p3, out, &mut produced_total);
-            } else if i >= bytes.len() && self.s1_cons.is_empty() {
-                break;
             }
 
-            if i >= bytes.len() && self.s1_cons.is_empty() && self.s2_cons.is_empty() { break; }
+            if i >= bytes.len() && self.s1_cons.is_empty() && self.s2_cons.is_empty() {
+                break;
+            }
         }
         produced_total
     }
@@ -774,7 +782,9 @@ impl TwoPhaseLM147_384 {
         let mut produced_total = 0usize;
         let mut i = 0usize;
         while (i < bytes.len()) || (!self.s1_cons.is_empty()) {
-            if produced_total >= out.len() && i >= bytes.len() { break; }
+            if produced_total >= out.len() && i >= bytes.len() {
+                break;
+            }
 
             // Fill stage1 ring (with backpressure)
             if i < bytes.len() {
@@ -785,13 +795,19 @@ impl TwoPhaseLM147_384 {
                     let mut write_s1 = |y1: f64| {
                         if self.s1_prod.try_push(y1).is_err() {
                             // Free space by draining into out via stage2
-                            let max_in = (out.len() - produced_total).saturating_mul(self.stage2.decim);
+                            let max_in =
+                                (out.len() - produced_total).saturating_mul(self.stage2.decim);
                             if max_in > 0 {
                                 let (in1a, _in1b) = self.s1_cons.as_slices();
                                 if !in1a.is_empty() {
                                     let take_in = core::cmp::min(in1a.len(), max_in);
-                                    let n = self.stage2.process_block(&in1a[..take_in], &mut out[produced_total..]);
-                                    unsafe { self.s1_cons.advance_read_index(take_in); }
+                                    let n = self.stage2.process_block(
+                                        &in1a[..take_in],
+                                        &mut out[produced_total..],
+                                    );
+                                    unsafe {
+                                        self.s1_cons.advance_read_index(take_in);
+                                    }
                                     produced_total += n;
                                 }
                             }
@@ -822,8 +838,12 @@ impl TwoPhaseLM147_384 {
                 let (in1a, _in1b) = self.s1_cons.as_slices();
                 if !in1a.is_empty() {
                     let take_in = core::cmp::min(in1a.len(), max_in);
-                    let n = self.stage2.process_block(&in1a[..take_in], &mut out[produced_total..]);
-                    unsafe { self.s1_cons.advance_read_index(take_in); }
+                    let n = self
+                        .stage2
+                        .process_block(&in1a[..take_in], &mut out[produced_total..]);
+                    unsafe {
+                        self.s1_cons.advance_read_index(take_in);
+                    }
                     produced_total += n;
                 } else if i >= bytes.len() {
                     break;
@@ -837,7 +857,11 @@ impl TwoPhaseLM147_384 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum S1EvalMode { Direct, LutF64, LutF32 }
+enum S1EvalMode {
+    Direct,
+    LutF64,
+    LutF32,
+}
 
 #[derive(Debug)]
 struct Stage1Poly {
@@ -888,22 +912,38 @@ impl Stage1Poly {
         let use_lut = stage1_use_lut();
         let phase_taps = build_stage1_phases_from_right_half(right_half, l);
         let (lut_f64, lut_f32, s1_mode): (
-            Option<Arc<Vec<Vec<[f64;256]>>>>,
-            Option<Arc<Vec<Vec<[f32;256]>>>>,
+            Option<Arc<Vec<Vec<[f64; 256]>>>>,
+            Option<Arc<Vec<Vec<[f32; 256]>>>>,
             S1EvalMode,
         ) = if use_lut {
             if use_f32 {
-                (None, Some(get_or_build_stage1_lut_f32(right_half, l)), S1EvalMode::LutF32)
+                (
+                    None,
+                    Some(get_or_build_stage1_lut_f32(right_half, l)),
+                    S1EvalMode::LutF32,
+                )
             } else {
-                (Some(get_or_build_stage1_lut(right_half, l)), None, S1EvalMode::LutF64)
+                (
+                    Some(get_or_build_stage1_lut(right_half, l)),
+                    None,
+                    S1EvalMode::LutF64,
+                )
             }
         } else {
             (None, None, S1EvalMode::Direct)
         };
         // Determine maximum groups across phases to size the byte ring
         let mut groups_max = 0usize;
-        if let Some(ref tbl) = lut_f64 { for phase in tbl.iter() { groups_max = groups_max.max(phase.len()); } }
-        if let Some(ref tbl) = lut_f32 { for phase in tbl.iter() { groups_max = groups_max.max(phase.len()); } }
+        if let Some(ref tbl) = lut_f64 {
+            for phase in tbl.iter() {
+                groups_max = groups_max.max(phase.len());
+            }
+        }
+        if let Some(ref tbl) = lut_f32 {
+            for phase in tbl.iter() {
+                groups_max = groups_max.max(phase.len());
+            }
+        }
         let byte_cap = (groups_max + 16).next_power_of_two().max(32);
         let me = Self {
             l,
@@ -949,18 +989,42 @@ impl Stage1Poly {
         {
             // Report groups/phase range and effective chunk + threading summary
             let (min_g, max_g) = if let Some(ref tbl) = me.lut_f64 {
-                if tbl.is_empty() { (0, 0) } else {
-                    let mut min_g = usize::MAX; let mut max_g = 0usize;
-                    for phase in tbl.iter() { let g = phase.len(); if g < min_g { min_g = g; } if g > max_g { max_g = g; } }
+                if tbl.is_empty() {
+                    (0, 0)
+                } else {
+                    let mut min_g = usize::MAX;
+                    let mut max_g = 0usize;
+                    for phase in tbl.iter() {
+                        let g = phase.len();
+                        if g < min_g {
+                            min_g = g;
+                        }
+                        if g > max_g {
+                            max_g = g;
+                        }
+                    }
                     (min_g, max_g)
                 }
             } else if let Some(ref tbl) = me.lut_f32 {
-                if tbl.is_empty() { (0, 0) } else {
-                    let mut min_g = usize::MAX; let mut max_g = 0usize;
-                    for phase in tbl.iter() { let g = phase.len(); if g < min_g { min_g = g; } if g > max_g { max_g = g; } }
+                if tbl.is_empty() {
+                    (0, 0)
+                } else {
+                    let mut min_g = usize::MAX;
+                    let mut max_g = 0usize;
+                    for phase in tbl.iter() {
+                        let g = phase.len();
+                        if g < min_g {
+                            min_g = g;
+                        }
+                        if g > max_g {
+                            max_g = g;
+                        }
+                    }
                     (min_g, max_g)
                 }
-            } else { (0, 0) };
+            } else {
+                (0, 0)
+            };
             let (st1_mult, st1_align, st1_target) = get_stage1_chunk_params();
             let example_groups = max_g;
             let chunk_eff = if example_groups > 0 {
@@ -992,7 +1056,11 @@ impl Stage1Poly {
             } else {
                 par_max.to_string()
             };
-            let mode = match s1_mode { S1EvalMode::Direct => "direct", S1EvalMode::LutF64 => "lut(f64)", S1EvalMode::LutF32 => "lut(f32)" };
+            let mode = match s1_mode {
+                S1EvalMode::Direct => "direct",
+                S1EvalMode::LutF64 => "lut(f64)",
+                S1EvalMode::LutF32 => "lut(f32)",
+            };
             eprintln!(
                 "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
                 l, m, min_g, max_g, chunk_eff, mode, st1_mult, st1_target, st1_align
@@ -1024,24 +1092,9 @@ impl Stage1Poly {
 
     // reverse8 was removed; not needed by the newest-first byte extractor.
 
-    // Build a byte from 8 consecutive bits ending at start_idx in newest-first order.
-    // Bit k corresponds to the sign at (start_idx - k) modulo ring capacity.
-    #[inline]
-    fn byte_from_bits_newest_first(&self, start_idx: usize) -> u8 {
-        let mut b: u8 = 0;
-        let mut idx = start_idx;
-        for k in 0..8u8 {
-            let word = idx >> 6;
-            let bit = idx & 63;
-            let one = ((self.ring_bits[word] >> bit) & 1) as u8;
-            b |= one << k; // bit k is the sample at (start_idx - k)
-                           // subtract 1 modulo capacity: (idx - 1) & mask == (idx + mask) & mask
-            idx = (idx + self.bits_mask) & self.bits_mask;
-        }
-        b
-    }
+    // Note: legacy byte extraction helpers removed (unused).
 
-    #[inline]
+    #[inline(always)]
     fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
         match self.mode {
             Stage1Mode::Accum => {
@@ -1133,7 +1186,6 @@ impl Stage1Poly {
     // and improve locality of byte extraction. Behavior is identical to the
     // simple per-group loop.
     #[inline]
-    #[inline]
     fn sum_phase_groups_chunked(&self, phase_lut: &[[f64; 256]], chunk_bytes: usize) -> f64 {
         let mut sum = 0.0;
         let total_groups = phase_lut.len();
@@ -1176,23 +1228,7 @@ impl Stage1Poly {
         sum
     }
 
-    #[inline]
-    fn byte_from_bits_newest_first_static(
-        ring_bits: &[u64],
-        bits_mask: usize,
-        start_idx: usize,
-    ) -> u8 {
-        let mut b: u8 = 0;
-        let mut idx = start_idx;
-        for k in 0..8u8 {
-            let word = idx >> 6;
-            let bit = idx & 63;
-            let one = ((ring_bits[word] >> bit) & 1) as u8;
-            b |= one << k;
-            idx = (idx + bits_mask) & bits_mask;
-        }
-        b
-    }
+    // Note: legacy static byte extractor removed (unused).
 
     #[inline]
     fn get_stage1_parallel_params() -> (usize, usize) {
@@ -1231,8 +1267,8 @@ impl Stage1Poly {
         }
 
         let threads = threads.min(total_groups).max(1);
-    let capb = self.byte_mask + 1;
-    let bidx_base = (self.wbyte + self.byte_mask) & self.byte_mask; // index of newest byte (time t)
+        let capb = self.byte_mask + 1;
+        let bidx_base = (self.wbyte + self.byte_mask) & self.byte_mask; // index of newest byte (time t)
         let byte_ring = &self.byte_ring;
         let byte_mask = self.byte_mask;
 
@@ -1264,15 +1300,21 @@ impl Stage1Poly {
 
     fn sum_phase_groups_threaded_f32(&self, phase_lut: &[[f32; 256]]) -> f64 {
         let total_groups = phase_lut.len();
-        if total_groups == 0 { return 0.0; }
+        if total_groups == 0 {
+            return 0.0;
+        }
         let (mut threads, min_groups) = Self::get_stage1_parallel_params();
         let auto = *ST1_PAR_AUTO.get_or_init(|| {
-            env::var("DSD2DXD_STAGE1_PAR_AUTO").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+            env::var("DSD2DXD_STAGE1_PAR_AUTO")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
         });
         let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
 
         if threads == 0 && auto {
-            let hw = thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+            let hw = thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1);
             threads = total_groups.min(hw).min(par_max).max(1);
         }
         if threads == 0 || total_groups < min_groups {
@@ -1291,7 +1333,9 @@ impl Stage1Poly {
             for (ti, part) in partials.iter_mut().enumerate() {
                 let start = (ti * total_groups) / threads;
                 let end = ((ti + 1) * total_groups) / threads;
-                if start >= end { continue; }
+                if start >= end {
+                    continue;
+                }
                 let phase_lut_ref = phase_lut;
                 scope.spawn(move || {
                     let mut sum = 0.0f64;
@@ -1312,7 +1356,9 @@ impl Stage1Poly {
     fn sum_phase_groups_chunked_f32(&self, phase_lut: &[[f32; 256]], chunk_bytes: usize) -> f64 {
         let mut sum = 0.0f64;
         let total_groups = phase_lut.len();
-        if total_groups == 0 { return 0.0; }
+        if total_groups == 0 {
+            return 0.0;
+        }
         let mut bidx = (self.wbyte + self.byte_mask) & self.byte_mask; // newest byte
         let capb = self.byte_mask + 1;
         let mut g = 0usize;
@@ -1450,7 +1496,7 @@ impl DecimFIRSym {
 
     // Block processing: feed a slice of inputs and write produced outputs into `out`.
     // Returns number of output samples written.
-    #[inline]
+    #[inline(always)]
     fn process_block(&mut self, input: &[f64], out: &mut [f64]) -> usize {
         let mut produced = 0usize;
         for &x in input {
