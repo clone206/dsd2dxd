@@ -572,7 +572,7 @@ impl LMResampler {
 
     // Block-style processing to reduce per-byte call overhead.
     // Returns number of PCM frames produced into `out`.
-    #[inline]
+    #[inline(always)]
     pub fn process_bytes_lm(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
         // Two-phase path delegates to specialized helper
         if let Some(tp) = self.two_phase_lm147_384.as_mut() {
@@ -836,6 +836,9 @@ impl TwoPhaseLM147_384 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum S1EvalMode { Direct, LutF64, LutF32 }
+
 #[derive(Debug)]
 struct Stage1Poly {
     // Shared
@@ -850,6 +853,8 @@ struct Stage1Poly {
     // Precomputed LUTs (chosen precision): f64 by default, or f32 when enabled
     lut_f64: Option<Arc<Vec<Vec<[f64; 256]>>>>,
     lut_f32: Option<Arc<Vec<Vec<[f32; 256]>>>>,
+    // Pre-dispatched evaluation mode to avoid repeated env/lookups per output
+    s1_mode: S1EvalMode,
     // Direct evaluation taps per phase (same order as LUT grouping, newest-first)
     phase_taps: Vec<Vec<f64>>,
     // Byte-oriented ring mirroring newest-first 8-bit windows per input bit
@@ -880,11 +885,20 @@ impl Stage1Poly {
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
         let use_f32 = *ST1_LUT_F32.get_or_init(|| env_bool("DSD2DXD_STAGE1_LUT_F32", false));
+        let use_lut = stage1_use_lut();
         let phase_taps = build_stage1_phases_from_right_half(right_half, l);
-        let (lut_f64, lut_f32): (Option<Arc<Vec<Vec<[f64;256]>>>>, Option<Arc<Vec<Vec<[f32;256]>>>>) = if use_f32 {
-            (None, Some(get_or_build_stage1_lut_f32(right_half, l)))
+        let (lut_f64, lut_f32, s1_mode): (
+            Option<Arc<Vec<Vec<[f64;256]>>>>,
+            Option<Arc<Vec<Vec<[f32;256]>>>>,
+            S1EvalMode,
+        ) = if use_lut {
+            if use_f32 {
+                (None, Some(get_or_build_stage1_lut_f32(right_half, l)), S1EvalMode::LutF32)
+            } else {
+                (Some(get_or_build_stage1_lut(right_half, l)), None, S1EvalMode::LutF64)
+            }
         } else {
-            (Some(get_or_build_stage1_lut(right_half, l)), None)
+            (None, None, S1EvalMode::Direct)
         };
         // Determine maximum groups across phases to size the byte ring
         let mut groups_max = 0usize;
@@ -907,6 +921,7 @@ impl Stage1Poly {
             phase1: 0,
             lut_f64,
             lut_f32,
+            s1_mode,
             phase_taps,
             byte_ring: vec![0u8; byte_cap],
             byte_mask: byte_cap - 1,
@@ -977,7 +992,7 @@ impl Stage1Poly {
             } else {
                 par_max.to_string()
             };
-            let mode = if stage1_use_lut() { if use_f32 { "lut(f32)" } else { "lut(f64)" } } else { "direct" };
+            let mode = match s1_mode { S1EvalMode::Direct => "direct", S1EvalMode::LutF64 => "lut(f64)", S1EvalMode::LutF32 => "lut(f32)" };
             eprintln!(
                 "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
                 l, m, min_g, max_g, chunk_eff, mode, st1_mult, st1_target, st1_align
@@ -1059,17 +1074,18 @@ impl Stage1Poly {
         }
         self.phase1 = 0;
         let phase = (idx_high % self.l as u64) as usize;
-        // Compute using LUT or direct taps based on env toggle
-        let sum = if stage1_use_lut() {
-            if let Some(ref tbl) = self.lut_f64 {
+        // Compute using pre-dispatched mode (no per-output env checks)
+        let sum = match self.s1_mode {
+            S1EvalMode::Direct => self.sum_phase_direct(phase),
+            S1EvalMode::LutF64 => {
+                // Safety: present when mode selected
+                let tbl = self.lut_f64.as_ref().unwrap();
                 self.sum_phase_groups_threaded(&tbl[phase][..])
-            } else if let Some(ref tbl) = self.lut_f32 {
-                self.sum_phase_groups_threaded_f32(&tbl[phase][..])
-            } else {
-                0.0
             }
-        } else {
-            self.sum_phase_direct(phase)
+            S1EvalMode::LutF32 => {
+                let tbl = self.lut_f32.as_ref().unwrap();
+                self.sum_phase_groups_threaded_f32(&tbl[phase][..])
+            }
         };
         emit(sum);
     }
@@ -1093,17 +1109,17 @@ impl Stage1Poly {
                 }
             }
             let phase = self.phase_mod as usize;
-            // Use LUTs or direct taps based on env toggle
-            let sum = if stage1_use_lut() {
-                if let Some(ref tbl) = self.lut_f64 {
+            // Use pre-dispatched mode (no per-output env checks)
+            let sum = match self.s1_mode {
+                S1EvalMode::Direct => self.sum_phase_direct(phase),
+                S1EvalMode::LutF64 => {
+                    let tbl = self.lut_f64.as_ref().unwrap();
                     self.sum_phase_groups_threaded(&tbl[phase][..])
-                } else if let Some(ref tbl) = self.lut_f32 {
-                    self.sum_phase_groups_threaded_f32(&tbl[phase][..])
-                } else {
-                    0.0
                 }
-            } else {
-                self.sum_phase_direct(phase)
+                S1EvalMode::LutF32 => {
+                    let tbl = self.lut_f32.as_ref().unwrap();
+                    self.sum_phase_groups_threaded_f32(&tbl[phase][..])
+                }
             };
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
