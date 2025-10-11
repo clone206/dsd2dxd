@@ -14,7 +14,7 @@ use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread;
+// std::thread no longer needed after removing threaded Stage1 summation
 // no extra traits needed
 use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
 
@@ -48,25 +48,10 @@ static ST1_MULT: OnceLock<usize> = OnceLock::new();
 static ST1_ALIGN: OnceLock<usize> = OnceLock::new();
 static ST1_TARGET: OnceLock<usize> = OnceLock::new();
 
-// Stage1 threading controls (optional, default disabled)
-// DSD2DXD_STAGE1_PAR_THREADS: fixed number of threads per output (default 0 = disabled unless AUTO)
-// DSD2DXD_STAGE1_PAR_MIN_GROUPS: minimum LUT groups to enable threading (default 128)
-// DSD2DXD_STAGE1_PAR_AUTO: if set to 1/true, auto threads = min(groups, hw_threads, PAR_MAX) when PAR_THREADS==0
-// DSD2DXD_STAGE1_PAR_MAX: cap the auto thread count (default: unlimited)
-static ST1_PAR_THREADS: OnceLock<usize> = OnceLock::new();
-static ST1_PAR_MIN_GROUPS: OnceLock<usize> = OnceLock::new();
-static ST1_PAR_AUTO: OnceLock<bool> = OnceLock::new();
-static ST1_PAR_MAX: OnceLock<usize> = OnceLock::new();
-
-// Stage1 LUT toggles removed: LUT is always enabled with f64 precision.
-// Fixed-capacity LM staging buffers (overridable via env)
-// DSD2DXD_S1TMP_CAP: capacity for Stage1->Stage2 buffer (default 131072 samples)
-// DSD2DXD_S2TMP_CAP: capacity for Stage2->Stage3 buffer (default 32768 samples)
-static S1TMP_CAP: OnceLock<usize> = OnceLock::new();
-static S2TMP_CAP: OnceLock<usize> = OnceLock::new();
-// Optional toggles to disable ring FIFOs and use linear temp buffers (A/B for diagnostics)
-static RING_S1_ENABLE: OnceLock<bool> = OnceLock::new();
-static RING_S2_ENABLE: OnceLock<bool> = OnceLock::new();
+// Stage1 threading controls removed; default is single-threaded chunked summation.
+// Fixed-capacity LM staging buffers: baked constants
+const S1TMP_CAP: usize = 131_072; // Stage1 -> Stage2
+const S2TMP_CAP: usize = 131_072; // Stage2 -> Stage3
 
 // Use ringbuf crate for SPSC ring buffers.
 
@@ -78,19 +63,7 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-#[inline]
-fn env_bool(name: &str, default: bool) -> bool {
-    env::var(name)
-        .ok()
-        .map(|v| {
-            let v = v.trim();
-            v == "1"
-                || v.eq_ignore_ascii_case("true")
-                || v.eq_ignore_ascii_case("on")
-                || v.eq_ignore_ascii_case("yes")
-        })
-        .unwrap_or(default)
-}
+// env_bool removed (unused)
 
 #[inline]
 fn env_present(name: &str) -> bool {
@@ -269,10 +242,8 @@ pub struct LMResampler {
 }
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
-        let ring_s1 = *RING_S1_ENABLE.get_or_init(|| env_bool("DSD2DXD_RING_S1", true));
-        let ring_s2 = *RING_S2_ENABLE.get_or_init(|| env_bool("DSD2DXD_RING_S2", true));
-        let s1_cap = *S1TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S1TMP_CAP", 131_072));
-        let s2_cap = *S2TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S2TMP_CAP", 131_072));
+    let s1_cap = S1TMP_CAP;
+    let s2_cap = S2TMP_CAP;
         // Build ring buffers
         let s1_rb = HeapRb::<f64>::new(s1_cap.max(2));
         let (s1_prod, s1_cons) = s1_rb.split();
@@ -302,8 +273,8 @@ impl LMResampler {
                             l
                         );
                     eprintln!(
-                        "[DBG] LM ring caps: s1_tmp_cap={} , s2_tmp_cap={} , ring_s1={}, ring_s2={}",
-                        s1_cap, s2_cap, ring_s1, ring_s2
+                        "[DBG] LM ring caps: s1_tmp_cap={} , s2_tmp_cap={}",
+                        s1_cap, s2_cap
                     );
                 }
                 s
@@ -383,8 +354,8 @@ impl LMResampler {
                 };
                 if verbose {
                     eprintln!(
-                        "[DBG] LM ring caps: s1_tmp_cap={} , s2_tmp_cap={} , ring_s1={}, ring_s2={}",
-                        s1_cap, s2_cap, ring_s1, ring_s2
+                        "[DBG] LM ring caps: s1_tmp_cap={} , s2_tmp_cap={}",
+                        s1_cap, s2_cap
                     );
                 }
                 return me;
@@ -411,31 +382,7 @@ impl LMResampler {
             return 0;
         };
 
-        // If rings are disabled via env, fallback to linear block processing (A/B diagnostic)
-        let ring_s1 = *RING_S1_ENABLE.get_or_init(|| env_bool("DSD2DXD_RING_S1", true));
-        let ring_s2 = *RING_S2_ENABLE.get_or_init(|| env_bool("DSD2DXD_RING_S2", true));
-        if !ring_s1 || !ring_s2 {
-            // Stage 1: accumulate all y1 into a temporary linear buffer
-            let mut y1: Vec<f64> = Vec::with_capacity(bytes.len().saturating_mul(2));
-            for &byte in bytes {
-                if lsb_first {
-                    for b in 0..8 {
-                        let bit = (byte >> b) & 1;
-                        s1.push_all(bit, |v| y1.push(v));
-                    }
-                } else {
-                    for b in (0..8).rev() {
-                        let bit = (byte >> b) & 1;
-                        s1.push_all(bit, |v| y1.push(v));
-                    }
-                }
-            }
-            // Stage 2 into temp
-            let mut y2: Vec<f64> = vec![0.0; y1.len().saturating_add(8)];
-            let n2 = p2.process_block(&y1, &mut y2);
-            // Stage 3 into out
-            return p3.process_block(&y2[..n2], out);
-        }
+        // Linear buffer fallback removed; always use rings
 
         // Stream via ring FIFOs: Stage1 -> s1_ring -> Stage2 -> s2_ring -> Stage3 -> out
         let y1_per_byte_ub = ((8 * s1.l as usize) + (s1.m as usize) - 1) / (s1.m as usize);
@@ -571,8 +518,7 @@ struct TwoPhaseLM147 {
 
 impl TwoPhaseLM147 {
     fn new(l: u32, out_rate: u32) -> Self {
-        let s1_cap = *S1TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S1TMP_CAP", 131_072));
-        let rb = HeapRb::<f64>::new(s1_cap.max(2));
+    let rb = HeapRb::<f64>::new(S1TMP_CAP.max(2));
         let (s1_prod, s1_cons) = rb.split();
         // Select tap sets based on target output rate
         //  - 384k: use DDRX10_21TO1 first stage and 2.68MHz /7 second stage
@@ -760,10 +706,6 @@ impl Stage1Poly {
                 "DSD2DXD_STAGE1_CHUNK_MULT",
                 "DSD2DXD_STAGE1_CHUNK_TARGET",
                 "DSD2DXD_STAGE1_CHUNK_ALIGN",
-                "DSD2DXD_STAGE1_PAR_THREADS",
-                "DSD2DXD_STAGE1_PAR_MIN_GROUPS",
-                "DSD2DXD_STAGE1_PAR_AUTO",
-                "DSD2DXD_STAGE1_PAR_MAX",
             ])
         {
             // Report groups/phase range and effective chunk + threading summary
@@ -794,37 +736,9 @@ impl Stage1Poly {
             } else {
                 0
             };
-            let (threads_fixed, min_groups_thr) = Self::get_stage1_parallel_params();
-            let auto = *ST1_PAR_AUTO.get_or_init(|| {
-                env::var("DSD2DXD_STAGE1_PAR_AUTO")
-                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                    .unwrap_or(false)
-            });
-            let par_max =
-                *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
-            let hw = thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1);
-            let effective_threads = if threads_fixed > 0 {
-                threads_fixed.min(example_groups).max(1)
-            } else if auto {
-                example_groups.min(hw).min(par_max).max(1)
-            } else {
-                0
-            };
-            let engaged = effective_threads > 0 && example_groups >= min_groups_thr;
-            let par_max_str = if par_max == usize::MAX {
-                "unlimited".to_string()
-            } else {
-                par_max.to_string()
-            };
             eprintln!(
                 "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode=lut(f64) (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
                 l, m, min_g, max_g, chunk_eff, st1_mult, st1_target, st1_align
-            );
-            eprintln!(
-                "[CFG] Stage1 threading: fixed={}, auto={}, hw={}, min_groups={}, max={}, effective_threads_for_groups={}, engaged={}",
-                threads_fixed, auto, hw, min_groups_thr, par_max_str, effective_threads, engaged
             );
         }
         me
@@ -884,8 +798,10 @@ impl Stage1Poly {
         }
         self.phase1 = 0;
         let phase = (idx_high % self.l as u64) as usize;
-        let tbl = self.lut_f64.as_ref().unwrap();
-        let sum = self.sum_phase_groups_threaded(&tbl[phase][..]);
+    let tbl = self.lut_f64.as_ref().unwrap();
+    // Use chunked summation with baked chunk size
+    let chunk = compute_stage1_chunk(tbl[phase].len(), self.m as usize, self.l);
+    let sum = self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
         emit(sum);
     }
 
@@ -909,7 +825,8 @@ impl Stage1Poly {
             }
             let phase = self.phase_mod as usize;
             let tbl = self.lut_f64.as_ref().unwrap();
-            let sum = self.sum_phase_groups_threaded(&tbl[phase][..]);
+            let chunk = compute_stage1_chunk(tbl[phase].len(), self.m as usize, self.l);
+            let sum = self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
@@ -1012,73 +929,7 @@ impl Stage1Poly {
 
     // Note: legacy static byte extractor removed (unused).
 
-    #[inline]
-    fn get_stage1_parallel_params() -> (usize, usize) {
-        let threads = *ST1_PAR_THREADS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_THREADS", 0));
-        let min_groups =
-            *ST1_PAR_MIN_GROUPS.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MIN_GROUPS", 128));
-        (threads, min_groups)
-    }
-
-    // Optional threaded summation of all groups using scoped threads. Enabled only when
-    // DSD2DXD_STAGE1_PAR_THREADS > 0 and total_groups >= min_groups. For safer iteration,
-    // we restrict to m==21 by default, matching the heavy Accum path.
-    fn sum_phase_groups_threaded(&self, phase_lut: &[[f64; 256]]) -> f64 {
-        let total_groups = phase_lut.len();
-        if total_groups == 0 {
-            return 0.0;
-        }
-        let (mut threads, min_groups) = Self::get_stage1_parallel_params();
-        let auto = *ST1_PAR_AUTO.get_or_init(|| {
-            env::var("DSD2DXD_STAGE1_PAR_AUTO")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        });
-        let par_max = *ST1_PAR_MAX.get_or_init(|| env_usize("DSD2DXD_STAGE1_PAR_MAX", usize::MAX));
-
-        if threads == 0 && auto {
-            let hw = thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1);
-            threads = total_groups.min(hw).min(par_max).max(1);
-        }
-        if threads == 0 || total_groups < min_groups {
-            // Fallback to chunked path with baked defaults
-            let chunk = compute_stage1_chunk(total_groups, self.m as usize, self.l);
-            return self.sum_phase_groups_chunked(phase_lut, chunk);
-        }
-
-        let threads = threads.min(total_groups).max(1);
-        let capb = self.byte_mask + 1;
-        let bidx_base = (self.wbyte + self.byte_mask) & self.byte_mask; // index of newest byte (time t)
-        let byte_ring = &self.byte_ring;
-        let byte_mask = self.byte_mask;
-
-        let mut partials = vec![0.0f64; threads];
-        thread::scope(|scope| {
-            for (ti, part) in partials.iter_mut().enumerate() {
-                let start = (ti * total_groups) / threads;
-                let end = ((ti + 1) * total_groups) / threads;
-                if start >= end {
-                    continue;
-                }
-                let phase_lut_ref = phase_lut;
-                scope.spawn(move || {
-                    let mut sum = 0.0f64;
-                    // Starting index for group `start`: time t - 8*start
-                    let mut idx = (bidx_base + capb - ((start as usize) << 3)) & byte_mask;
-                    for g in start..end {
-                        let byte = byte_ring[idx] as usize;
-                        let group_lut = &phase_lut_ref[g];
-                        sum += group_lut[byte];
-                        idx = (idx + capb - 8) & byte_mask;
-                    }
-                    *part = sum;
-                });
-            }
-        });
-        partials.into_iter().sum()
-    }
+    // Threaded summation removed; always use chunked summation with baked defaults.
     // Direct-eval path removed; LUT is always used
 }
 
