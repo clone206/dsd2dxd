@@ -9,10 +9,11 @@ use crate::filters::HTAPS_2MHZ_7TO1_EQ;
 use crate::filters::HTAPS_4MHZ_7TO1_EQ;
 use crate::filters::HTAPS_576K_3TO1_EQ;
 use crate::filters::HTAPS_8MHZ_7TO1_EQ;
+use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
+use crate::filters::HTAPS_DSDX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX10_7TO1_EQ;
 use crate::filters::HTAPS_DSDX5_7TO1_EQ;
-// NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
@@ -43,25 +44,17 @@ static STAGE1_LUT_CACHE_F32: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Stage1LutT
 static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
 
 // ------------------------------------------------------------------------------------
-// Tuning knobs (via env) for chunk sizing in Stage1 and DecimFIRSym
+// Tuning knobs (via env) for chunk sizing in Stage1
 // Sensible baked-in defaults (used when env vars are unset):
 //   Stage1: TARGET≈96 groups, aligned to M (ALIGN=M)
-//   Decimator: TARGET≈64 taps, aligned to D (ALIGN=decim)
 // Stage1 env vars (override defaults):
 //   DSD2DXD_STAGE1_CHUNK_MULT   (usize, default 0)   -> if >0, chunk = M * MULT
 //   DSD2DXD_STAGE1_CHUNK_TARGET (usize, default 128) -> if >0, round up to multiple of M near TARGET
 //   DSD2DXD_STAGE1_CHUNK_ALIGN  (usize, default 0)   -> if 0, ALIGN=M; else round chunk down to multiple of ALIGN
-// Decimator env vars (override defaults):
-//   DSD2DXD_DECIM_CHUNK_MULT    (usize, default 0)   -> if >0, chunk = decim * MULT
-//   DSD2DXD_DECIM_CHUNK_TARGET  (usize, default 64)  -> if >0, round up to multiple of decim near TARGET
-//   DSD2DXD_DECIM_CHUNK_ALIGN   (usize, default 0)   -> if 0, ALIGN=decim; else round chunk down to multiple of ALIGN
 
 static ST1_MULT: OnceLock<usize> = OnceLock::new();
 static ST1_ALIGN: OnceLock<usize> = OnceLock::new();
 static ST1_TARGET: OnceLock<usize> = OnceLock::new();
-static DEC_MULT: OnceLock<usize> = OnceLock::new();
-static DEC_ALIGN: OnceLock<usize> = OnceLock::new();
-static DEC_TARGET: OnceLock<usize> = OnceLock::new();
 
 // Stage1 threading controls (optional, default disabled)
 // DSD2DXD_STAGE1_PAR_THREADS: fixed number of threads per output (default 0 = disabled unless AUTO)
@@ -74,19 +67,10 @@ static ST1_PAR_AUTO: OnceLock<bool> = OnceLock::new();
 static ST1_PAR_MAX: OnceLock<usize> = OnceLock::new();
 
 // Stage1 LUT usage toggle: allow disabling LUTs and using direct tap-by-tap evaluation.
-// Env var: DSD2DXD_STAGE1_USE_LUT (default: off when unset => use direct taps)
+// Env var: DSD2DXD_STAGE1_USE_LUT (default: ON when unset => use LUT; set to 0/false to disable)
 static ST1_USE_LUT: OnceLock<Option<bool>> = OnceLock::new();
 // Stage1 LUT precision toggle (default: f64). Set to 1/true for f32 LUTs
 static ST1_LUT_F32: OnceLock<bool> = OnceLock::new();
-
-// Decimator polyphase toggle: allow disabling polyphase and using direct convolution.
-// Env vars:
-//   DSD2DXD_DECIM_USE_POLY   => global default (false if unset; direct conv is default)
-//   DSD2DXD_DECIM7_USE_POLY  => override for decim=7
-//   DSD2DXD_DECIM3_USE_POLY  => override for decim=3
-static DEC_USE_POLY_GLOBAL: OnceLock<Option<bool>> = OnceLock::new();
-static DEC_USE_POLY_7: OnceLock<Option<bool>> = OnceLock::new();
-static DEC_USE_POLY_3: OnceLock<Option<bool>> = OnceLock::new();
 // Fixed-capacity LM staging buffers (overridable via env)
 // DSD2DXD_S1TMP_CAP: capacity for Stage1->Stage2 buffer (default 131072 samples)
 // DSD2DXD_S2TMP_CAP: capacity for Stage2->Stage3 buffer (default 32768 samples)
@@ -191,87 +175,15 @@ fn compute_stage1_chunk(total_groups: usize, m: usize, _l: u32) -> usize {
 fn stage1_use_lut() -> bool {
     let opt = ST1_USE_LUT.get_or_init(|| {
         if env_present("DSD2DXD_STAGE1_USE_LUT") {
-            Some(env_bool("DSD2DXD_STAGE1_USE_LUT", false))
+            Some(env_bool("DSD2DXD_STAGE1_USE_LUT", true))
         } else {
             None
         }
     });
-    opt.unwrap_or(false)
+    opt.unwrap_or(true)
 }
 
-#[inline]
-fn get_decim_chunk_params() -> (usize, usize, usize) {
-    // Allow zeros as sentinels to enable baked defaults downstream (ALIGN=D, TARGET=64)
-    let mult = *DEC_MULT.get_or_init(|| env_usize("DSD2DXD_DECIM_CHUNK_MULT", 0));
-    let align = *DEC_ALIGN.get_or_init(|| env_usize("DSD2DXD_DECIM_CHUNK_ALIGN", 0));
-    let target = *DEC_TARGET.get_or_init(|| env_usize("DSD2DXD_DECIM_CHUNK_TARGET", 64));
-    (mult, align, target)
-}
-
-#[inline]
-fn compute_decim_chunk_len(decim: usize) -> usize {
-    let (mult, mut align, target) = get_decim_chunk_params();
-    let mut chunk = if target > 0 {
-        round_up_to_multiple(target, decim)
-    } else if mult > 0 {
-        decim.saturating_mul(mult)
-    } else {
-        round_up_to_multiple(64, decim)
-    };
-    if chunk == 0 {
-        chunk = decim.max(1);
-    }
-    if align == 0 {
-        align = decim.max(1);
-    }
-    // ensure reasonable minimum and apply alignment (round down)
-    chunk = round_down_to_multiple(chunk, align)
-        .max(align)
-        .max(decim)
-        .min(usize::MAX / 2);
-    chunk
-}
-
-#[inline]
-fn decim_use_poly(decim: usize) -> bool {
-    // Per-factor override takes precedence, then global, else default true
-    match decim {
-        7 => {
-            let local = DEC_USE_POLY_7.get_or_init(|| {
-                if env_present("DSD2DXD_DECIM7_USE_POLY") {
-                    Some(env_bool("DSD2DXD_DECIM7_USE_POLY", true))
-                } else {
-                    None
-                }
-            });
-            if let Some(b) = *local {
-                return b;
-            }
-        }
-        3 => {
-            let local = DEC_USE_POLY_3.get_or_init(|| {
-                if env_present("DSD2DXD_DECIM3_USE_POLY") {
-                    Some(env_bool("DSD2DXD_DECIM3_USE_POLY", true))
-                } else {
-                    None
-                }
-            });
-            if let Some(b) = *local {
-                return b;
-            }
-        }
-        _ => {}
-    }
-    let global = DEC_USE_POLY_GLOBAL.get_or_init(|| {
-        if env_present("DSD2DXD_DECIM_USE_POLY") {
-            Some(env_bool("DSD2DXD_DECIM_USE_POLY", true))
-        } else {
-            None
-        }
-    });
-    // Default to direct (polyphase disabled) when unset
-    global.unwrap_or(false)
-}
+// (Polyphase decimator env toggles removed)
 
 #[inline]
 fn hash_f64_slice_fnv1a(v: &[f64]) -> u64 {
@@ -427,7 +339,7 @@ pub struct LMResampler {
     poly3: Option<DecimFIRSym>,
     // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
     // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
-    two_phase_lm147_384: Option<TwoPhaseLM147_384>,
+    two_phase_lm147_384: Option<TwoPhaseLM147>,
     // Reusable internal SPSC ring buffers via ringbuf crate
     s1_prod: HeapProd<f64>,
     s1_cons: HeapCons<f64>,
@@ -453,9 +365,9 @@ impl LMResampler {
                 // Original cascade Stage1 definitions
                 let s1 = Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14);
                 let s = Self {
-                    // Stage 2 (polyphase decimator by 7)
+                    // Stage 2 (decimator by 7)
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
-                    // Stage 3 (polyphase decimator by 3)
+                    // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
                     two_phase_lm147_384: None,
                     stage1_poly: Some(s1),
@@ -468,7 +380,7 @@ impl LMResampler {
                 };
                 if verbose {
                     eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 polyphase].",
+                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
                             l
                         );
                     eprintln!(
@@ -480,7 +392,7 @@ impl LMResampler {
             }
             147 => {
                 // DSD128 -> 384k two‑phase path (×10 -> /21 -> /7) DEFAULT for L=10
-                if (l == 10 || l == 20) && out_rate == 384_000 {
+                if out_rate == 384_000 {
                     if verbose {
                         eprintln!("[DBG] Two-phase L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k", l);
                     }
@@ -488,7 +400,26 @@ impl LMResampler {
                     return Self {
                         poly2: None,
                         poly3: None,
-                        two_phase_lm147_384: Some(TwoPhaseLM147_384::new(l)),
+                        two_phase_lm147_384: Some(TwoPhaseLM147::new(l, out_rate)),
+                        stage1_poly: None,
+                        s1_prod,
+                        s1_cons,
+                        s2_prod,
+                        s2_cons,
+                        s2_scratch: Vec::new(),
+                        s1_scratch: Vec::new(),
+                    };
+                }
+
+                if out_rate == 192_000 {
+                    if verbose {
+                        eprintln!("[DBG] Two-phase L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 192k", l);
+                    }
+                    // Minimal placeholders (not used directly)
+                    return Self {
+                        poly2: None,
+                        poly3: None,
+                        two_phase_lm147_384: Some(TwoPhaseLM147::new(l, out_rate)),
                         stage1_poly: None,
                         s1_prod,
                         s1_cons,
@@ -500,65 +431,28 @@ impl LMResampler {
                 }
 
                 // (Existing selection logic unchanged, just swap Stage2/3 construction)
-                let (stage1_half, right2, right3, label) = if l == 5 && out_rate == 384_000 {
-                    // DSD256 -> 384k path (L=5, M=147) reuses SAME Stage1 half taps as other 384k paths (DDRx10_7TO1) per request.
-                    // Second and third stage identical to other 384k (8MHz -> /7, 1MHz -> /3).
-                    (
-                        &HTAPS_DDRX10_7TO1_EQ[..],
-                        &HTAPS_8MHZ_7TO1_EQ[..],
-                        &HTAPS_1MHZ_3TO1_EQ[..],
-                        "384k (L=5 reuse DDRx10 taps, 8MHz, 1MHz)",
-                    )
-                } else if (l == 10 || l == 20) && out_rate == 384_000 {
-                    (
-                        &HTAPS_DDRX10_7TO1_EQ[..],
-                        &HTAPS_8MHZ_7TO1_EQ[..],
-                        &HTAPS_1MHZ_3TO1_EQ[..],
-                        "384k (DDRx10, 8MHz, 1MHz)",
-                    )
-                } else if l == 5 && out_rate == 96_000 {
+                let (stage1_half, right2, right3, label) = if l == 5 && out_rate == 96_000 {
                     (
                         &HTAPS_DSDX5_7TO1_EQ[..],
                         &HTAPS_2MHZ_7TO1_EQ[..],
                         &HTAPS_288K_3TO1_EQ[..],
                         "96k (DSD×5, 2MHz, 288k)",
                     )
-                } else if l == 10 && out_rate == 192_000 {
-                    (
-                        &HTAPS_DDRX10_7TO1_EQ[..],
-                        &HTAPS_4MHZ_7TO1_EQ[..],
-                        &HTAPS_576K_3TO1_EQ[..],
-                        "192k (DDRx10, 4MHz, 576k)",
-                    )
                 } else {
-                    if l == 10 {
-                        (
-                            &HTAPS_DDRX10_7TO1_EQ[..],
-                            &HTAPS_4MHZ_7TO1_EQ[..],
-                            &HTAPS_576K_3TO1_EQ[..],
-                            "192k (DDRx10, 4MHz, 576k)",
-                        )
-                    } else {
-                        (
-                            &HTAPS_DDRX5_7TO_1_EQ[..],
-                            &HTAPS_4MHZ_7TO1_EQ[..],
-                            &HTAPS_576K_3TO1_EQ[..],
-                            "192k (DDR×5, 4MHz, 576k)",
-                        )
-                    }
+                    panic!("Unsupported L={} M=147 out_rate={} for Stage1/2/3 selection", l, out_rate);
                 };
 
                 if verbose {
                     eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} [Stage2/3 polyphase].",
+                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) using {} [Stage2/3 direct].",
                             l, label
                         );
                 }
                 let s1 = Stage1Poly::new(stage1_half, l, 7);
                 let me = Self {
-                    // Stage 2 (polyphase decimator by 7)
+                    // Stage 2 (decimator by 7)
                     poly2: Some(DecimFIRSym::new_from_half(right2, 7)),
-                    // Stage 3 (polyphase decimator by 3)
+                    // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(right3, 3)),
                     two_phase_lm147_384: None,
                     stage1_poly: Some(s1),
@@ -748,7 +642,7 @@ impl LMResampler {
 }
 
 // Unified two‑phase L∈{10,20} / (21*7) path for DSD64 or DSD128 -> 384 kHz
-struct TwoPhaseLM147_384 {
+struct TwoPhaseLM147 {
     stage1: Stage1Poly,  // ×L /21 polyphase (L=10 or 20)
     stage2: DecimFIRSym, // /7 (2.688 MHz -> 384 kHz)
     // Reusable buffer for stage1 outputs as SPSC ring
@@ -757,14 +651,22 @@ struct TwoPhaseLM147_384 {
     l: u32,
 }
 
-impl TwoPhaseLM147_384 {
-    fn new(l: u32) -> Self {
+impl TwoPhaseLM147 {
+    fn new(l: u32, out_rate: u32) -> Self {
         let s1_cap = *S1TMP_CAP.get_or_init(|| env_usize("DSD2DXD_S1TMP_CAP", 131_072));
         let rb = HeapRb::<f64>::new(s1_cap.max(2));
         let (s1_prod, s1_cons) = rb.split();
+        // Select tap sets based on target output rate
+        //  - 384k: use DDRX10_21TO1 first stage and 2.68MHz /7 second stage
+        //  - 192k: use DSDX10_21TO1 first stage and 1.34MHz /7 second stage
+        let (taps_stage1, taps_stage2) = if out_rate == 192_000 {
+            (&HTAPS_DSDX10_21TO1_EQ[..], &HTAPS_1_34MHZ_7TO1_EQ[..])
+        } else {
+            (&HTAPS_DDRX10_21TO1_EQ[..], &HTAPS_2_68MHZ_7TO1_EQ[..])
+        };
         Self {
-            stage1: Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ, l, 21),
-            stage2: DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ, 7),
+            stage1: Stage1Poly::new(taps_stage1, l, 21),
+            stage2: DecimFIRSym::new_from_half(taps_stage2, 7),
             s1_prod,
             s1_cons,
             l,
@@ -1509,21 +1411,20 @@ impl Stage1Poly {
 
 // --- ====================================================================================
 // ====================================================================================
-// Lightweight integer polyphase decimator structure (D=7 or 3)
+// Lightweight decimator structure (D=7 or 3), direct symmetric convolution only
 #[derive(Debug)]
 struct DecimFIRSym {
     _full: Vec<f64>, // full symmetric taps
     _len: usize,
     _half: usize,
     _has_center: bool,
-    center: usize,         // (len-1)/2
+    center: usize,         // (len-1)/2, used for initial output schedule
     decim: usize,          // decimation factor D
-    phases: Vec<Vec<f64>>, // polyphase components h[p + k*D]
     ring: Vec<f64>,
     mask: usize,
     w: usize,             // next write index
     count: usize,         // total samples seen
-    _left_half: Vec<f64>, // first half taps (outer->inner)
+    next_out_t: usize,    // next t index at which an output is due
 }
 
 impl DecimFIRSym {
@@ -1537,12 +1438,7 @@ impl DecimFIRSym {
         let half = if has_center { (len - 1) / 2 } else { len / 2 };
         // Ring capacity: next power of two >= len + decim (margin)
         let cap = (len + decim).next_power_of_two();
-        let left_half = full[..half].to_vec();
-        // Build polyphase decomposition: phases[p][k] = h[p + k*D]
-        let mut phases: Vec<Vec<f64>> = vec![Vec::new(); decim];
-        for (i, &c) in full.iter().enumerate() {
-            phases[i % decim].push(c);
-        }
+        // No polyphase decomposition: direct symmetric convolution
         let me = Self {
             _full: full,
             _len: len,
@@ -1550,37 +1446,12 @@ impl DecimFIRSym {
             _has_center: has_center,
             center,
             decim,
-            phases,
             ring: vec![0.0; cap],
             mask: cap - 1,
             w: 0,
             count: 0,
-            _left_half: left_half,
+            next_out_t: center,
         };
-
-        // One-time decimator diagnostics per decim factor when env vars are set
-        if any_env_present(&[
-            "DSD2DXD_DECIM_CHUNK_MULT",
-            "DSD2DXD_DECIM_CHUNK_TARGET",
-            "DSD2DXD_DECIM_CHUNK_ALIGN",
-            "DSD2DXD_DECIM_USE_POLY",
-            "DSD2DXD_DECIM7_USE_POLY",
-            "DSD2DXD_DECIM3_USE_POLY",
-        ]) {
-            static DECIM_DIAG_ONCE: OnceLock<Mutex<HashMap<usize, bool>>> = OnceLock::new();
-            let printed_map = DECIM_DIAG_ONCE.get_or_init(|| Mutex::new(HashMap::new()));
-            let mut guard = printed_map.lock().unwrap();
-            if !guard.contains_key(&decim) {
-                let (mult, align, target) = get_decim_chunk_params();
-                let chunk_eff = compute_decim_chunk_len(decim);
-                let use_poly = decim_use_poly(decim);
-                eprintln!(
-                    "[CFG] Decimator D={}: taps={} center={} chunk_eff={} mode={} (params: MULT={}, TARGET={}, ALIGN={} [0=>D])",
-                    decim, len, center, chunk_eff, if use_poly {"polyphase"} else {"direct"}, mult, target, align
-                );
-                guard.insert(decim, true);
-            }
-        }
         me
     }
 
@@ -1598,21 +1469,14 @@ impl DecimFIRSym {
             let t = self.count;
             self.count += 1;
 
-            // Need at least center samples of history
-            if t < self.center {
+            // Produce only when we've reached the next scheduled output time
+            if t != self.next_out_t {
                 continue;
             }
-            // Output only when (t - center) aligned to decimation grid
-            if (t - self.center) % self.decim != 0 {
-                continue;
-            }
+            // Advance next output time for future samples
+            self.next_out_t = self.next_out_t.saturating_add(self.decim);
 
-            let acc = if decim_use_poly(self.decim) {
-                let chunk_len = compute_decim_chunk_len(self.decim);
-                unsafe { self.convolve_polyphase_chunked(chunk_len) }
-            } else {
-                unsafe { self.convolve_direct() }
-            };
+            let acc = unsafe { self.convolve_direct() };
             if produced < out.len() {
                 out[produced] = acc;
                 produced += 1;
@@ -1622,64 +1486,42 @@ impl DecimFIRSym {
     }
 
     // ----- Convolution implementations -----
-    #[inline(always)]
-    #[allow(dead_code)]
-    unsafe fn convolve_polyphase(&self) -> f64 {
-        // Polyphase evaluation: y = Σ_p Σ_k h[p + kD] * x[t - (p + kD)]
-        // We walk each phase p starting from newest - p and stride by D.
-        let newest = (self.w + self.ring.len() - 1) & self.mask; // index of x[t]
-        let mut total = 0.0;
-        for (p, phase_taps) in self.phases.iter().enumerate() {
-            let mut idx = (newest + self.ring.len() - p) & self.mask; // x[t - p]
-            for &c in phase_taps {
-                total += c * self.ring[idx];
-                idx = (idx + self.ring.len() - self.decim) & self.mask; // move back D samples
-            }
-        }
-        total
-    }
-
-    // Chunked variant of the polyphase convolution. Processes inner tap loops in
-    // chunks to reduce loop overhead and improve index arithmetic locality.
-    #[inline(always)]
-    unsafe fn convolve_polyphase_chunked(&self, chunk_len: usize) -> f64 {
-        let newest = (self.w + self.ring.len() - 1) & self.mask; // index of x[t]
-        let mut total = 0.0;
-        let cap = self.ring.len();
-        for (p, phase_taps) in self.phases.iter().enumerate() {
-            let n = phase_taps.len();
-            if n == 0 {
-                continue;
-            }
-            let idx0 = (newest + cap - p) & self.mask; // x[t - p]
-            let mut k = 0usize;
-            while k < n {
-                let take = core::cmp::min(chunk_len, n - k);
-                // Compute starting index for this chunk (k-th tap)
-                let mut idx = (idx0 + cap - (self.decim * k) % cap) & self.mask;
-                // Accumulate this chunk
-                let end = k + take;
-                while k < end {
-                    let c = *phase_taps.get_unchecked(k);
-                    total += c * *self.ring.get_unchecked(idx);
-                    idx = (idx + cap - self.decim) & self.mask;
-                    k += 1;
-                }
-            }
-        }
-        total
-    }
 
     // Direct full-rate symmetric FIR convolution (no polyphase decomposition).
     // Evaluates y[t] = sum_{k=0..len-1} h[k] * x[t - k] when push() determines an output is due.
     #[inline(always)]
     unsafe fn convolve_direct(&self) -> f64 {
-        let newest = (self.w + self.ring.len() - 1) & self.mask; // index of x[t]
+        let cap = self.ring.len();
+        let newest = (self.w + cap - 1) & self.mask; // index of x[t]
         let mut total = 0.0;
-        let mut idx = newest;
-        for &c in &self._full {
-            total += c * *self.ring.get_unchecked(idx);
-            idx = (idx + self.ring.len() - 1) & self.mask;
+
+        // Pairwise sum using symmetry: for k in 0..half-1
+        // y += h[k] * (x[t-k] + x[t-(len-1-k)])
+        let len = self._len;
+        let half = self._half;
+        let has_center = self._has_center;
+        let center = self.center;
+
+        // Indices for front (newest side) and back (oldest side)
+        let mut idx_front = newest;                              // x[t - 0]
+        let mut idx_back = (newest + cap - (len - 1)) & self.mask; // x[t - (len-1)]
+
+        let mut k = 0usize;
+        while k < half {
+            let c = *self._full.get_unchecked(k);
+            let xf = *self.ring.get_unchecked(idx_front);
+            let xb = *self.ring.get_unchecked(idx_back);
+            total += c * (xf + xb);
+            // advance indices
+            idx_front = (idx_front + cap - 1) & self.mask; // older by 1
+            idx_back = (idx_back + 1) & self.mask;         // newer by 1
+            k += 1;
+        }
+
+        // Center tap (odd length)
+        if has_center {
+            let ic = (newest + cap - center) & self.mask;
+            total += *self._full.get_unchecked(center) * *self.ring.get_unchecked(ic);
         }
         total
     }

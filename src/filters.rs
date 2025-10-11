@@ -1726,7 +1726,7 @@ pub const HTAPS_1MHZ_3TO1_EQ: [f64; 15] = [
 ];
 
 /**
- * 1st phase for 192K target
+ * 1st phase for 192K target from dsd128
  */
 pub const HTAPS_DDRX5_7TO_1_EQ: [f64; 25] = [
     0.06863281841814,
