@@ -1199,8 +1199,46 @@ impl Stage1Poly {
         let mut g = 0usize;
         while g < total_groups {
             let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
-            // Extract bytes for this chunk and accumulate (unrolled by 4)
+            // Extract bytes for this chunk and accumulate (unrolled by 8 -> 4)
             let mut k = 0usize;
+            // 8-way unroll with 4 accumulators
+            while k + 8 <= this_chunk {
+                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
+                let idx1 = (idx0 + capb - 8) & mask;
+                let idx2 = (idx1 + capb - 8) & mask;
+                let idx3 = (idx2 + capb - 8) & mask;
+                let idx4 = (idx3 + capb - 8) & mask;
+                let idx5 = (idx4 + capb - 8) & mask;
+                let idx6 = (idx5 + capb - 8) & mask;
+                let idx7 = (idx6 + capb - 8) & mask;
+
+                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
+                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
+                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
+                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
+                let b4 = unsafe { *self.byte_ring.get_unchecked(idx4) } as usize;
+                let b5 = unsafe { *self.byte_ring.get_unchecked(idx5) } as usize;
+                let b6 = unsafe { *self.byte_ring.get_unchecked(idx6) } as usize;
+                let b7 = unsafe { *self.byte_ring.get_unchecked(idx7) } as usize;
+
+                let mut s0 = 0.0f64;
+                let mut s1 = 0.0f64;
+                let mut s2 = 0.0f64;
+                let mut s3 = 0.0f64;
+                unsafe {
+                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0);
+                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1);
+                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2);
+                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3);
+                    s0 += *phase_lut.get_unchecked(g + k + 4).get_unchecked(b4);
+                    s1 += *phase_lut.get_unchecked(g + k + 5).get_unchecked(b5);
+                    s2 += *phase_lut.get_unchecked(g + k + 6).get_unchecked(b6);
+                    s3 += *phase_lut.get_unchecked(g + k + 7).get_unchecked(b7);
+                }
+                sum += (s0 + s1) + (s2 + s3);
+                k += 8;
+            }
+            // 4-way unroll with 4 accumulators
             while k + 4 <= this_chunk {
                 let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
                 let idx1 = (idx0 + capb - 8) & mask;
@@ -1210,12 +1248,17 @@ impl Stage1Poly {
                 let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
                 let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
                 let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
+                let mut s0 = 0.0f64;
+                let mut s1 = 0.0f64;
+                let mut s2 = 0.0f64;
+                let mut s3 = 0.0f64;
                 unsafe {
-                    sum += *phase_lut.get_unchecked(g + k).get_unchecked(b0);
-                    sum += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1);
-                    sum += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2);
-                    sum += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3);
+                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0);
+                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1);
+                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2);
+                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3);
                 }
+                sum += (s0 + s1) + (s2 + s3);
                 k += 4;
             }
             while k < this_chunk {
@@ -1369,6 +1412,44 @@ impl Stage1Poly {
         while g < total_groups {
             let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
             let mut k = 0usize;
+            // 8-way unroll with 4 accumulators
+            while k + 8 <= this_chunk {
+                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
+                let idx1 = (idx0 + capb - 8) & mask;
+                let idx2 = (idx1 + capb - 8) & mask;
+                let idx3 = (idx2 + capb - 8) & mask;
+                let idx4 = (idx3 + capb - 8) & mask;
+                let idx5 = (idx4 + capb - 8) & mask;
+                let idx6 = (idx5 + capb - 8) & mask;
+                let idx7 = (idx6 + capb - 8) & mask;
+
+                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
+                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
+                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
+                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
+                let b4 = unsafe { *self.byte_ring.get_unchecked(idx4) } as usize;
+                let b5 = unsafe { *self.byte_ring.get_unchecked(idx5) } as usize;
+                let b6 = unsafe { *self.byte_ring.get_unchecked(idx6) } as usize;
+                let b7 = unsafe { *self.byte_ring.get_unchecked(idx7) } as usize;
+
+                let mut s0 = 0.0f64;
+                let mut s1 = 0.0f64;
+                let mut s2 = 0.0f64;
+                let mut s3 = 0.0f64;
+                unsafe {
+                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0) as f64;
+                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1) as f64;
+                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2) as f64;
+                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3) as f64;
+                    s0 += *phase_lut.get_unchecked(g + k + 4).get_unchecked(b4) as f64;
+                    s1 += *phase_lut.get_unchecked(g + k + 5).get_unchecked(b5) as f64;
+                    s2 += *phase_lut.get_unchecked(g + k + 6).get_unchecked(b6) as f64;
+                    s3 += *phase_lut.get_unchecked(g + k + 7).get_unchecked(b7) as f64;
+                }
+                sum += (s0 + s1) + (s2 + s3);
+                k += 8;
+            }
+            // 4-way unroll with 4 accumulators
             while k + 4 <= this_chunk {
                 let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
                 let idx1 = (idx0 + capb - 8) & mask;
@@ -1378,12 +1459,17 @@ impl Stage1Poly {
                 let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
                 let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
                 let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
+                let mut s0 = 0.0f64;
+                let mut s1 = 0.0f64;
+                let mut s2 = 0.0f64;
+                let mut s3 = 0.0f64;
                 unsafe {
-                    sum += *phase_lut.get_unchecked(g + k).get_unchecked(b0) as f64;
-                    sum += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1) as f64;
-                    sum += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2) as f64;
-                    sum += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3) as f64;
+                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0) as f64;
+                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1) as f64;
+                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2) as f64;
+                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3) as f64;
                 }
+                sum += (s0 + s1) + (s2 + s3);
                 k += 4;
             }
             while k < this_chunk {
