@@ -27,7 +27,6 @@ struct Stage1LutKey {
 
 static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Stage1LutTable>>>> =
     OnceLock::new();
-// f32 LUT variant removed; we always use f64 LUTs now.
 
 // One-time config diagnostics guards
 static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
@@ -44,10 +43,6 @@ static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
 static ST1_MULT: OnceLock<usize> = OnceLock::new();
 static ST1_ALIGN: OnceLock<usize> = OnceLock::new();
 static ST1_TARGET: OnceLock<usize> = OnceLock::new();
-
-// Stage1 threading controls removed; default is single-threaded chunked summation.
-
-// Ring buffers removed; direct chunked pipeline is used.
 
 #[inline]
 fn env_usize(name: &str, default: usize) -> usize {
@@ -196,14 +191,6 @@ fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f64; 256]
     arc
 }
 
-// f32 LUT builders/cache removed
-
-// Direct-eval phase taps builder removed (always using LUT now)
-
-// Toggle slow-domain Stage1 polyphase (debug / diagnostic).
-// Set to true to enable Stage1PolySlow path; keep false for production.
-// Slow-domain Stage1 polyphase is always active for L=5 now; legacy toggle removed.
-
 // ====================================================================================
 // Generalized equiripple L/M resampler covering:
 //   - L=5,  M=294: (×5 -> /14) -> /7 -> /3  -> 96 kHz
@@ -291,9 +278,6 @@ impl LMResampler {
         }
     }
 
-    // Removed legacy per-byte path (push_byte_lm); block processing is the default
-
-    // Block-style processing to reduce per-byte call overhead.
     // Returns number of PCM frames produced into `out`.
     #[inline(always)]
     pub fn process_bytes_lm(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
@@ -305,7 +289,7 @@ impl LMResampler {
             Some(x) => x,
             None => return 0,
         };
-    let mut p3_opt = self.poly3.as_mut();
+        let mut p3_opt = self.poly3.as_mut();
 
         let mut produced_total = 0usize;
         let mut i = 0usize; // byte cursor
@@ -373,8 +357,11 @@ impl LMResampler {
             let used_s1 = core::cmp::min(self.s1_scratch.len(), need_s1_out);
             if let Some(ref mut p3) = p3_opt {
                 let cap_s2 = need_s2_in.max(1);
-                if self.s2_scratch.len() < cap_s2 { self.s2_scratch.resize(cap_s2, 0.0); }
-                let n2 = p2.process_block(&self.s1_scratch[..used_s1], &mut self.s2_scratch[..cap_s2]);
+                if self.s2_scratch.len() < cap_s2 {
+                    self.s2_scratch.resize(cap_s2, 0.0);
+                }
+                let n2 =
+                    p2.process_block(&self.s1_scratch[..used_s1], &mut self.s2_scratch[..cap_s2]);
                 // 3) Stage3: decimate into out
                 let n3 = p3.process_block(&self.s2_scratch[..n2], &mut out[produced_total..]);
                 produced_total += n3;
@@ -398,7 +385,6 @@ struct Stage1Poly {
     // Shared
     l: u32,
     m: u32,
-    // Float ring removed; use bit-packed signs only
     // Bit-packed ring (one bit per input sample): 1 for +1, 0 for -1
     ring_bits: Vec<u64>,
     bits_mask: usize, // same capacity as ring (power of 2) - 1
@@ -429,11 +415,10 @@ impl Stage1Poly {
         // Full symmetric taps length when mirroring right_half as [rev(right_half), right_half]
         let n = (right_half.len() * 2) as u64;
         let delay_high = (n - 1) / 2; // (N-1)/2
-                                      // Max taps per phase is ceil(n / l)
+        // Max taps per phase is ceil(n / l)
         let max_len = ((n as usize) + l as usize - 1) / l as usize;
         let cap = max_len.next_power_of_two().max(128);
-        let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum
-                                                                    // Always use f64 LUTs
+        let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum. Always use f64 LUTs
         let lut_f64: Option<Arc<Vec<Vec<[f64; 256]>>>> =
             Some(get_or_build_stage1_lut(right_half, l));
         // Determine maximum groups across phases to size the byte ring
@@ -531,10 +516,6 @@ impl Stage1Poly {
         self.wbyte = (self.wbyte + 1) & self.byte_mask;
     }
 
-    // reverse8 was removed; not needed by the newest-first byte extractor.
-
-    // Note: legacy byte extraction helpers removed (unused).
-
     #[inline(always)]
     fn push_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
         match self.mode {
@@ -602,9 +583,9 @@ impl Stage1Poly {
         }
     }
 
-    // Sum all phase groups using the bit-packed ring and per-group LUTs, but
-    // process groups in chunks of up to `chunk_bytes` to reduce loop overhead
-    // and improve locality of byte extraction.
+    // Sum all phase groups using the bit-packed ring and per-group
+    // LUTs, but process groups in chunks of up to `chunk_bytes` to
+    // reduce loop overhead and improve locality of byte extraction.
     #[inline]
     fn sum_phase_groups_chunked(&self, phase_lut: &[[f64; 256]], chunk_bytes: usize) -> f64 {
         let mut sum = 0.0;
@@ -619,68 +600,8 @@ impl Stage1Poly {
         let mut g = 0usize;
         while g < total_groups {
             let this_chunk = core::cmp::min(chunk_bytes, total_groups - g);
-            // Extract bytes for this chunk and accumulate (unrolled by 8 -> 4)
+            // Non-unrolled inner loop
             let mut k = 0usize;
-            // 8-way unroll with 4 accumulators
-            while k + 8 <= this_chunk {
-                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
-                let idx1 = (idx0 + capb - 8) & mask;
-                let idx2 = (idx1 + capb - 8) & mask;
-                let idx3 = (idx2 + capb - 8) & mask;
-                let idx4 = (idx3 + capb - 8) & mask;
-                let idx5 = (idx4 + capb - 8) & mask;
-                let idx6 = (idx5 + capb - 8) & mask;
-                let idx7 = (idx6 + capb - 8) & mask;
-
-                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
-                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
-                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
-                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
-                let b4 = unsafe { *self.byte_ring.get_unchecked(idx4) } as usize;
-                let b5 = unsafe { *self.byte_ring.get_unchecked(idx5) } as usize;
-                let b6 = unsafe { *self.byte_ring.get_unchecked(idx6) } as usize;
-                let b7 = unsafe { *self.byte_ring.get_unchecked(idx7) } as usize;
-
-                let mut s0 = 0.0f64;
-                let mut s1 = 0.0f64;
-                let mut s2 = 0.0f64;
-                let mut s3 = 0.0f64;
-                unsafe {
-                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0);
-                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1);
-                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2);
-                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3);
-                    s0 += *phase_lut.get_unchecked(g + k + 4).get_unchecked(b4);
-                    s1 += *phase_lut.get_unchecked(g + k + 5).get_unchecked(b5);
-                    s2 += *phase_lut.get_unchecked(g + k + 6).get_unchecked(b6);
-                    s3 += *phase_lut.get_unchecked(g + k + 7).get_unchecked(b7);
-                }
-                sum += (s0 + s1) + (s2 + s3);
-                k += 8;
-            }
-            // 4-way unroll with 4 accumulators
-            while k + 4 <= this_chunk {
-                let idx0 = (bidx + capb - ((k as usize) << 3)) & mask;
-                let idx1 = (idx0 + capb - 8) & mask;
-                let idx2 = (idx1 + capb - 8) & mask;
-                let idx3 = (idx2 + capb - 8) & mask;
-                let b0 = unsafe { *self.byte_ring.get_unchecked(idx0) } as usize;
-                let b1 = unsafe { *self.byte_ring.get_unchecked(idx1) } as usize;
-                let b2 = unsafe { *self.byte_ring.get_unchecked(idx2) } as usize;
-                let b3 = unsafe { *self.byte_ring.get_unchecked(idx3) } as usize;
-                let mut s0 = 0.0f64;
-                let mut s1 = 0.0f64;
-                let mut s2 = 0.0f64;
-                let mut s3 = 0.0f64;
-                unsafe {
-                    s0 += *phase_lut.get_unchecked(g + k + 0).get_unchecked(b0);
-                    s1 += *phase_lut.get_unchecked(g + k + 1).get_unchecked(b1);
-                    s2 += *phase_lut.get_unchecked(g + k + 2).get_unchecked(b2);
-                    s3 += *phase_lut.get_unchecked(g + k + 3).get_unchecked(b3);
-                }
-                sum += (s0 + s1) + (s2 + s3);
-                k += 4;
-            }
             while k < this_chunk {
                 let idx = (bidx + capb - ((k as usize) << 3)) & mask;
                 let byte = unsafe { *self.byte_ring.get_unchecked(idx) } as usize;
@@ -695,16 +616,9 @@ impl Stage1Poly {
         }
         sum
     }
-
-    // Note: legacy static byte extractor removed (unused).
-
-    // Threaded summation removed; always use chunked summation with baked defaults.
-    // Direct-eval path removed; LUT is always used
 }
 
-// --- ====================================================================================
-// ====================================================================================
-// Lightweight decimator structure (D=7 or 3), direct symmetric convolution only
+// Lightweight decimator structure direct symmetric convolution only
 #[derive(Debug)]
 struct DecimFIRSym {
     _full: Vec<f64>, // full symmetric taps
@@ -746,8 +660,6 @@ impl DecimFIRSym {
             next_out_t: center,
         };
     }
-
-    // Removed legacy per-sample push(); use process_block for efficiency
 
     // Block processing: feed a slice of inputs and write produced outputs into `out`.
     // Returns number of output samples written.
