@@ -431,7 +431,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
 
         if let Some(mut tag) = self.in_ctx.tag.clone() {
-            self.verbose("Copying ID3 tags from input DSF...", true);
+            self.verbose("Copying ID3 tags from input file...", true);
             // If -a/--append was requested and an album tag exists, append " [PCM]" to album
             if self.append_rate_suffix {
                 if let Some(album) = tag.album() {

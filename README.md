@@ -15,7 +15,7 @@ Converts DSD to PCM on the command line with the following features:
 ## Build Dependencies
 
 - [Rust/Cargo](https://rust-lang.org/tools/install/)
-  - On *nix systems like MacOS & Linux, this can be as easy as running the following on the command line: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. Feel free to accept the defaults when the installer prompts you. Keep an eye out for the prompt to reload your environment in the terminal. This will allow you to update your path with the new rust directory.
+  - On *nix systems like MacOS & Linux, this can be as easy as running the following on the command line: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. Feel free to accept the defaults when the installer prompts you. Keep an eye out for the prompt to reload your environment in the terminal. This will allow you to update your path with your new rust user directory.
 - `ffmpeg` (Optional)
   - Only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for converting/compressing the output of dsd2dxd (e.g. to an apple lossless file, a format that dsd2dxd doesn't yet support.)
   - With apt on linux: `sudo apt install ffmpeg`
@@ -77,50 +77,47 @@ and the input-related options specified will be applied to each,
 except where overridden by each file's metadata.
 
 Options:
-  -c, --channels <CHANNELS>
-          Number of channels [default: 2]
-  -f, --fmt <FORMAT>
-          Format: Interleaved (I) or Planar (P) [default: I]
-  -b, --bitdepth <BIT_DEPTH>
-          Bit depth: 16, 20, 24 (fixed integer), or 32 (float) 
-          [default: 24]
-  -t, --filttype <FILTER_TYPE>
-          Filter type: X (XLD), D (Original dsd2pcm), E 
-          (Equiripple. Only available with double rate DSD input, 
-          or 88.2K output and multiples of 48k from DSD64), C 
-          (Chebyshev. Only available with double rate DSD input) 
-          [default: E]
-  -e, --endianness <ENDIANNESS>
-          Endianness: M (MSB) or L (LSB) [default: M]
-  -s, --bs <BLOCK_SIZE>
-          Block size in bytes [default: 4096]
-  -d, --dither <DITHER_TYPE>
-          Dither type: T (TPDF), R (rectangular), N (NJAD), F 
-          (float), X (none) [default: F for 32 bit, T otherwise]
-  -r, --rate <OUTPUT_RATE>
-          Output sample rate in Hz. Can be 88200, 96000, 176400, 
-          192000, 352800, 384000. Note that conversion to multiples 
-          of 44.1k are much faster than 48k multiples [default: 
-          352800]
-  -i, --inrate <INPUT_RATE>
-          Input DSD rate: 1 (dsd64), 2 (dsd128), or 4 (dsd256) 
-          [default: 1]
-  -o, --output <OUTPUT>
-          Output type: S (stdout), A (aif), W (wave), F (flac) Note 
-          that W, A, or F outputs to either <basename>.[wav|aif|
-          flac] in current directory, where <basename> is the input 
-          filename without the extension, or output.[wav|aif|flac] 
-          (if reading from stdin.) [default: S]
-  -l, --level <LEVEL>
-          Volume level adjustment in dB [default: 0.0]
-  -v, --verbose
-          Print diagnostic messages
-  -a, --append
-          Append abbreviated output rate to filename (e.g., _96K, 
-          _88_2K). Also appends " [PCM]" to the album tag of the 
-          output file if present.
-  -h, --help
-          Print help
+-c, --channels <CHANNELS>
+        Number of channels [default: 2]
+-f, --fmt <FORMAT>
+        Format: Interleaved (I) or Planar (P) [default: I]
+-b, --bitdepth <BIT_DEPTH>
+        Bit depth: 16, 20, 24 (fixed integer), or 32 (float) [default: 24]
+-t, --filttype <FILTER_TYPE>
+        Filter type: E (Equiripple), X (XLD. Only available with DSD64
+        input and 88200, 176400, and 352800 outputs), D (Original dsd2pcm.
+        Only available with DSD64 input and 352800 output), C (Chebyshev.
+        Only available with DSD128 input and 88200, 176400, and 352800
+        outputs) [default: E]
+-e, --endianness <ENDIANNESS>
+        Endianness: M (MSB) or L (LSB) [default: M]
+-s, --bs <BLOCK_SIZE>
+        Block size in bytes [default: 4096]
+-d, --dither <DITHER_TYPE>
+        Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X
+        (none) [default: F for 32 bit, T otherwise]
+-r, --rate <OUTPUT_RATE>
+        Output sample rate in Hz. Can be 88200, 96000, 176400, 192000,
+        352800, 384000. Note that conversion to multiples of 44100 are
+        faster than 48000 multiples [default: 352800]
+-i, --inrate <INPUT_RATE>
+        Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256) [default: 1]
+-o, --output <OUTPUT>
+        Output type: S (stdout), A (aif), W (wave), F (flac) Note that W,
+        A, or F outputs to either <basename>.[wav|aif|flac] in current
+        directory, where <basename> is the input filename without the
+        extension, or output.[wav|aif|flac] (if reading from stdin.)
+        [default: S]
+-l, --level <LEVEL>
+        Volume level adjustment in dB. Can be negative with the 
+        long form, e.g. --level=-3 [default: 0.0]
+-v, --verbose
+        Print diagnostic messages
+-a, --append
+        Append abbreviated output rate to filename (e.g., _96K, 
+        _88_2K). Also appends " [PCM]" to the album tag of the output file if present
+-h, --help
+        Print help
 ```
 
 ## Testing Examples

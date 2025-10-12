@@ -32,8 +32,11 @@ struct Cli {
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
     bit_depth: i32,
 
-    /// Filter type: X (XLD), D (Original dsd2pcm),
-    /// E (Equiripple. Only available with double rate DSD input, or 88.2K output and multiples of 48k from DSD64), C (Chebyshev. Only available with double rate DSD input)
+    /// Filter type: E (Equiripple), X (XLD. Only available with 
+    /// DSD64 input and 88200, 176400, and 352800 outputs), 
+    /// D (Original dsd2pcm. Only available with DSD64 input and 
+    /// 352800 output), C (Chebyshev. Only available with 
+    /// DSD128 input and 88200, 176400, and 352800 outputs)
     #[arg(short = 't', long = "filttype", default_value = "E")]
     filter_type: Option<char>,
 
@@ -52,11 +55,11 @@ struct Cli {
 
     /// Output sample rate in Hz. Can be 88200, 96000, 
     /// 176400, 192000, 352800, 384000. Note that conversion 
-    /// to multiples of 44.1k are much faster than 48k multiples
+    /// to multiples of 44100 are faster than 48000 multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: i32,
 
-    /// Input DSD rate: 1 (dsd64), 2 (dsd128), or 4 (dsd256)
+    /// Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256)
     #[arg(short = 'i', long = "inrate", default_value = "1")]
     input_rate: i32,
 
@@ -69,7 +72,8 @@ struct Cli {
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
 
-    /// Volume level adjustment in dB
+    /// Volume level adjustment in dB. Can be negative with the
+    /// long form, e.g. --level=-3
     #[arg(short = 'l', long = "level", default_value = "0.0")]
     level: f64,
 
