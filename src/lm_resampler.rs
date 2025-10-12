@@ -14,9 +14,6 @@ use crate::filters::HTAPS_DSDX5_7TO1_EQ;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
-// std::thread no longer needed after removing threaded Stage1 summation
-// no extra traits needed
-use ringbuf::{traits::*, HeapCons, HeapProd, HeapRb};
 
 // Global LUT cache for Stage1, shared across instances/channels.
 // Keyed by (L, len(right_half), hash(contents of right_half)) to avoid rebuilding.
@@ -49,10 +46,8 @@ static ST1_ALIGN: OnceLock<usize> = OnceLock::new();
 static ST1_TARGET: OnceLock<usize> = OnceLock::new();
 
 // Stage1 threading controls removed; default is single-threaded chunked summation.
-// Staging buffer capacities
-const S1TMP_CAP: usize = 131_072; // Used by two-phase path's internal ring
 
-// Use ringbuf crate for SPSC ring buffers.
+// Ring buffers removed; direct chunked pipeline is used.
 
 #[inline]
 fn env_usize(name: &str, default: usize) -> usize {
@@ -223,9 +218,6 @@ pub struct LMResampler {
     poly2: Option<DecimFIRSym>,
     // Stage 3 (polyphase decimator by 3) optional (None for two-phase path)
     poly3: Option<DecimFIRSym>,
-    // If Some(d), indicates we enabled the (logical) Stage1 polyphase optimization and
-    // stores the Stage1 effective input-sample delay (ceil(group_delay_high / L)).
-    two_phase_lm147: Option<TwoPhaseLM147>,
     s2_scratch: Vec<f64>,
     // Reusable buffer for batching Stage1 outputs before pushing to s1 ring
     s1_scratch: Vec<f64>,
@@ -246,24 +238,21 @@ impl LMResampler {
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
                     // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
-                    two_phase_lm147: None,
                     stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14)),
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
                 };
             }
             147 => {
-                // DSD128 -> 384k two‑phase path (×10 -> /21 -> /7) DEFAULT for L=10
+                // DSD128 -> 384k two‑stage path (×L -> /21) -> /7
                 if out_rate == 384_000 {
                     if verbose {
-                        eprintln!("[DBG] Two-phase L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k", l);
+                        eprintln!("[DBG] Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k", l);
                     }
-                    // Minimal placeholders (not used directly)
                     return Self {
-                        poly2: None,
+                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
+                        poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ[..], 7)),
                         poly3: None,
-                        two_phase_lm147: Some(TwoPhaseLM147::new(l, out_rate)),
-                        stage1_poly: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
                     };
@@ -271,14 +260,12 @@ impl LMResampler {
 
                 if out_rate == 192_000 {
                     if verbose {
-                        eprintln!("[DBG] Two-phase L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 192k", l);
+                        eprintln!("[DBG] Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 192k", l);
                     }
-                    // Minimal placeholders (not used directly)
                     return Self {
-                        poly2: None,
+                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX10_21TO1_EQ[..], l, 21)),
+                        poly2: Some(DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ[..], 7)),
                         poly3: None,
-                        two_phase_lm147: Some(TwoPhaseLM147::new(l, out_rate)),
-                        stage1_poly: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
                     };
@@ -296,7 +283,6 @@ impl LMResampler {
                     poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ[..], 7)),
                     // Stage 3 (decimator by 3)
                     poly3: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ[..], 3)),
-                    two_phase_lm147: None,
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
                 };
@@ -311,17 +297,15 @@ impl LMResampler {
     // Returns number of PCM frames produced into `out`.
     #[inline(always)]
     pub fn process_bytes_lm(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
-        // Two-phase path delegates to specialized helper
-        if let Some(tp) = self.two_phase_lm147.as_mut() {
-            return tp.process_bytes(bytes, lsb_first, out);
-        }
-        let (Some(ref mut s1), Some(ref mut p2), Some(ref mut p3)) = (
-            self.stage1_poly.as_mut(),
-            self.poly2.as_mut(),
-            self.poly3.as_mut(),
-        ) else {
-            return 0;
+        let s1 = match self.stage1_poly.as_mut() {
+            Some(x) => x,
+            None => return 0,
         };
+        let p2 = match self.poly2.as_mut() {
+            Some(x) => x,
+            None => return 0,
+        };
+    let mut p3_opt = self.poly3.as_mut();
 
         let mut produced_total = 0usize;
         let mut i = 0usize; // byte cursor
@@ -331,7 +315,7 @@ impl LMResampler {
         let y1_per_byte_ub = y1_per_byte_ub.max(1);
 
         // Helper to emit stage1 outputs for a byte into s1_scratch
-        let mut push_byte = |b: u8, s1: &mut Stage1Poly, lsb: bool, dst: &mut Vec<f64>| {
+        let push_byte = |b: u8, s1: &mut Stage1Poly, lsb: bool, dst: &mut Vec<f64>| {
             if lsb {
                 for bit in 0..8 {
                     s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
@@ -346,9 +330,14 @@ impl LMResampler {
         while i < bytes.len() && produced_total < out.len() {
             // Budget frames we can still write this call
             let out_budget = out.len() - produced_total;
-            // Stage2 needs D2 inputs per Stage3 output; Stage1 provides inputs to Stage2.
-            let need_s2_in = out_budget.saturating_mul(p3.decim);
-            let need_s1_out = need_s2_in.saturating_mul(p2.decim);
+            // Derive upstream budgets based on whether Stage3 exists
+            let (need_s2_in, need_s1_out) = if let Some(ref p3) = p3_opt {
+                let s2 = out_budget.saturating_mul(p3.decim);
+                (s2, s2.saturating_mul(p2.decim))
+            } else {
+                // Two-stage: Stage2 writes straight to out
+                (out_budget, out_budget.saturating_mul(p2.decim))
+            };
 
             // Take at most this many bytes this iteration so that, even in the worst case,
             // stage1 outputs won't exceed what downstream can consume.
@@ -380,134 +369,23 @@ impl LMResampler {
                 }
             }
 
-            // 2) Stage2: decimate into s2_scratch
-            let cap_s2 = need_s2_in.max(1);
-            if self.s2_scratch.len() < cap_s2 {
-                self.s2_scratch.resize(cap_s2, 0.0);
-            }
+            // 2) Stage2: decimate; target is either s2_scratch (3-stage) or out (2-stage)
             let used_s1 = core::cmp::min(self.s1_scratch.len(), need_s1_out);
-            let n2 = p2.process_block(&self.s1_scratch[..used_s1], &mut self.s2_scratch[..cap_s2]);
-
-            // 3) Stage3: decimate into out
-            let n3 = p3.process_block(&self.s2_scratch[..n2], &mut out[produced_total..]);
-            produced_total += n3;
+            if let Some(ref mut p3) = p3_opt {
+                let cap_s2 = need_s2_in.max(1);
+                if self.s2_scratch.len() < cap_s2 { self.s2_scratch.resize(cap_s2, 0.0); }
+                let n2 = p2.process_block(&self.s1_scratch[..used_s1], &mut self.s2_scratch[..cap_s2]);
+                // 3) Stage3: decimate into out
+                let n3 = p3.process_block(&self.s2_scratch[..n2], &mut out[produced_total..]);
+                produced_total += n3;
+            } else {
+                // Two-stage: write directly to out
+                let n2 = p2.process_block(&self.s1_scratch[..used_s1], &mut out[produced_total..]);
+                produced_total += n2;
+            }
 
             // Advance byte cursor by the number of bytes we actually consumed in Stage1.
             i += consumed_bytes;
-        }
-        produced_total
-    }
-}
-
-// Unified two‑phase L∈{10,20} / (21*7) path for DSD64 or DSD128 -> 384 kHz
-struct TwoPhaseLM147 {
-    stage1: Stage1Poly,  // ×L /21 polyphase (L=10 or 20)
-    stage2: DecimFIRSym, // /7 (2.688 MHz -> 384 kHz)
-    // Reusable buffer for stage1 outputs as SPSC ring
-    s1_prod: HeapProd<f64>,
-    s1_cons: HeapCons<f64>,
-    l: u32,
-}
-
-impl TwoPhaseLM147 {
-    fn new(l: u32, out_rate: u32) -> Self {
-        let rb = HeapRb::<f64>::new(S1TMP_CAP.max(2));
-        let (s1_prod, s1_cons) = rb.split();
-        // Select tap sets based on target output rate
-        //  - 384k: use DDRX10_21TO1 first stage and 2.68MHz /7 second stage
-        //  - 192k: use DSDX10_21TO1 first stage and 1.34MHz /7 second stage
-        let (taps_stage1, taps_stage2) = if out_rate == 192_000 {
-            (&HTAPS_DSDX10_21TO1_EQ[..], &HTAPS_1_34MHZ_7TO1_EQ[..])
-        } else {
-            (&HTAPS_DDRX10_21TO1_EQ[..], &HTAPS_2_68MHZ_7TO1_EQ[..])
-        };
-        Self {
-            stage1: Stage1Poly::new(taps_stage1, l, 21),
-            stage2: DecimFIRSym::new_from_half(taps_stage2, 7),
-            s1_prod,
-            s1_cons,
-            l,
-        }
-    }
-
-    // Block-style processing for two-phase (Stage1 /21 -> /7) path.
-    #[inline]
-    fn process_bytes(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
-        // Stream using ring FIFO for stage1 -> stage2 -> out
-        let y1_per_byte_ub = ((8 * self.l as usize) + 21 - 1) / 21; // ceil(8*L/21)
-        let y1_per_byte_ub = y1_per_byte_ub.max(1);
-        let mut produced_total = 0usize;
-        let mut i = 0usize;
-        while (i < bytes.len()) || (!self.s1_cons.is_empty()) {
-            if produced_total >= out.len() && i >= bytes.len() {
-                break;
-            }
-
-            // Fill stage1 ring (with backpressure)
-            if i < bytes.len() {
-                let free = self.s1_prod.vacant_len();
-                let max_bytes = free / y1_per_byte_ub;
-                if max_bytes > 0 {
-                    let take = core::cmp::min(max_bytes, bytes.len() - i);
-                    let mut write_s1 = |y1: f64| {
-                        if self.s1_prod.try_push(y1).is_err() {
-                            // Free space by draining into out via stage2
-                            let max_in =
-                                (out.len() - produced_total).saturating_mul(self.stage2.decim);
-                            if max_in > 0 {
-                                let (in1a, _in1b) = self.s1_cons.as_slices();
-                                if !in1a.is_empty() {
-                                    let take_in = core::cmp::min(in1a.len(), max_in);
-                                    let n = self.stage2.process_block(
-                                        &in1a[..take_in],
-                                        &mut out[produced_total..],
-                                    );
-                                    unsafe {
-                                        self.s1_cons.advance_read_index(take_in);
-                                    }
-                                    produced_total += n;
-                                }
-                            }
-                            // Retry once
-                            let _ = self.s1_prod.try_push(y1);
-                        }
-                    };
-                    for &byte in &bytes[i..i + take] {
-                        if lsb_first {
-                            for b in 0..8 {
-                                let bit = (byte >> b) & 1;
-                                self.stage1.push_all(bit, |y1| write_s1(y1));
-                            }
-                        } else {
-                            for b in (0..8).rev() {
-                                let bit = (byte >> b) & 1;
-                                self.stage1.push_all(bit, |y1| write_s1(y1));
-                            }
-                        }
-                    }
-                    i += take;
-                }
-            }
-
-            // Drain into out, bounded so outputs fit
-            if produced_total < out.len() {
-                let max_in = (out.len() - produced_total) * self.stage2.decim;
-                let (in1a, _in1b) = self.s1_cons.as_slices();
-                if !in1a.is_empty() {
-                    let take_in = core::cmp::min(in1a.len(), max_in);
-                    let n = self
-                        .stage2
-                        .process_block(&in1a[..take_in], &mut out[produced_total..]);
-                    unsafe {
-                        self.s1_cons.advance_read_index(take_in);
-                    }
-                    produced_total += n;
-                } else if i >= bytes.len() {
-                    break;
-                }
-            } else {
-                break;
-            }
         }
         produced_total
     }

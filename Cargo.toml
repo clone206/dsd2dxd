@@ -11,4 +11,3 @@ flac-codec = "1.2.0"
 dsf = "0.2.2"
 dff = { path = "src/dff/" }
 id3 = "1.16.3"
-ringbuf = "0.4"
