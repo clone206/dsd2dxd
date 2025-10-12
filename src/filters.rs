@@ -8007,6 +8007,12 @@ pub const HTAPS_DSD256_64TO1_EQ: [f64; 435] = [
     3.820244711553e-08,
 ];
 
+/**
+ * 2nd half of coefficients for DSD256 to 88.2kHz (128:1) decimation,
+ * Fs: 11289600 Hz,
+ * Fpass: 20000, .1db ripple
+ * Fstop: 60000, 120db attenuation (what's a little aliasing between friends?)
+ */
 pub const HTAPS_DSD256_128TO1_EQ: [f64; 642] = [
     0.005842353695939,
     0.005841610722928,
