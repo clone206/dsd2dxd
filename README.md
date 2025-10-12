@@ -80,55 +80,46 @@ Options:
   -c, --channels <CHANNELS>
           Number of channels [default: 2]
   -f, --fmt <FORMAT>
-          Format: Interleaved (I) or Planar
-          (P) [default: I]
+          Format: Interleaved (I) or Planar (P) [default: I]
   -b, --bitdepth <BIT_DEPTH>
-          Bit depth: 16, 20, 24 (fixed integer), or 32
-          (float) [default: 24]
+          Bit depth: 16, 20, 24 (fixed integer), or 32 (float) 
+          [default: 24]
   -t, --filttype <FILTER_TYPE>
-          Filter type: X (XLD), D
-          (Original dsd2pcm), E (Equiripple. Only
-          available with double rate DSD
-          input, or 88.2K output and multiples of 48k from
-          DSD64), C (Chebyshev. Only
-          available with double rate DSD
-          input) [default: E]
+          Filter type: X (XLD), D (Original dsd2pcm), E 
+          (Equiripple. Only available with double rate DSD input, 
+          or 88.2K output and multiples of 48k from DSD64), C 
+          (Chebyshev. Only available with double rate DSD input) 
+          [default: E]
   -e, --endianness <ENDIANNESS>
-          Endianness: M (MSB) or L (LSB)
-          [default: M]
+          Endianness: M (MSB) or L (LSB) [default: M]
   -s, --bs <BLOCK_SIZE>
-          Block size in bytes [default:
-          4096]
+          Block size in bytes [default: 4096]
   -d, --dither <DITHER_TYPE>
-          Dither type: T (TPDF), R
-          (rectangular), N (NJAD), F
-          (float), X (none) [default: F for
-          32 bit, T otherwise]
+          Dither type: T (TPDF), R (rectangular), N (NJAD), F 
+          (float), X (none) [default: F for 32 bit, T otherwise]
   -r, --rate <OUTPUT_RATE>
-          Output sample rate in Hz. Can be
-          88200, 96000, 176400, 192000,
-          352800, 384000. Note that
-          conversion to multiples of 44.1k
-          are much faster than 48k multiples
-          [default: 352800]
+          Output sample rate in Hz. Can be 88200, 96000, 176400, 
+          192000, 352800, 384000. Note that conversion to multiples 
+          of 44.1k are much faster than 48k multiples [default: 
+          352800]
   -i, --inrate <INPUT_RATE>
-          Input DSD rate: 1 (dsd64), 2
-          (dsd128), or 4 (dsd256) [default: 1]
+          Input DSD rate: 1 (dsd64), 2 (dsd128), or 4 (dsd256) 
+          [default: 1]
   -o, --output <OUTPUT>
-          Output type: S (stdout), A (aif),
-          W (wave), F (flac) Note that W, A,
-          or F outputs to either
-          <basename>.[wav|aif|flac] in
-          current directory, where
-          <basename> is the input filename
-          without the extension, or
-          output.[wav|aif|flac] if reading
-          from stdin.) [default: S]
+          Output type: S (stdout), A (aif), W (wave), F (flac) Note 
+          that W, A, or F outputs to either <basename>.[wav|aif|
+          flac] in current directory, where <basename> is the input 
+          filename without the extension, or output.[wav|aif|flac] 
+          (if reading from stdin.) [default: S]
   -l, --level <LEVEL>
-          Volume level adjustment in dB
-          [default: 0.0]
+          Volume level adjustment in dB [default: 0.0]
   -v, --verbose
           Print diagnostic messages
+  -a, --append
+          Append abbreviated output rate to filename (e.g., _96K, 
+          _88_2K).
+          Also appends " [PCM]" to the album tag of the output file 
+          if present
   -h, --help
           Print help
 ```

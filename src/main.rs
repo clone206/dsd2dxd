@@ -45,11 +45,14 @@ struct Cli {
     #[arg(short = 's', long = "bs", default_value = "4096")]
     block_size: Option<i32>,
 
-    /// Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X (none) [default: F for 32 bit, T otherwise]
+    /// Dither type: T (TPDF), R (rectangular), N (NJAD), 
+    /// F (float), X (none) [default: F for 32 bit, T otherwise]
     #[arg(short = 'd', long = "dither")]
     dither_type: Option<char>,
 
-    /// Output sample rate in Hz. Can be 88200, 96000, 176400, 192000, 352800, 384000. Note that conversion to multiples of 44.1k are much faster than 48k multiples
+    /// Output sample rate in Hz. Can be 88200, 96000, 
+    /// 176400, 192000, 352800, 384000. Note that conversion 
+    /// to multiples of 44.1k are much faster than 48k multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: i32,
 
@@ -61,7 +64,8 @@ struct Cli {
     /// Note that W, A, or F outputs to either
     /// <basename>.[wav|aif|flac] in current directory,
     /// where <basename> is the input filename
-    /// without the extension, or output.[wav|aif|flac] if reading from stdin.)
+    /// without the extension, or output.[wav|aif|flac] 
+    /// (if reading from stdin.)
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
 
@@ -73,7 +77,9 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
-    /// Append abbreviated output rate to filename (e.g., _96K, _88_2K)
+    /// Append abbreviated output rate to filename 
+    /// (e.g., _96K, _88_2K). Also appends " [PCM]" to the 
+    /// album tag of the output file if present.
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
 
