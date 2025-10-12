@@ -65,24 +65,25 @@ dsd2dxd -r 88200 -b 24 -o f ./{*,**/*}.{dsf,DSF}
 
 For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-l`, for setting the output type, output sample rate, and level adjustment, respectively.
 
-
 ```
-Usage: dsd2dxd [options] [infile(s)|-], where - means read from stdin
+Usage: dsd2dxd [options] [infile(s)|-], where "-" means read from 
+standard in (stdin).
 
 If reading from a file, certain command line options you provide 
-(e.g. block size) may be overridden using the metadata found in that 
-file (either a dsf or dff file). If neither filename(s) or - is 
-provided, standard in is assumed. Multiple filenames can be provided 
-and the input-related options specified will be applied to each, 
-except where overridden by each file's metadata.
+(e.g. block size) may be overridden using the metadata found in 
+that file (either a dsf or dff file). If neither filename(s) 
+or - is provided, standard in is assumed. 
+Multiple filenames can be provided and the input-related options 
+specified will be applied to each, except where overridden by each 
+file's metadata.
 
 Options:
 -c, --channels <CHANNELS>
         Number of channels [default: 2]
 -f, --fmt <FORMAT>
-        Format: Interleaved (I) or Planar (P) [default: I]
+        DSD data format: Interleaved (I) or Planar (P) [default: I]
 -b, --bitdepth <BIT_DEPTH>
-        Bit depth: 16, 20, 24 (fixed integer), or 32 (float) [default: 24]
+        Output bit depth: 16, 20, 24 (fixed integer), or 32 (float) [default: 24]
 -t, --filttype <FILTER_TYPE>
         Filter type: E (Equiripple), X (XLD. Only available with DSD64
         input and 88200, 176400, and 352800 outputs), D (Original dsd2pcm.
@@ -90,9 +91,10 @@ Options:
         Only available with DSD128 input and 88200, 176400, and 352800
         outputs) [default: E]
 -e, --endianness <ENDIANNESS>
-        Endianness: M (MSB) or L (LSB) [default: M]
+        DSD data endianness: M (most significant bit first),
+        or L (least significant bit first) [default: M]
 -s, --bs <BLOCK_SIZE>
-        Block size in bytes [default: 4096]
+        DSD block size in bytes [default: 4096]
 -d, --dither <DITHER_TYPE>
         Dither type: T (TPDF), R (rectangular), N (NJAD), F (float), X
         (none) [default: F for 32 bit, T otherwise]

@@ -24,11 +24,11 @@ struct Cli {
     #[arg(short = 'c', long = "channels", default_value = "2")]
     channels: Option<u32>,
 
-    /// Format: Interleaved (I) or Planar (P)
+    /// DSD data format: Interleaved (I) or Planar (P)
     #[arg(short = 'f', long = "fmt", default_value = "I")]
     format: char,
 
-    /// Bit depth: 16, 20, 24 (fixed integer), or 32 (float)
+    /// Output bit depth: 16, 20, 24 (fixed integer), or 32 (float)
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
     bit_depth: i32,
 
@@ -40,11 +40,12 @@ struct Cli {
     #[arg(short = 't', long = "filttype", default_value = "E")]
     filter_type: Option<char>,
 
-    /// Endianness: M (MSB) or L (LSB)
+    /// DSD data endianness: M (most significant bit first),
+    /// or L (least significant bit first)
     #[arg(short = 'e', long = "endianness", default_value = "M")]
     endianness: char,
 
-    /// Block size in bytes
+    /// DSD block size in bytes
     #[arg(short = 's', long = "bs", default_value = "4096")]
     block_size: Option<i32>,
 
