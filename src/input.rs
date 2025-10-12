@@ -154,36 +154,26 @@ impl InputContext {
                             ctx.dsd_rate = (my_dsd.sample_rate / 2_822_400) as i32;
                         } else {
                             // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
-                            ctx.verbose(
-                                    &format!(
-                                        "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
-                                        my_dsd.sample_rate, ctx.dsd_rate
-                                    ),
-                                    true,
-                                );
+                            eprintln!(
+                                "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
+                                my_dsd.sample_rate, ctx.dsd_rate
+                            );
                         }
 
                         ctx.verbose(
                             &format!("Audio length in bytes: {}", ctx.audio_length),
                             true,
                         );
-                        ctx.verbose(
-                                &format!(
-                                    "Container: sr={}Hz channels={} interleaved={} block_size/ch={} pos={}",
-                                    my_dsd.sample_rate,
-                                    ctx.channels_num,
-                                    ctx.interleaved,
-                                    ctx.block_size,
-                                    ctx.audio_pos
-                                ),
-                                true,
-                            );
+                        eprintln!(
+                            "Container: sr={}Hz channels={} interleaved={} block_size/ch={}",
+                            my_dsd.sample_rate,
+                            ctx.channels_num,
+                            ctx.interleaved,
+                            ctx.block_size,
+                        );
                     }
                     Err(e) => {
-                        ctx.verbose(
-                            &format!("Container open failed ({}); treating as raw DSD", e),
-                            true,
-                        );
+                        eprintln!("Container open failed ({}); treating as raw DSD", e);
                         if let Ok(meta) = std::fs::metadata(&input_file) {
                             ctx.audio_pos = 0;
                             ctx.audio_length = meta.len();
@@ -195,20 +185,17 @@ impl InputContext {
                 if let Ok(meta) = std::fs::metadata(&input_file) {
                     ctx.audio_pos = 0;
                     ctx.audio_length = meta.len();
-                    ctx.verbose("Treating input as raw DSD (no container)", true);
+                    eprintln!("Treating input as raw DSD (no container)");
                 }
             }
         } else {
             // Handle stdin case
-            ctx.verbose("Reading from stdin", true);
+            eprintln!("Reading from stdin");
             ctx.audio_length = u64::MAX;
             ctx.audio_pos = 0;
-            ctx.verbose(
-                &format!(
-                    "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
-                    ctx.channels_num, ctx.lsbit_first, ctx.interleaved
-                ),
-                true,
+            eprintln!(
+                "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
+                ctx.channels_num, if ctx.lsbit_first == 1 { "true" } else { "false" }, ctx.interleaved
             );
         }
 

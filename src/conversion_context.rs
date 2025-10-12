@@ -146,18 +146,15 @@ impl ConversionContext {
                 );
                 ctx.verbose(
                     &format!(
-                        "[DBG] Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
+                        "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
                         ctx.decim_ratio, ctx.filt_type, dsd_rate
                     ),
                     true,
                 );
             } else {
-                ctx.verbose(
-                    &format!(
-                        "[DBG] Precalc taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
-                        ctx.decim_ratio, ctx.filt_type, dsd_rate
-                    ),
-                    true,
+                eprintln!(
+                    "Precalc taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
+                    ctx.decim_ratio, ctx.filt_type, dsd_rate
                 );
             }
         }
@@ -310,6 +307,7 @@ impl ConversionContext {
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
+        eprintln!("Dither type: {}", self.dither.dither_type().to_ascii_uppercase());
         let wall_start = Instant::now();
 
         // (Configuration prints intentionally unconditional; leave as-is)
@@ -842,7 +840,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
     }
 
-    #[inline]
     fn compute_decim_and_upsample(in_ctx: &InputContext, out_ctx: &OutputContext) -> (i32, u32) {
         // Determine decimation ratio (M)
         let decim_ratio: i32 = if out_ctx.rate == 96_000 && in_ctx.dsd_rate == 4 {
