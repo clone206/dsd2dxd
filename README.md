@@ -117,9 +117,8 @@ Options:
           Print diagnostic messages
   -a, --append
           Append abbreviated output rate to filename (e.g., _96K, 
-          _88_2K).
-          Also appends " [PCM]" to the album tag of the output file 
-          if present
+          _88_2K). Also appends " [PCM]" to the album tag of the 
+          output file if present.
   -h, --help
           Print help
 ```
