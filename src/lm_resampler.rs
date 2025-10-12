@@ -614,10 +614,8 @@ impl Stage1Poly {
             let mut k = 0usize;
             while k < this_chunk {
                 let idx = (bidx + capb - ((k as usize) << 3)) & mask;
-                let byte = unsafe { *self.byte_ring.get_unchecked(idx) } as usize;
-                unsafe {
-                    sum += *phase_lut.get_unchecked(g + k).get_unchecked(byte);
-                }
+                let byte = self.byte_ring[idx] as usize;
+                sum += phase_lut[g + k][byte];
                 k += 1;
             }
             // Advance bidx by the number of groups processed in this chunk
@@ -690,7 +688,7 @@ impl DecimFIRSym {
             // Advance next output time for future samples
             self.next_out_t = self.next_out_t.saturating_add(self.decim);
 
-            let acc = unsafe { self.convolve_direct() };
+            let acc = self.convolve_direct();
             if produced < out.len() {
                 out[produced] = acc;
                 produced += 1;
@@ -702,7 +700,7 @@ impl DecimFIRSym {
     // Direct full-rate symmetric FIR convolution
     // Evaluates y[t] = sum_{k=0..len-1} h[k] * x[t - k] when push() determines an output is due.
     #[inline(always)]
-    unsafe fn convolve_direct(&self) -> f64 {
+    fn convolve_direct(&self) -> f64 {
         let cap = self.ring.len();
         let newest = (self.w + cap - 1) & self.mask; // index of x[t]
         let mut total = 0.0;
@@ -720,9 +718,9 @@ impl DecimFIRSym {
 
         let mut k = 0usize;
         while k < half {
-            let c = *self._full.get_unchecked(k);
-            let xf = *self.ring.get_unchecked(idx_front);
-            let xb = *self.ring.get_unchecked(idx_back);
+            let c = self._full[k];
+            let xf = self.ring[idx_front];
+            let xb = self.ring[idx_back];
             total += c * (xf + xb);
             // advance indices
             idx_front = (idx_front + cap - 1) & self.mask; // older by 1
@@ -733,7 +731,7 @@ impl DecimFIRSym {
         // Center tap (odd length)
         if has_center {
             let ic = (newest + cap - center) & self.mask;
-            total += *self._full.get_unchecked(center) * *self.ring.get_unchecked(ic);
+            total += self._full[center] * self.ring[ic];
         }
         total
     }
