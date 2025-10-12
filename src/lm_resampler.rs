@@ -131,10 +131,6 @@ fn compute_stage1_chunk(total_groups: usize, m: usize, _l: u32) -> usize {
     chunk
 }
 
-// stage1_use_lut removed: LUT is always used
-
-// (Polyphase decimator env toggles removed)
-
 #[inline]
 fn hash_f64_slice_fnv1a(v: &[f64]) -> u64 {
     // 64-bit FNV-1a over raw bit patterns, stable for identical tap tables
@@ -357,7 +353,11 @@ impl LMResampler {
             // Take at most this many bytes this iteration so that, even in the worst case,
             // stage1 outputs won't exceed what downstream can consume.
             // ceil(need_s1_out / y1_per_byte_ub)
-            let mut take_bytes = if need_s1_out == 0 { 0 } else { (need_s1_out + y1_per_byte_ub - 1) / y1_per_byte_ub };
+            let mut take_bytes = if need_s1_out == 0 {
+                0
+            } else {
+                (need_s1_out + y1_per_byte_ub - 1) / y1_per_byte_ub
+            };
             take_bytes = take_bytes.min(bytes.len() - i);
             if take_bytes == 0 {
                 break;
@@ -367,17 +367,24 @@ impl LMResampler {
             self.s1_scratch.clear();
             // Reserve enough for worst case to avoid reallocation branches
             let reserve = take_bytes.saturating_mul(y1_per_byte_ub);
-            if self.s1_scratch.capacity() < reserve { self.s1_scratch.reserve(reserve - self.s1_scratch.capacity()); }
+            if self.s1_scratch.capacity() < reserve {
+                self.s1_scratch
+                    .reserve(reserve - self.s1_scratch.capacity());
+            }
             let mut consumed_bytes = 0usize;
             for &byte in &bytes[i..i + take_bytes] {
                 push_byte(byte, s1, lsb_first, &mut self.s1_scratch);
                 consumed_bytes += 1;
-                if self.s1_scratch.len() >= need_s1_out { break; }
+                if self.s1_scratch.len() >= need_s1_out {
+                    break;
+                }
             }
 
             // 2) Stage2: decimate into s2_scratch
             let cap_s2 = need_s2_in.max(1);
-            if self.s2_scratch.len() < cap_s2 { self.s2_scratch.resize(cap_s2, 0.0); }
+            if self.s2_scratch.len() < cap_s2 {
+                self.s2_scratch.resize(cap_s2, 0.0);
+            }
             let used_s1 = core::cmp::min(self.s1_scratch.len(), need_s1_out);
             let n2 = p2.process_block(&self.s1_scratch[..used_s1], &mut self.s2_scratch[..cap_s2]);
 
