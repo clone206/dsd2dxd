@@ -15,7 +15,7 @@ Converts DSD to PCM on the command line with the following features:
 ## Build Dependencies
 
 - [Rust/Cargo](https://rust-lang.org/tools/install/)
-  - On *nix systems like MacOS & Linux, this can be as easy as running the following on the command line: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. Feel free to accept the defaults when the installer prompts you.
+  - On *nix systems like MacOS & Linux, this can be as easy as running the following on the command line: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`. Feel free to accept the defaults when the installer prompts you. Keep an eye out for the prompt to reload your environment in the terminal. This will allow you to update your path with the new rust directory.
 - `ffmpeg` (Optional)
   - Only needed for a simple playback mechanism, such as when running the test scripts or below usage examples, or for converting/compressing the output of dsd2dxd (e.g. to an apple lossless file, a format that dsd2dxd doesn't yet support.)
   - With apt on linux: `sudo apt install ffmpeg`
@@ -29,7 +29,7 @@ At the root of the cloned repository:
 
 `cargo install --path .`
 
-This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo.
+This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`)
 
 ### Examples
 
