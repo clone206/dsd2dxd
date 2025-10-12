@@ -684,19 +684,18 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         {
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
-        // DSD256 (4x) integer decimation paths: currently support 32:1, 64:1, and 147:1 (all require 'E')
-        if self.in_ctx.dsd_rate == 4
-            && !(matches!(self.decim_ratio, 32 | 64 | 147) && self.filt_type == 'E')
-        {
-            return Err("With DSD256 input, only 32:1, 64:1, or 147:1 decimation using the Equiripple filter is presently supported.".into());
-        }
-        // 294:1 constraint (only DSD128 + E)
-        if self.decim_ratio == 294 && !(self.in_ctx.dsd_rate == 2 && self.filt_type == 'E') {
-            return Err(
-                "294:1 decimation currently only supported for DSD128 with Equiripple filter."
-                    .into(),
-            );
-        }
+            // DSD256 (4x) integer decimation paths: support 32:1, 64:1, 147:1, and 294:1 (all require 'E')
+            if self.in_ctx.dsd_rate == 4
+                && !(matches!(self.decim_ratio, 32 | 64 | 147 | 294) && self.filt_type == 'E')
+            {
+                return Err("With DSD256 input, only 32:1, 64:1, 147:1, or 294:1 decimation using the Equiripple filter is presently supported.".into());
+            }
+            // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
+            if self.decim_ratio == 294
+                && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 2 || self.in_ctx.dsd_rate == 4))
+            {
+                return Err("294:1 decimation is only supported for DSD128 or DSD256 with the Equiripple filter.".into());
+            }
         // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
         if self.decim_ratio == 147
             && !(self.filt_type == 'E'
@@ -793,7 +792,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     #[inline]
     fn compute_decim_and_upsample(in_ctx: &InputContext, out_ctx: &OutputContext) -> (i32, u32) {
         // Determine decimation ratio (M)
-        let decim_ratio: i32 = if out_ctx.rate == 96_000 && in_ctx.dsd_rate == 2 {
+        let decim_ratio: i32 = if (out_ctx.rate == 96_000 && in_ctx.dsd_rate == 2)
+            || (out_ctx.rate == 192_000 && in_ctx.dsd_rate == 4)
+        {
             294
         } else if out_ctx.rate == 96_000 || out_ctx.rate == 192_000 || out_ctx.rate == 384_000 {
             147

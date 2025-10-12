@@ -52,7 +52,7 @@ impl InputContext {
         let is_stdin = input_file == "-";
 
         // Only enforce CLI dsd_rate for stdin or raw inputs
-        if (is_stdin || !is_container) && ![1, 2].contains(&dsd_rate) {
+        if (is_stdin || !is_container) && ![1, 2, 4].contains(&dsd_rate) {
             return Err("Unsupported DSD input rate.".into());
         }
 

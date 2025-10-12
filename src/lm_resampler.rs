@@ -7,6 +7,7 @@ use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
 use crate::filters::HTAPS_288K_3TO1_EQ;
 use crate::filters::HTAPS_2MHZ_7TO1_EQ;
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
+use crate::filters::HTAPS_2_68MHZ_14TO1_EQ;
 use crate::filters::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::filters::HTAPS_DSDX10_21TO1_EQ;
@@ -209,6 +210,19 @@ impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
         match m {
             294 => {
+                // New DSD256 -> 192k two‑stage path: (×5 -> /21) => 2.688 MHz -> /14 => 192k
+                if out_rate == 192_000 && l == 5 {
+                    if verbose {
+                        eprintln!("[DBG] Two-stage DSD256->192k: (×{} -> /21) -> /14 [DDRX10_21TO1 + 2.68MHz 14:1]", l);
+                    }
+                    return Self {
+                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
+                        poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_14TO1_EQ[..], 14)),
+                        poly3: None,
+                        s2_scratch: Vec::new(),
+                        s1_scratch: Vec::new(),
+                    };
+                }
                 // Original cascade Stage1 definitions
                 if verbose {
                     eprintln!(
