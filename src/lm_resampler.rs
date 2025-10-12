@@ -8,6 +8,7 @@ use crate::filters::HTAPS_288K_3TO1_EQ;
 use crate::filters::HTAPS_2MHZ_7TO1_EQ;
 use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters::HTAPS_2_68MHZ_14TO1_EQ;
+use crate::filters::HTAPS_2_68MHZ_28TO1_EQ;
 use crate::filters::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::filters::HTAPS_DSDX10_21TO1_EQ;
@@ -209,6 +210,22 @@ pub struct LMResampler {
 impl LMResampler {
     pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
         match m {
+            588 => {
+                // New DSD256 -> 96k two‑stage path: (×5 -> /21) => ~10.752 MHz -> /28 => 96k
+                if out_rate == 96_000 && l == 5 {
+                    if verbose {
+                        eprintln!("[DBG] Two-stage DSD256->96k: (×{} -> /21) -> /28 [DDRX10_21TO1 + 2.68MHz 28:1]", l);
+                    }
+                    return Self {
+                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
+                        poly2: Some(DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_28TO1_EQ[..], 28)),
+                        poly3: None,
+                        s2_scratch: Vec::new(),
+                        s1_scratch: Vec::new(),
+                    };
+                }
+                panic!("Unsupported 588: must be out_rate=96k and L=5");
+            }
             294 => {
                 // New DSD256 -> 192k two‑stage path: (×5 -> /21) => 2.688 MHz -> /14 => 192k
                 if out_rate == 192_000 && l == 5 {
@@ -604,7 +621,7 @@ impl Stage1Poly {
             return 0.0;
         }
         // Start at last written rolling byte (newest 8-bit window)
-        let mut bidx = (self.wbyte + self.byte_mask) & self.byte_mask; // newest byte index (time t)
+    let mut bidx = (self.wbyte.wrapping_add(self.byte_mask)) & self.byte_mask; // newest byte index (time t)
         let capb = self.byte_mask + 1;
         let mask = self.byte_mask;
         let mut g = 0usize;
@@ -613,13 +630,19 @@ impl Stage1Poly {
             // Non-unrolled inner loop
             let mut k = 0usize;
             while k < this_chunk {
-                let idx = (bidx + capb - ((k as usize) << 3)) & mask;
+                let idx = bidx
+                    .wrapping_add(capb)
+                    .wrapping_sub((k as usize) << 3)
+                    & mask;
                 let byte = self.byte_ring[idx] as usize;
                 sum += phase_lut[g + k][byte];
                 k += 1;
             }
             // Advance bidx by the number of groups processed in this chunk
-            bidx = (bidx + capb - ((this_chunk as usize) << 3)) & mask;
+            bidx = bidx
+                .wrapping_add(capb)
+                .wrapping_sub((this_chunk as usize) << 3)
+                & mask;
             g += this_chunk;
         }
         sum
