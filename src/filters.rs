@@ -1642,6 +1642,7 @@ pub const HTAPS_1_34MHZ_7TO1_EQ: [f64; 55] = [
 /**
  * 1st phase for 384K target
  */
+#[allow(dead_code)]
 pub const HTAPS_DDRX10_7TO1_EQ: [f64; 26] = [
     0.06587603211871,
     0.06415828036226,
@@ -1671,6 +1672,7 @@ pub const HTAPS_DDRX10_7TO1_EQ: [f64; 26] = [
     1.316086271818e-07,
 ];
 
+#[allow(dead_code)]
 pub const HTAPS_8MHZ_7TO1_EQ: [f64; 33] = [
     0.08210614758979,
     0.07951358551945,
@@ -1707,6 +1709,7 @@ pub const HTAPS_8MHZ_7TO1_EQ: [f64; 33] = [
     -9.79000660473e-08,
 ];
 
+#[allow(dead_code)]
 pub const HTAPS_1MHZ_3TO1_EQ: [f64; 15] = [
     0.167530188637,
     0.1463204328694,
@@ -1728,6 +1731,7 @@ pub const HTAPS_1MHZ_3TO1_EQ: [f64; 15] = [
 /**
  * 1st phase for 192K target from dsd128
  */
+#[allow(dead_code)]
 pub const HTAPS_DDRX5_7TO_1_EQ: [f64; 25] = [
     0.06863281841814,
     0.06669203863891,
@@ -1756,6 +1760,7 @@ pub const HTAPS_DDRX5_7TO_1_EQ: [f64; 25] = [
     1.408651523031e-07,
 ];
 
+#[allow(dead_code)]
 pub const HTAPS_4MHZ_7TO1_EQ: [f64; 37] = [
     0.07578847831454,
     0.07382844907291,
@@ -1796,6 +1801,7 @@ pub const HTAPS_4MHZ_7TO1_EQ: [f64; 37] = [
     -8.344606172124e-08,
 ];
 
+#[allow(dead_code)]
 pub const HTAPS_576K_3TO1_EQ: [f64; 22] = [
     0.1616604459312,
     0.1450152270882,
