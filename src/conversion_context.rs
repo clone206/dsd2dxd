@@ -7,7 +7,7 @@ use crate::dsdin_sys::DSD_64_RATE;
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ,
+    HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ,
     HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
 };
 use crate::input::InputContext;
@@ -185,6 +185,14 @@ impl ConversionContext {
         decim_ratio: i32,
     ) -> Option<&'static [f64]> {
         match decim_ratio {
+            // 128:1 (DSD256 -> 88.2 kHz), Equiripple only
+            128 => {
+                if filt_type == 'E' && dsd_rate == 4 {
+                    Some(&HTAPS_DSD256_128TO1_EQ)
+                } else {
+                    None
+                }
+            }
             // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, 'E' uses new equiripple, others fallback
             8 => {
                 if dsd_rate == 1 {
@@ -717,11 +725,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         {
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
-            // DSD256 (4x) integer decimation paths: support 32:1, 64:1, 147:1, and 294:1 (all require 'E')
+            // DSD256 (4x) integer decimation paths: support 32:1, 64:1, 128:1, 147:1, and 294:1 (all require 'E')
             if self.in_ctx.dsd_rate == 4
-                && !(matches!(self.decim_ratio, 32 | 64 | 147 | 294) && self.filt_type == 'E')
+                && !(matches!(self.decim_ratio, 32 | 64 | 128 | 147 | 294) && self.filt_type == 'E')
             {
-                return Err("With DSD256 input, only 32:1, 64:1, 147:1, or 294:1 decimation using the Equiripple filter is presently supported.".into());
+                return Err("With DSD256 input, only 32:1, 64:1, 128:1, 147:1, or 294:1 decimation using the Equiripple filter is presently supported.".into());
             }
             // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
             if self.decim_ratio == 294
