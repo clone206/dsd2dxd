@@ -13,6 +13,7 @@ use crate::filters::{
 use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
+use id3::TagLike;
 use std::error::Error;
 //use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -429,8 +430,19 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             _ => {}
         }
 
-        if let Some(tag) = self.in_ctx.tag.clone() {
+        if let Some(mut tag) = self.in_ctx.tag.clone() {
             self.verbose("Copying ID3 tags from input DSF...", true);
+            // If -a/--append was requested and an album tag exists, append " [PCM]" to album
+            if self.append_rate_suffix {
+                if let Some(album) = tag.album() {
+                    // Avoid duplicating the suffix if already present
+                    if !album.ends_with(" [PCM]") {
+                        let mut new_album = String::from(album);
+                        new_album.push_str(" [PCM]");
+                        tag.set_album(new_album);
+                    }
+                }
+            }
             let path_out = Path::new(&out_path);
             tag.write_to_path(path_out, tag.version())?;
         } else {
