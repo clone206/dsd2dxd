@@ -192,11 +192,7 @@ fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f64; 256]
 }
 
 // ====================================================================================
-// Generalized equiripple L/M resampler covering:
-//   - L=5,  M=294: (×5 -> /14) -> /7 -> /3  -> 96 kHz
-//   - L=5,  M=147: (×5 -> /7)  -> /7 -> /3  -> 192 kHz
-//   - L=10, M=147: (×10 -> /7) -> /7 -> /3  -> 384 kHz
-//  ...
+// Generalized L/M resampler
 // ====================================================================================
 pub struct LMResampler {
     // Unified Stage1 polyphase (replaces former Slow + Generic variants)
