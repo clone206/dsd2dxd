@@ -73,6 +73,10 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
+    /// Append abbreviated output rate to filename (e.g., _96K, _88_2K)
+    #[arg(short = 'a', long = "append")]
+    append_rate: bool,
+
     /// Input files (use - for stdin)
     #[arg(name = "FILES")]
     files: Vec<String>,
@@ -139,6 +143,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             cli.filter_type.unwrap().to_ascii_uppercase(),
             cli.verbose,
         )?;
+        if cli.append_rate {
+            conv_ctx.set_append_rate_suffix(true);
+        }
         conv_ctx.do_conversion()?;
     }
 

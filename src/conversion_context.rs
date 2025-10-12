@@ -19,6 +19,18 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::Instant;
 
+fn abbrev_rate(rate: u32) -> Option<&'static str> {
+    match rate {
+        88_200 => Some("88_2K"),
+        96_000 => Some("96K"),
+        176_400 => Some("176_4K"),
+        192_000 => Some("192K"),
+        352_800 => Some("352_8K"),
+        384_000 => Some("384K"),
+        _ => None,
+    }
+}
+
 pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
@@ -31,6 +43,7 @@ pub struct ConversionContext {
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
     verbose_mode: bool,
+    append_rate_suffix: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
     eq_lm_resamplers: Option<Vec<LMResampler>>,
     total_dsd_bytes_processed: u64,
@@ -78,6 +91,7 @@ impl ConversionContext {
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             verbose_mode: verbose_param,
+            append_rate_suffix: false,
             precalc_decims: None,
             eq_lm_resamplers: None,
             total_dsd_bytes_processed: 0,
@@ -248,8 +262,18 @@ impl ConversionContext {
             'f' => "flac",
             _ => "out",
         };
+        let suffix = if self.append_rate_suffix {
+            if let Some(abbrev) = abbrev_rate(self.out_ctx.rate as u32) {
+                format!("_{}", abbrev)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
         if self.in_ctx.std_in {
-            return format!("output.{}", ext);
+            let base = if suffix.is_empty() { "output".to_string() } else { format!("output{}", suffix) };
+            return format!("{}.{}", base, ext);
         }
         let parent = self
             .in_ctx
@@ -264,8 +288,13 @@ impl ConversionContext {
             .and_then(|p| p.file_stem())
             .and_then(|s| s.to_str())
             .unwrap_or("output");
+        let name = if suffix.is_empty() {
+            format!("{}.{}", stem, ext)
+        } else {
+            format!("{}{}.{}", stem, suffix, ext)
+        };
         parent
-            .join(format!("{}.{}", stem, ext))
+            .join(name)
             .to_string_lossy()
             .into_owned()
     }
@@ -329,6 +358,10 @@ impl ConversionContext {
             "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
             self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
         );
+    }
+
+    pub fn set_append_rate_suffix(&mut self, value: bool) {
+        self.append_rate_suffix = value;
     }
 
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
