@@ -1,7 +1,7 @@
 # dsd2dxd
 
 Converts DSD to PCM on the command line with the following features:
-- Accepts single rate (dsd64), or double rate (dsd128) DSD as input.
+- Accepts single rate (dsd64), double rate (dsd128), or quad rate (dsd256) DSD as input.
   - .dsf and .dff files can be read from, including metadata.
 - Can output to an aiff, wav, or flac file.
   - Where possible, ID3v2 tags are copied to the destination files (when read from .dsf or .dff file that has them).
