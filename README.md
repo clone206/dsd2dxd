@@ -160,8 +160,6 @@ Based on dsd2pcm by Sebastian Gesemann: [https://code.google.com/archive/p/dsd2p
 
 Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [XLD](https://tmkk.undo.jp/xld/index_e.html), and [Airwindows](https://www.airwindows.com).
 
-DSF and DFF file data & metadata reading is done via a modified version of [dsdunpack](https://github.com/wishyoushine/dsdunpack).
-
 ## Contributing
 
 Contributions from experienced  developers welcome! Just keep the code clean and try to follow the formatting patterns already in place (e.g. space indentation, avoiding overly long lines of code.) I personally use vscode, which includes a formatter. Using the same formatter may save some headaches.
