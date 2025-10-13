@@ -7,8 +7,8 @@ use crate::dsdin_sys::DSD_64_RATE;
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ,
-    HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
+    HTAPS_DSD256_128TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD64_16TO1_EQ,
+    HTAPS_DSD64_32TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
 };
 use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
@@ -81,10 +81,15 @@ impl ConversionContext {
             dither,
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
-            float_data: vec![0.0; (dsd_bytes_per_chan * 8) / decim_ratio as usize],
+            float_data: vec![
+                0.0;
+                (dsd_bytes_per_chan * 8) * upsample_ratio as usize
+                    / decim_ratio as usize
+            ],
             pcm_data: vec![
                 0;
-                ((dsd_bytes_per_chan * 8) / decim_ratio as usize)
+                ((dsd_bytes_per_chan * 8) * upsample_ratio as usize
+                    / decim_ratio as usize)
                     * channels
                     * bytes_per_sample
             ],
@@ -104,7 +109,8 @@ impl ConversionContext {
         };
 
         // Fractional (L/M) path stays as-is (stage1 dump removed permanently).
-        if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147 || decim_ratio == 588) {
+        if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147 || decim_ratio == 588)
+        {
             let ch = ctx.in_ctx.channels_num as usize;
             ctx.eq_lm_resamplers = Some(
                 (0..ch)
@@ -278,7 +284,11 @@ impl ConversionContext {
             String::new()
         };
         if self.in_ctx.std_in {
-            let base = if suffix.is_empty() { "output".to_string() } else { format!("output{}", suffix) };
+            let base = if suffix.is_empty() {
+                "output".to_string()
+            } else {
+                format!("output{}", suffix)
+            };
             return format!("{}.{}", base, ext);
         }
         let parent = self
@@ -299,15 +309,15 @@ impl ConversionContext {
         } else {
             format!("{}{}.{}", stem, suffix, ext)
         };
-        parent
-            .join(name)
-            .to_string_lossy()
-            .into_owned()
+        parent.join(name).to_string_lossy().into_owned()
     }
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
-        eprintln!("Dither type: {}", self.dither.dither_type().to_ascii_uppercase());
+        eprintln!(
+            "Dither type: {}",
+            self.dither.dither_type().to_ascii_uppercase()
+        );
         let wall_start = Instant::now();
 
         // (Configuration prints intentionally unconditional; leave as-is)
@@ -453,54 +463,63 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     // Unified L/M rational path channel processor
     // Unified per-channel processing: handles both LM (rational) and integer paths.
     // Returns the number of frames produced into self.float_data for this channel.
+    #[inline(always)]
     fn process_channel(
         &mut self,
         chan: usize,
         block_remaining: usize,
         dsd_chan_offset: usize,
         dsd_stride: isize,
-        estimate_frames: usize,
-        buf_capacity: usize,
         lm_mode: bool,
     ) -> usize {
         // Build contiguous per-channel byte buffer with proper bit endianness.
         let lsb_first = self.in_ctx.lsbit_first != 0;
-        let stride = if dsd_stride >= 0 { dsd_stride as usize } else { 0 };
+        let stride = if dsd_stride >= 0 {
+            dsd_stride as usize
+        } else {
+            0
+        };
         let mut chan_bytes = Vec::with_capacity(block_remaining);
+        let buf_capacity = self.float_data.len();
+
         for i in 0..block_remaining {
             let byte_index = if stride == 0 {
                 dsd_chan_offset + i
             } else {
                 dsd_chan_offset + i * stride
             };
-            if byte_index >= self.dsd_data.len() { break; }
+            if byte_index >= self.dsd_data.len() {
+                break;
+            }
             let b = self.dsd_data[byte_index];
             chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
         }
 
+        let produced: usize;
+
         if lm_mode {
             // LM path: use rational resampler, honor actual produced count
-            let Some(resamps) = self.eq_lm_resamplers.as_mut() else { return 0; };
+            let Some(resamps) = self.eq_lm_resamplers.as_mut() else {
+                return 0;
+            };
             let rs = &mut resamps[chan];
-            let produced = rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data[..buf_capacity]);
-            if produced < buf_capacity {
-                self.float_data[produced..buf_capacity].fill(0.0);
-            }
-            produced
+            produced = rs.process_bytes_lm(&chan_bytes, lsb_first, &mut self.float_data[..buf_capacity]);
         } else {
             // Integer path: use precalc decimator; conventionally return the estimate
-            let Some(ref mut v) = self.precalc_decims else { return 0; };
+            let Some(ref mut v) = self.precalc_decims else {
+                return 0;
+            };
             let dec = &mut v[chan];
-            // Clear just in case and process into the first estimate_frames slots
-            if estimate_frames > 0 {
-                self.float_data[..estimate_frames].fill(0.0);
-                let produced = dec.process_bytes(&chan_bytes, &mut self.float_data[..estimate_frames]);
-                if produced < estimate_frames {
-                    self.float_data[produced..estimate_frames].fill(0.0);
-                }
-            }
-            estimate_frames
+            produced = dec.process_bytes(&chan_bytes, &mut self.float_data);
         }
+        if produced < buf_capacity {
+            self.verbose("Produced < buf_capacity. Filling...", true);
+            self.float_data[produced..buf_capacity].fill(0.0);
+        }
+        else if produced > buf_capacity {
+            self.verbose("Produced > buf_capacity. Truncated.", true);
+        }
+        produced
     }
 
     // Dedicated LM loop removed: consolidated into process_blocks
@@ -508,11 +527,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
-
-        // Ensure input buffer can hold one full frame
-        if self.dsd_data.len() < frame_size {
-            self.dsd_data.resize(frame_size, 0);
-        }
 
         // Open a unified reader (stdin or file), seeking if needed
         let reading_from_file = !self.in_ctx.std_in;
@@ -556,18 +570,13 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 if bytes_remaining >= frame_size as u64 {
                     frame_size
                 } else {
-                    break;
+                    bytes_remaining as usize
                 }
             } else {
                 frame_size
             };
             if to_read == 0 {
                 break;
-            }
-
-            // Make sure the buffer is big enough (defensive for future config changes)
-            if self.dsd_data.len() < to_read {
-                self.dsd_data.resize(to_read, 0);
             }
 
             // Read one frame identically for stdin and file
@@ -583,45 +592,14 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             let block_remaining: usize = read_size / channels;
 
             // ---- DIAGNOSTICS: accumulate input bits & recompute expected frames ----
-            self.diag_bits_in += (block_remaining as u64) * 8;
-            let l_u = self.upsample_ratio as u64;
-            let m_u = self.decim_ratio as u64;
-            // LM path uses bits*L/M; integer uses bits/M
-            if self.eq_lm_resamplers.is_some() {
-                self.diag_expected_frames_floor = (self.diag_bits_in * l_u) / m_u;
-            } else {
-                self.diag_expected_frames_floor = self.diag_bits_in / m_u;
-            }
-            // ------------------------------------------------------------------------
-
-            // Compute frames and buffer size depending on path
-            let bits_in = block_remaining * 8;
-            let l = self.upsample_ratio as usize;
-            let m = self.decim_ratio as usize;
-            let lm_mode = self.eq_lm_resamplers.is_some();
-            let (estimate_frames, buf_needed) = if lm_mode {
-                // ceil(bits*L/M) and add small safety margin
-                let est = (bits_in * l + (m - 1)) / m;
-                (est, est + 2)
-            } else {
-                let est = bits_in / m;
-                (est, est)
-            };
-            if self.float_data.len() < buf_needed {
-                self.float_data.resize(buf_needed, 0.0);
-            } else {
-                self.float_data[..buf_needed].fill(0.0);
+            if self.verbose_mode {
+                self.diag_bits_in += (block_remaining as u64) * 8;
+                self.diag_expected_frames_floor =
+                    (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
             }
 
             // Track actual frames produced per channel (set by channel 0)
-            let mut frames_used_per_chan = estimate_frames;
-
-            // Ensure pcm_data large enough for potential stdout packing (interleaved)
-            let max_block_bytes_needed =
-                buf_needed * channels * (self.out_ctx.bytes_per_sample as usize);
-            if self.out_ctx.output == 's' && self.pcm_data.len() < max_block_bytes_needed {
-                self.pcm_data.resize(max_block_bytes_needed, 0);
-            }
+            let mut frames_used_per_chan = self.float_data.len();
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
@@ -632,11 +610,13 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     block_remaining,
                     dsd_chan_offset,
                     self.in_ctx.dsd_stride as isize,
-                    estimate_frames,
-                    buf_needed,
-                    lm_mode,
+                    self.eq_lm_resamplers.is_some(),
                 );
-                if chan == 0 { frames_used_per_chan = produced; } else { debug_assert_eq!(frames_used_per_chan, produced); }
+                if chan == 0 {
+                    frames_used_per_chan = produced;
+                } else {
+                    debug_assert_eq!(frames_used_per_chan, produced);
+                }
 
                 // Output / packing per channel
                 if self.out_ctx.output == 's' {
@@ -735,18 +715,19 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         {
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
-            // DSD256 (4x) paths: integer decimations 32, 64, 128, 147, 294 or LM decim 588; all require 'E'
-            if self.in_ctx.dsd_rate == 4
-                && !(matches!(self.decim_ratio, 32 | 64 | 128 | 147 | 294 | 588) && self.filt_type == 'E')
-            {
-                return Err("With DSD256 input, only 32:1, 64:1, 128:1, 147:1, 294:1 integer or 588:1 (two-stage LM) decimation using the Equiripple filter is supported.".into());
-            }
-            // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
-            if self.decim_ratio == 294
-                && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 2 || self.in_ctx.dsd_rate == 4))
-            {
-                return Err("294:1 decimation is only supported for DSD128 or DSD256 with the Equiripple filter.".into());
-            }
+        // DSD256 (4x) paths: integer decimations 32, 64, 128, 147, 294 or LM decim 588; all require 'E'
+        if self.in_ctx.dsd_rate == 4
+            && !(matches!(self.decim_ratio, 32 | 64 | 128 | 147 | 294 | 588)
+                && self.filt_type == 'E')
+        {
+            return Err("With DSD256 input, only 32:1, 64:1, 128:1, 147:1, 294:1 integer or 588:1 (two-stage LM) decimation using the Equiripple filter is supported.".into());
+        }
+        // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
+        if self.decim_ratio == 294
+            && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 2 || self.in_ctx.dsd_rate == 4))
+        {
+            return Err("294:1 decimation is only supported for DSD128 or DSD256 with the Equiripple filter.".into());
+        }
         // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
         if self.decim_ratio == 147
             && !(self.filt_type == 'E'
