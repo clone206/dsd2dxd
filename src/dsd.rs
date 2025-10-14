@@ -2,8 +2,12 @@ use std::{fs::File, path::Path};
 
 use id3::Tag;
 
-// Re-export only
-use crate::dsdin_sys::{DSD_FORMAT_DSDIFF, DSD_FORMAT_DSF};
+// Strongly typed container format
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerFormat {
+    Dsdiff,
+    Dsf,
+}
 
 pub struct Dsd {
     pub audio_length: u64,
@@ -12,7 +16,7 @@ pub struct Dsd {
     pub is_lsb: bool,
     pub block_size: u32,
     pub sample_rate: u32,
-    pub container_format: u32,
+    pub container_format: ContainerFormat,
     pub file: File,
     pub tag: Option<Tag>,
 }
@@ -28,10 +32,10 @@ impl Dsd {
             let file = dsf_file.file().try_clone()?;
             Ok(Self {
                 sample_rate: dsf_file.fmt_chunk().sampling_frequency(),
-                container_format: DSD_FORMAT_DSF,
+                container_format: ContainerFormat::Dsf,
                 channel_count: dsf_file.fmt_chunk().channel_num() as u32,
                 is_lsb: dsf_file.fmt_chunk().bits_per_sample() == 1,
-                block_size: 4096,
+                block_size: 4096, // Should always be this value for DSF
                 audio_length: dsf_file.fmt_chunk().sample_count() / 8
                     * dsf_file.fmt_chunk().channel_num() as u64,
                 audio_pos: dsf_file.frames()?.offset(0)?,
@@ -45,13 +49,10 @@ impl Dsd {
             let file = dff_file.file().try_clone()?;
             Ok(Self {
                 sample_rate: dff_file.get_sample_rate()?,
-                container_format: DSD_FORMAT_DSDIFF,
+                container_format: ContainerFormat::Dsdiff,
                 channel_count: dff_file.get_num_channels()? as u32,
                 is_lsb: false,
-                // TODO: remove this magic number. Currently it causes
-                // the default (or user supplied) block size 
-                // to be applied in input.rs
-                block_size: 0,
+                block_size: 1, // Should always be 1 for DFF
                 audio_length: dff_file.get_audio_length(),
                 audio_pos: dff_file.get_dsd_data_offset(),
                 file,

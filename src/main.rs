@@ -6,7 +6,6 @@ mod byte_precalc_decimator;
 mod conversion_context;
 mod dither;
 mod dsd;
-mod dsdin_sys;
 mod filters;
 mod input;
 mod lm_resampler;
@@ -45,9 +44,10 @@ struct Cli {
     #[arg(short = 'e', long = "endianness", default_value = "M")]
     endianness: char,
 
-    /// DSD block size in bytes
+    /// DSD block size in bytes. Only set this if you know
+    /// what you're doing.
     #[arg(short = 's', long = "bs", default_value = "4096")]
-    block_size: Option<i32>,
+    block_size: Option<u32>,
 
     /// Dither type: T (TPDF), R (rectangular), N (NJAD), 
     /// F (float), X (none) [default: F for 32 bit, T otherwise]

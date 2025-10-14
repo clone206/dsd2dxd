@@ -3,7 +3,6 @@ use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 // NEW: 576 kHz -> /3 (final 192 kHz)
-use crate::dsdin_sys::DSD_64_RATE;
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
@@ -19,6 +18,8 @@ use std::error::Error;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::Instant;
+
+pub const DSD_64_RATE: u32 = 2822400;
 
 fn abbrev_rate(rate: u32) -> Option<&'static str> {
     match rate {
@@ -77,7 +78,8 @@ impl ConversionContext {
         // Worst-case frames per channel per input block:
         // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
         let bits_per_chan = dsd_bytes_per_chan * 8;
-        let frames_max = ((bits_per_chan * (upsample_ratio as usize)) + (decim_ratio.abs() as usize - 1))
+        let frames_max = ((bits_per_chan * (upsample_ratio as usize))
+            + (decim_ratio.abs() as usize - 1))
             / (decim_ratio.abs() as usize);
         let lm_slack = if upsample_ratio > 1 { 16 } else { 0 };
         let out_frames_capacity = frames_max + lm_slack;
@@ -462,11 +464,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     // Unified per-channel processing: handles both LM (rational) and integer paths.
     // Returns the number of frames produced into self.float_data for this channel.
     #[inline(always)]
-    fn process_channel(
-        &mut self,
-        chan: usize,
-        bytes_per_channel: usize,
-    ) -> usize {
+    fn process_channel(&mut self, chan: usize, bytes_per_channel: usize) -> usize {
         // Build contiguous per-channel byte buffer with proper bit endianness.
         let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
         let dsd_stride = self.in_ctx.dsd_stride as isize;
@@ -480,11 +478,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         let lm_mode = self.eq_lm_resamplers.is_some();
 
         for i in 0..bytes_per_channel {
-            let byte_index = if stride == 0 {
-                dsd_chan_offset + i
-            } else {
-                dsd_chan_offset + i * stride
-            };
+            let byte_index = dsd_chan_offset + i * stride;
             if byte_index >= self.dsd_data.len() {
                 break;
             }
@@ -590,10 +584,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
-                let produced = self.process_channel(
-                    chan,
-                    bytes_per_channel,
-                );
+                let produced = self.process_channel(chan, bytes_per_channel);
                 if chan == 0 {
                     frames_used_per_chan = produced;
                 }

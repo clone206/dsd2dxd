@@ -1,5 +1,4 @@
-use crate::dsd::Dsd;
-use crate::dsdin_sys::{DSD_FORMAT_DSDIFF, DSD_FORMAT_DSF};
+use crate::dsd::{ContainerFormat, Dsd};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -17,7 +16,7 @@ pub struct InputContext {
     pub dsd_stride: u32,
     pub dsd_chan_offset: i32,
     pub channels_num: u32,
-    pub block_size: i32,
+    pub block_size: u32,
     pub audio_length: u64,
     pub audio_pos: u64,
     pub file: Option<File>,
@@ -30,7 +29,7 @@ impl InputContext {
         format: char,
         endian: char,
         dsd_rate: i32,
-        block_size: i32,
+        block_size: u32,
         channels: u32,
         verbose: bool,
     ) -> Result<Self, Box<dyn Error>> {
@@ -134,14 +133,18 @@ impl InputContext {
 
                         // Interleaving from container (DSF = block-interleaved → treat as planar per frame)
                         match my_dsd.container_format {
-                            DSD_FORMAT_DSDIFF => ctx.interleaved = true,
-                            DSD_FORMAT_DSF => ctx.interleaved = false,
-                            _ => { /* keep CLI */ }
+                            ContainerFormat::Dsdiff => ctx.interleaved = true,
+                            ContainerFormat::Dsf => ctx.interleaved = false,
                         }
 
-                        // Block size from container if present, then recompute stride/offset
-                        if my_dsd.block_size > 0 {
-                            ctx.block_size = my_dsd.block_size as i32;
+                        // Block size from container. Recompute stride/offset.
+                        // For dff, which always has a block size per channel of 1, 
+                        // we accept the user-supplied or default block size and calculate
+                        // the stride accordingly. For DSF, we treat the block size as
+                        // representing the block size per channel and override any user
+                        // supplied or default values for block size.
+                        if my_dsd.block_size > 1 {
+                            ctx.block_size = my_dsd.block_size;
                         }
                         ctx.set_block_size(ctx.block_size);
 
@@ -202,9 +205,9 @@ impl InputContext {
         Ok(ctx)
     }
 
-    pub fn set_block_size(&mut self, block_size_in: i32) {
+    pub fn set_block_size(&mut self, block_size_in: u32) {
         self.block_size = block_size_in;
-        self.dsd_chan_offset = if self.interleaved { 1 } else { block_size_in };
+        self.dsd_chan_offset = if self.interleaved { 1 } else { block_size_in as i32 };
         self.dsd_stride = if self.interleaved {
             self.channels_num
         } else {
