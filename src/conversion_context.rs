@@ -179,7 +179,7 @@ impl ConversionContext {
         }
     }
 
-    // NEW: central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
+    // Central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
     // Returns Some(&half_taps) if we can drive a single-stage BytePrecalcDecimator; otherwise None.
     fn select_precalc_taps(
         filt_type: char,
@@ -397,7 +397,7 @@ impl ConversionContext {
         };
         eprintln!("\n[DIAG] Output length accounting:");
         eprintln!(
-            "[DIAG] DSD bits in: {}  L={}  M={}",
+            "[DIAG] DSD bits in per channel: {}  L={}  M={}",
             self.diag_bits_in, self.upsample_ratio, self.decim_ratio
         );
         eprintln!(
@@ -466,11 +466,10 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         &mut self,
         chan: usize,
         bytes_per_channel: usize,
-        dsd_chan_offset: usize,
-        dsd_stride: isize,
-        lm_mode: bool,
     ) -> usize {
         // Build contiguous per-channel byte buffer with proper bit endianness.
+        let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
+        let dsd_stride = self.in_ctx.dsd_stride as isize;
         let lsb_first = self.in_ctx.lsbit_first != 0;
         let stride = if dsd_stride >= 0 {
             dsd_stride as usize
@@ -478,6 +477,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             0
         };
         let mut chan_bytes = Vec::with_capacity(bytes_per_channel);
+        let lm_mode = self.eq_lm_resamplers.is_some();
 
         for i in 0..bytes_per_channel {
             let byte_index = if stride == 0 {
@@ -585,42 +585,14 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
             }
 
-            // Compute per-block output buffer requirement so LM path can consume all inputs
-            let bits_in = bytes_per_channel * 8;
-            let l = self.upsample_ratio as usize;
-            let m = self.decim_ratio as usize;
-            let lm_mode_now = self.eq_lm_resamplers.is_some();
-            let estimate_frames = if lm_mode_now {
-                (bits_in * l + (m - 1)) / m
-            } else {
-                bits_in / m
-            };
-
-            // float_data sized worst-case in new(); no per-loop growth needed
-            if self.out_ctx.output == 's' {
-                // Provide a small fixed headroom to avoid edge truncation at stage boundaries
-                let slack = if lm_mode_now { 16 } else { 0 };
-                let buf_needed = estimate_frames.saturating_add(slack);
-                let bps = self.out_ctx.bytes_per_sample as usize;
-                let need_bytes = buf_needed.saturating_mul(channels).saturating_mul(bps);
-                if self.pcm_data.len() < need_bytes {
-                    self.pcm_data.resize(need_bytes, 0);
-                }
-            }
-
             // Track actual frames produced per channel (set by channel 0)
             let mut frames_used_per_chan = 0usize;
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
-                let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
-
                 let produced = self.process_channel(
                     chan,
                     bytes_per_channel,
-                    dsd_chan_offset,
-                    self.in_ctx.dsd_stride as isize,
-                    lm_mode_now,
                 );
                 if chan == 0 {
                     frames_used_per_chan = produced;
