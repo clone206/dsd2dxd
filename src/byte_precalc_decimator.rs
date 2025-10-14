@@ -51,18 +51,21 @@ pub struct BytePrecalcDecimator {
     bytes_per_out: u32,
     fifo: Vec<u8>,
     fifo_pos: usize,
-    gain: f64,          // DC normalization (like ptr->gain in C)
-    delay_count: u64,   // Countdown before starting to emit
+    delay_count: u64, // Countdown before starting to emit
     // Cached for mirror addressing
-    table_span: usize,  // num_tables * 2 - 1
+    table_span: usize, // num_tables * 2 - 1
 }
 
 impl BytePrecalcDecimator {
     /// Build from right-half taps (second_half_taps) and integer decimation factor.
     pub fn new(second_half_taps: &[f64], decim: u32) -> Option<Self> {
-        if decim % 8 != 0 { return None; } // requires byte alignment
+        if decim % 8 != 0 {
+            return None;
+        } // requires byte alignment
         let half = second_half_taps.len();
-        if half == 0 { return None; }
+        if half == 0 {
+            return None;
+        }
         // Number of 8-bit windows covering half the filter
         let num_tables = (half + 7) / 8;
         // Precompute 256-entry table for each window (like C precalc)
@@ -71,8 +74,8 @@ impl BytePrecalcDecimator {
             let base = t * 8;
             let remain = half.saturating_sub(base);
             let k = remain.min(8); // up to 8 taps in this window
-            // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
-            // by pushing and later indexing appropriately. Simpler: store in reverse now.
+                                   // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
+                                   // by pushing and later indexing appropriately. Simpler: store in reverse now.
             let mut arr = Box::new([0.0f64; 256]);
             for dsd_seq in 0..256u16 {
                 let mut acc = 0.0;
@@ -89,11 +92,6 @@ impl BytePrecalcDecimator {
         // Reverse to align with C's tableIdx = numTables - 1 - t
         tables.reverse();
 
-        // DC gain normalization: full symmetric FIR gain ≈ 2 * sum(half taps)
-        let sum_half: f64 = second_half_taps.iter().copied().sum();
-        let full_gain = 2.0 * sum_half;
-        let gain = if full_gain != 0.0 { 1.0 / full_gain } else { 1.0 };
-
         let full_len = (half * 2) as u64;
         let delay = (full_len - 1) / 2;
         Some(Self {
@@ -102,7 +100,6 @@ impl BytePrecalcDecimator {
             bytes_per_out: decim / 8,
             fifo: vec![0u8; (num_tables * 2 + 8).next_power_of_two()], // simple ring
             fifo_pos: 0,
-            gain,
             delay_count: delay,
             table_span: num_tables * 2 - 1,
         })
@@ -111,7 +108,9 @@ impl BytePrecalcDecimator {
     /// Feed a block of DSD bytes; produce decimated PCM outputs.
     /// Returns number of PCM samples written to `out`.
     pub fn process_bytes(&mut self, bytes: &[u8], out: &mut [f64]) -> usize {
-        if self.num_tables == 0 || self.bytes_per_out == 0 { return 0; }
+        if self.num_tables == 0 || self.bytes_per_out == 0 {
+            return 0;
+        }
         let mask = self.fifo.len() - 1; // fifo len is power-of-two
         let mut byte_count_in_frame = 0u32;
         let mut produced = 0usize;
@@ -137,11 +136,9 @@ impl BytePrecalcDecimator {
                     let byte1 = self.fifo[idx1];
                     let byte2 = self.fifo[idx2];
                     // Table i corresponds to tables[i]; mirrored byte must be bit-reversed
-                    acc += self.tables[i][byte1 as usize] + self.tables[i][bit_reverse_u8(byte2) as usize];
+                    acc += self.tables[i][byte1 as usize]
+                        + self.tables[i][bit_reverse_u8(byte2) as usize];
                 }
-
-                // Apply normalization
-                acc *= self.gain;
 
                 // Handle startup latency (group delay)
                 if self.delay_count > 0 {
@@ -150,7 +147,9 @@ impl BytePrecalcDecimator {
                     out[produced] = acc;
                     produced += 1;
                 }
-                if produced == out.len() { break; }
+                if produced == out.len() {
+                    break;
+                }
             }
         }
         produced

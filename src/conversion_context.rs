@@ -467,7 +467,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     fn process_channel(
         &mut self,
         chan: usize,
-        block_remaining: usize,
+        bytes_per_channel: usize,
         dsd_chan_offset: usize,
         dsd_stride: isize,
         lm_mode: bool,
@@ -479,10 +479,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         } else {
             0
         };
-        let mut chan_bytes = Vec::with_capacity(block_remaining);
-        let buf_capacity = self.float_data.len();
+        let mut chan_bytes = Vec::with_capacity(bytes_per_channel);
 
-        for i in 0..block_remaining {
+        for i in 0..bytes_per_channel {
             let byte_index = if stride == 0 {
                 dsd_chan_offset + i
             } else {
@@ -503,7 +502,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 return 0;
             };
             let rs = &mut resamps[chan];
-            produced = rs.process_bytes_lm(&chan_bytes, lsb_first, &mut self.float_data[..buf_capacity]);
+            produced = rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data);
         } else {
             // Integer path: use precalc decimator; conventionally return the estimate
             let Some(ref mut v) = self.precalc_decims else {
@@ -512,6 +511,8 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             let dec = &mut v[chan];
             produced = dec.process_bytes(&chan_bytes, &mut self.float_data);
         }
+
+        let buf_capacity = self.float_data.len();
         if produced < buf_capacity {
             self.verbose("Produced < buf_capacity. Filling...", true);
             self.float_data[produced..buf_capacity].fill(0.0);
@@ -589,11 +590,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             self.total_dsd_bytes_processed += read_size as u64;
 
             // Bytes per channel in this read
-            let block_remaining: usize = read_size / channels;
+            let bytes_per_channel: usize = read_size / channels;
 
             // ---- DIAGNOSTICS: accumulate input bits & recompute expected frames ----
             if self.verbose_mode {
-                self.diag_bits_in += (block_remaining as u64) * 8;
+                self.diag_bits_in += (bytes_per_channel as u64) * 8;
                 self.diag_expected_frames_floor =
                     (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
             }
@@ -607,16 +608,14 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
                 let produced = self.process_channel(
                     chan,
-                    block_remaining,
+                    bytes_per_channel,
                     dsd_chan_offset,
                     self.in_ctx.dsd_stride as isize,
                     self.eq_lm_resamplers.is_some(),
                 );
                 if chan == 0 {
                     frames_used_per_chan = produced;
-                } else {
-                    debug_assert_eq!(frames_used_per_chan, produced);
-                }
+                } 
 
                 // Output / packing per channel
                 if self.out_ctx.output == 's' {
