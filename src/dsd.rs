@@ -9,6 +9,9 @@ pub enum ContainerFormat {
     Dsf,
 }
 
+pub const DFF_BLOCK_SIZE: u32 = 1;
+pub const DSF_BLOCK_SIZE: u32 = 4096;
+
 pub struct Dsd {
     pub audio_length: u64,
     pub audio_pos: u64,
@@ -35,7 +38,7 @@ impl Dsd {
                 container_format: ContainerFormat::Dsf,
                 channel_count: dsf_file.fmt_chunk().channel_num() as u32,
                 is_lsb: dsf_file.fmt_chunk().bits_per_sample() == 1,
-                block_size: 4096, // Should always be this value for DSF
+                block_size: DSF_BLOCK_SIZE, // Should always be this value for DSF
                 audio_length: dsf_file.fmt_chunk().sample_count() / 8
                     * dsf_file.fmt_chunk().channel_num() as u64,
                 audio_pos: dsf_file.frames()?.offset(0)?,
@@ -52,7 +55,7 @@ impl Dsd {
                 container_format: ContainerFormat::Dsdiff,
                 channel_count: dff_file.get_num_channels()? as u32,
                 is_lsb: false,
-                block_size: 1, // Should always be 1 for DFF
+                block_size: DFF_BLOCK_SIZE, // Should always be 1 for DFF
                 audio_length: dff_file.get_audio_length(),
                 audio_pos: dff_file.get_dsd_data_offset(),
                 file,

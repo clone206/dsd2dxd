@@ -1,4 +1,4 @@
-use crate::dsd::{ContainerFormat, Dsd};
+use crate::dsd::{ContainerFormat, Dsd, DFF_BLOCK_SIZE};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -143,7 +143,7 @@ impl InputContext {
                         // the stride accordingly. For DSF, we treat the block size as
                         // representing the block size per channel and override any user
                         // supplied or default values for block size.
-                        if my_dsd.block_size > 1 {
+                        if my_dsd.block_size > DFF_BLOCK_SIZE {
                             ctx.block_size = my_dsd.block_size;
                         }
                         ctx.set_block_size(ctx.block_size);

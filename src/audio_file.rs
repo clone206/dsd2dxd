@@ -1,6 +1,6 @@
-use std::path::Path;
-use std::io::{self, Write, BufWriter}; // add BufWriter
 use std::fs::File;
+use std::io::{self, BufWriter, Write}; // add BufWriter
+use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AudioFileFormat {
@@ -56,7 +56,7 @@ where
             AudioFileFormat::Flac => self.save_flac_file(path),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Unsupported format"
+                "Unsupported format",
             )),
         }
     }
@@ -302,7 +302,8 @@ where
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("FLAC create: {e}")))?;
 
         const FRAME_BLOCK: usize = 16_384;
-        let mut buf: Vec<u8> = Vec::with_capacity(FRAME_BLOCK * channels as usize * bytes_per_sample);
+        let mut buf: Vec<u8> =
+            Vec::with_capacity(FRAME_BLOCK * channels as usize * bytes_per_sample);
 
         if bits_per_sample == 16 {
             for base in (0..frames).step_by(FRAME_BLOCK) {
@@ -335,8 +336,7 @@ where
             }
         }
 
-        flac
-            .finalize()
+        flac.finalize()
             .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("FLAC finalize: {e}")))?;
         Ok(())
     }
@@ -345,7 +345,9 @@ where
     fn encode_extended(&self, mut value: f64, buffer: &mut [u8; 10]) {
         // Encode AIFF 80-bit extended with the integer bit included in the mantissa.
         // Layout: 1 sign bit, 15-bit exponent (bias 16383), 1-bit integer + 63-bit fraction.
-        for b in buffer.iter_mut() { *b = 0; }
+        for b in buffer.iter_mut() {
+            *b = 0;
+        }
         if value <= 0.0 {
             return;
         }
@@ -391,7 +393,10 @@ where
         println!("Bit Depth: {}", self.bit_depth);
         println!("Sample Rate: {}", self.sample_rate);
         println!("Num Channels: {}", self.num_channels);
-        println!("Num Samples Per Channel: {}", self.get_num_samples_per_channel());
+        println!(
+            "Num Samples Per Channel: {}",
+            self.get_num_samples_per_channel()
+        );
     }
 }
 
@@ -406,25 +411,51 @@ pub trait AudioSample: Copy + Send + Sync {
 }
 
 impl AudioSample for f32 {
-    fn from_float(value: f32) -> Self { value }
-    fn to_float(self) -> f32 { self }
-    fn to_i16(self) -> i16 { (self.clamp(-1.0, 1.0) * 32767.0) as i16 }
-    fn to_i24(self) -> i32 { (self.clamp(-1.0, 1.0) * 8388607.0) as i32 }
-    fn to_i32(self) -> i32 { (self.clamp(-1.0, 1.0) * 2147483647.0) as i32 }
-    fn to_f32(self) -> f32 { self }
-    fn is_float() -> bool { true }
+    fn from_float(value: f32) -> Self {
+        value
+    }
+    fn to_float(self) -> f32 {
+        self
+    }
+    fn to_i16(self) -> i16 {
+        (self.clamp(-1.0, 1.0) * 32767.0) as i16
+    }
+    fn to_i24(self) -> i32 {
+        (self.clamp(-1.0, 1.0) * 8388607.0) as i32
+    }
+    fn to_i32(self) -> i32 {
+        (self.clamp(-1.0, 1.0) * 2147483647.0) as i32
+    }
+    fn to_f32(self) -> f32 {
+        self
+    }
+    fn is_float() -> bool {
+        true
+    }
 }
 
 impl AudioSample for i32 {
-    fn from_float(value: f32) -> Self { (value * 2147483647.0) as i32 }
-    fn to_float(self) -> f32 { self as f32 / 2147483647.0 }
+    fn from_float(value: f32) -> Self {
+        (value * 2147483647.0) as i32
+    }
+    fn to_float(self) -> f32 {
+        self as f32 / 2147483647.0
+    }
     // For 16-bit output, pipeline already scales to ±32767; clamp and pass through.
     fn to_i16(self) -> i16 {
         let v = self.max(-32768).min(32767);
         v as i16
     }
-    fn to_i24(self) -> i32 { self }
-    fn to_i32(self) -> i32 { self }
-    fn to_f32(self) -> f32 { self as f32 / 2147483647.0 }
-    fn is_float() -> bool { false }
+    fn to_i24(self) -> i32 {
+        self
+    }
+    fn to_i32(self) -> i32 {
+        self
+    }
+    fn to_f32(self) -> f32 {
+        self as f32 / 2147483647.0
+    }
+    fn is_float() -> bool {
+        false
+    }
 }
