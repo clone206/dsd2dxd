@@ -212,22 +212,6 @@ impl InputContext {
         };
     }
 
-    // ADD: mirror C++ setDsdRate(sample_rate)
-    pub fn set_dsd_rate_from_sample_rate(&mut self, sample_rate: u32) {
-        self.dsd_rate = (sample_rate / 44100 / 64) as i32;
-    }
-
-    // ADD: mirror C++ setInterleaved(container_format)
-    pub fn set_interleaved_from_container(&mut self, container_format: u32) {
-        self.interleaved = match container_format {
-            DSD_FORMAT_DSDIFF => true,
-            DSD_FORMAT_DSF => false,
-            _ => self.interleaved,
-        };
-        // Recompute derived offsets/strides after interleaving mode change
-        self.set_block_size(self.block_size);
-    }
-
     fn verbose(&self, say: &str, new_line: bool) {
         if self.verbose_mode {
             if new_line {

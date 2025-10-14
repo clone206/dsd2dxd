@@ -74,6 +74,14 @@ impl ConversionContext {
 
         let (decim_ratio, upsample_ratio) = Self::compute_decim_and_upsample(&in_ctx, &out_ctx);
 
+        // Worst-case frames per channel per input block:
+        // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
+        let bits_per_chan = dsd_bytes_per_chan * 8;
+        let frames_max = ((bits_per_chan * (upsample_ratio as usize)) + (decim_ratio.abs() as usize - 1))
+            / (decim_ratio.abs() as usize);
+        let lm_slack = if upsample_ratio > 1 { 16 } else { 0 };
+        let out_frames_capacity = frames_max + lm_slack;
+
         // Build ctx first so we can use ctx.verbose instead of manual verbose checks
         let mut ctx = Self {
             in_ctx,
@@ -81,18 +89,8 @@ impl ConversionContext {
             dither,
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
-            float_data: vec![
-                0.0;
-                (dsd_bytes_per_chan * 8) * upsample_ratio as usize
-                    / decim_ratio as usize
-            ],
-            pcm_data: vec![
-                0;
-                ((dsd_bytes_per_chan * 8) * upsample_ratio as usize
-                    / decim_ratio as usize)
-                    * channels
-                    * bytes_per_sample
-            ],
+            float_data: vec![0.0; out_frames_capacity],
+            pcm_data: vec![0; out_frames_capacity * channels * bytes_per_sample],
             clips: 0,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
@@ -494,33 +492,21 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             chan_bytes.push(if lsb_first { b } else { bit_reverse_u8(b) });
         }
 
-        let produced: usize;
-
         if lm_mode {
             // LM path: use rational resampler, honor actual produced count
             let Some(resamps) = self.eq_lm_resamplers.as_mut() else {
                 return 0;
             };
             let rs = &mut resamps[chan];
-            produced = rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data);
+            return rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data);
         } else {
             // Integer path: use precalc decimator; conventionally return the estimate
             let Some(ref mut v) = self.precalc_decims else {
                 return 0;
             };
             let dec = &mut v[chan];
-            produced = dec.process_bytes(&chan_bytes, &mut self.float_data);
+            return dec.process_bytes(&chan_bytes, &mut self.float_data);
         }
-
-        let buf_capacity = self.float_data.len();
-        if produced < buf_capacity {
-            self.verbose("Produced < buf_capacity. Filling...", true);
-            self.float_data[produced..buf_capacity].fill(0.0);
-        }
-        else if produced > buf_capacity {
-            self.verbose("Produced > buf_capacity. Truncated.", true);
-        }
-        produced
     }
 
     // Dedicated LM loop removed: consolidated into process_blocks
@@ -599,8 +585,31 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
             }
 
+            // Compute per-block output buffer requirement so LM path can consume all inputs
+            let bits_in = bytes_per_channel * 8;
+            let l = self.upsample_ratio as usize;
+            let m = self.decim_ratio as usize;
+            let lm_mode_now = self.eq_lm_resamplers.is_some();
+            let estimate_frames = if lm_mode_now {
+                (bits_in * l + (m - 1)) / m
+            } else {
+                bits_in / m
+            };
+
+            // float_data sized worst-case in new(); no per-loop growth needed
+            if self.out_ctx.output == 's' {
+                // Provide a small fixed headroom to avoid edge truncation at stage boundaries
+                let slack = if lm_mode_now { 16 } else { 0 };
+                let buf_needed = estimate_frames.saturating_add(slack);
+                let bps = self.out_ctx.bytes_per_sample as usize;
+                let need_bytes = buf_needed.saturating_mul(channels).saturating_mul(bps);
+                if self.pcm_data.len() < need_bytes {
+                    self.pcm_data.resize(need_bytes, 0);
+                }
+            }
+
             // Track actual frames produced per channel (set by channel 0)
-            let mut frames_used_per_chan = self.float_data.len();
+            let mut frames_used_per_chan = 0usize;
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
@@ -611,11 +620,11 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     bytes_per_channel,
                     dsd_chan_offset,
                     self.in_ctx.dsd_stride as isize,
-                    self.eq_lm_resamplers.is_some(),
+                    lm_mode_now,
                 );
                 if chan == 0 {
                     frames_used_per_chan = produced;
-                } 
+                }
 
                 // Output / packing per channel
                 if self.out_ctx.output == 's' {
