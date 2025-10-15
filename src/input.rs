@@ -176,10 +176,12 @@ impl InputContext {
                         );
                     }
                     Err(e) => {
-                        eprintln!("Container open failed ({}); treating as raw DSD", e);
+                        eprintln!("Container open failed ({})", e);
                         if let Ok(meta) = std::fs::metadata(&input_file) {
                             ctx.audio_pos = 0;
                             ctx.audio_length = meta.len();
+                        } else {
+                            return Err("Failed to open input file metadata".into());
                         }
                     }
                 }
@@ -188,6 +190,7 @@ impl InputContext {
                 if let Ok(meta) = std::fs::metadata(&input_file) {
                     ctx.audio_pos = 0;
                     ctx.audio_length = meta.len();
+                    ctx.file = Some(File::open(&input_file)?);
                     eprintln!("Treating input as raw DSD (no container)");
                 }
             }

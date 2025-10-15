@@ -1,0 +1,22 @@
+[package]
+name = "dsf"
+version = "0.2.2"
+authors = ["Daniel J. R. May <daniel.may@danieljrmay.com>"]
+edition = "2021"
+description = "DSF (DSD Stream File) support for Rust"
+homepage = "https://gitlab.com/danieljrmay/dsf"
+documentation = "https://docs.rs/dsf/"
+repository = "https://gitlab.com/danieljrmay/dsf"
+keywords = ["audio", "dsd", "dsf"]
+categories = ["multimedia::audio"]
+readme = "README.md"
+license = "MIT/Apache-2.0"
+exclude = [
+    ".gitignore",
+    ".gitlab-ci.yml",
+    "TODO.md"
+]
+
+[dependencies]
+sampled_data_duration = "0.3.1"
+id3 = "1.0.2"

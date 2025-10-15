@@ -8,6 +8,6 @@ clap = { version = "4.4", features = ["derive", "wrap_help"] }
 rand = "0.8"
 libc = "0.2"
 flac-codec = "1.2.0"
-dsf = "0.2.2"
+dsf = { path = "src/dsf/" }
 dff = { path = "src/dff/" }
 id3 = "1.16.3"
