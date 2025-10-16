@@ -18,5 +18,4 @@ exclude = [
 ]
 
 [dependencies]
-sampled_data_duration = "0.3.1"
 id3 = "1.0.2"
