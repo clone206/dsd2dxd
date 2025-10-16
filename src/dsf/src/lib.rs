@@ -1,5 +1,5 @@
 /*
- 20241014: Changed by clone206 to prevent id3 errors from stopping processing of raw DSD files.
+ 20251014: Changed by clone206 to prevent id3 errors from stopping processing of audio.
 
 */
 

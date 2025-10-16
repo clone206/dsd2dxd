@@ -1,8 +1,21 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Stage1Mode {
-    SlotSim,
-    Accum,
-}
+/*
+ Copyright (c) 2023 clone206
+
+ This file is part of dsd2dxd
+
+ dsd2dxd is free software: you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ dsd2dxd is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ GNU General Public License for more details.
+ You should have received a copy of the GNU General Public License
+ along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
+*/
+
 use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
 use crate::filters::HTAPS_288K_3TO1_EQ;
 use crate::filters::HTAPS_2MHZ_7TO1_EQ;
@@ -17,6 +30,11 @@ use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage1Mode {
+    SlotSim,
+    Accum,
+}
 // Global LUT cache for Stage1, shared across instances/channels.
 // Keyed by (L, len(right_half), hash(contents of right_half)) to avoid rebuilding.
 type Stage1LutTable = Vec<Vec<[f64; 256]>>;

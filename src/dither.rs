@@ -1,3 +1,8 @@
+/* ========================================
+ *  NotJustAnotherDither - NotJustAnotherDither.h
+ *  Copyright (c) 2016 airwindows, Airwindows uses the MIT license
+ * ======================================== */
+
 use rand::Rng;
 
 #[derive(Clone)]
