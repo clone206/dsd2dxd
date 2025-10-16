@@ -101,7 +101,7 @@ struct Cli {
     verbose: bool,
 
     /// Append abbreviated output rate to filename 
-    /// (e.g., _96K, _88_2K). Also appends " [PCM]" to the 
+    /// (e.g., _96K, _88_2K). Also appends " [<SAMPLE RATE>]" to the 
     /// album tag of the output file if present.
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
