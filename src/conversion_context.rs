@@ -21,18 +21,6 @@ use std::time::Instant;
 
 pub const DSD_64_RATE: u32 = 2822400;
 
-fn abbrev_rate(rate: u32) -> Option<&'static str> {
-    match rate {
-        88_200 => Some("88_2K"),
-        96_000 => Some("96K"),
-        176_400 => Some("176_4K"),
-        192_000 => Some("192K"),
-        352_800 => Some("352_8K"),
-        384_000 => Some("384K"),
-        _ => None,
-    }
-}
-
 pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
@@ -275,8 +263,8 @@ impl ConversionContext {
             _ => "out",
         };
         let suffix = if self.append_rate_suffix {
-            if let Some(abbrev) = abbrev_rate(self.out_ctx.rate as u32) {
-                format!("_{}", abbrev)
+            if let Some((uscore, _dot)) = abbrev_rate_pair(self.out_ctx.rate as u32) {
+                format!("_{}", uscore)
             } else {
                 String::new()
             }
@@ -440,14 +428,16 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
         if let Some(mut tag) = self.in_ctx.tag.clone() {
             self.verbose("Copying ID3 tags from input file...", true);
-            // If -a/--append was requested and an album tag exists, append " [PCM]" to album
+            // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
             if self.append_rate_suffix {
                 if let Some(album) = tag.album() {
-                    // Avoid duplicating the suffix if already present
-                    if !album.ends_with(" [PCM]") {
-                        let mut new_album = String::from(album);
-                        new_album.push_str(" [PCM]");
-                        tag.set_album(new_album);
+                    if let Some((_uscore, dot)) = abbrev_rate_pair(self.out_ctx.rate as u32) {
+                        let suffix = format!(" [{}]", dot);
+                        if !album.ends_with(&suffix) {
+                            let mut new_album = String::from(album);
+                            new_album.push_str(&suffix);
+                            tag.set_album(new_album);
+                        }
                     }
                 }
             }
@@ -844,5 +834,18 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             5
         };
         (decim_ratio, upsample_ratio)
+    }
+}
+
+/// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
+fn abbrev_rate_pair(rate: u32) -> Option<(&'static str, &'static str)> {
+    match rate {
+        88_200 => Some(("88_2K", "88.2K")),
+        96_000 => Some(("96K", "96K")),
+        176_400 => Some(("176_4K", "176.4K")),
+        192_000 => Some(("192K", "192K")),
+        352_800 => Some(("352_8K", "352.8K")),
+        384_000 => Some(("384K", "384K")),
+        _ => None,
     }
 }
