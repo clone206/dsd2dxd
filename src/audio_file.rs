@@ -9,25 +9,24 @@
  *
  * Copyright (c) 2017 Adam Stark
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy 
- * of this software and associated documentation files (the "Software"), to deal 
- * in the Software without restriction, including without limitation the rights 
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies 
- * of the Software, and to permit persons to whom the Software is furnished to do so, 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+ * of the Software, and to permit persons to whom the Software is furnished to do so,
  * subject to the following conditions:
  *
- * The above copyright notice and this permission notice shall be included in all 
+ * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
  *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
- * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
- * PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT 
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION 
- * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ * INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+ * PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+ * OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
  * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 //=======================================================================
-
 use std::fs::File;
 use std::io::{self, BufWriter, Write}; // add BufWriter
 use std::path::Path;
@@ -97,7 +96,11 @@ where
         let mut w = BufWriter::with_capacity(1 << 20, file);
 
         let channels = self.num_channels as u16;
-        let bytes_per_sample = (self.bit_depth / 8) as u16;
+        let bytes_per_sample = if self.bit_depth == 20 {
+            3
+        } else {
+            (self.bit_depth / 8) as u16
+        };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
         let data_size = (frames * self.num_channels * bytes_per_sample as usize) as u32;
@@ -143,7 +146,7 @@ where
                     w.write_all(&buf)?;
                 }
             }
-            24 => {
+            24 | 20 => {
                 for base in (0..frames).step_by(FRAME_BLOCK) {
                     buf.clear();
                     let end = (base + FRAME_BLOCK).min(frames);
@@ -173,19 +176,6 @@ where
                     w.write_all(&buf)?;
                 }
             }
-            32 => {
-                for base in (0..frames).step_by(FRAME_BLOCK) {
-                    buf.clear();
-                    let end = (base + FRAME_BLOCK).min(frames);
-                    for i in base..end {
-                        for ch in 0..self.num_channels {
-                            let b = self.samples[ch][i].to_i32().to_le_bytes();
-                            buf.extend_from_slice(&b);
-                        }
-                    }
-                    w.write_all(&buf)?;
-                }
-            }
             _ => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -203,7 +193,7 @@ where
         let mut w = BufWriter::with_capacity(1 << 20, file);
 
         let channels = self.num_channels as u16;
-        let bytes_per_sample = (self.bit_depth / 8) as u16;
+        let bytes_per_sample = if self.bit_depth == 20 { 3 } else { (self.bit_depth / 8) as u16 };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
         let data_size = (frames * self.num_channels * bytes_per_sample as usize) as u32;
@@ -248,7 +238,7 @@ where
                     w.write_all(&buf)?;
                 }
             }
-            24 => {
+            24 | 20 => {
                 for base in (0..frames).step_by(FRAME_BLOCK) {
                     buf.clear();
                     let end = (base + FRAME_BLOCK).min(frames);
@@ -260,20 +250,6 @@ where
                                 ((v >> 8) & 0xFF) as u8,
                                 (v & 0xFF) as u8,
                             ]);
-                        }
-                    }
-                    w.write_all(&buf)?;
-                }
-            }
-            32 => {
-                // AIFF branch only used for integer 32-bit (no float path provided here)
-                for base in (0..frames).step_by(FRAME_BLOCK) {
-                    buf.clear();
-                    let end = (base + FRAME_BLOCK).min(frames);
-                    for i in base..end {
-                        for ch in 0..self.num_channels {
-                            let b = self.samples[ch][i].to_i32().to_be_bytes();
-                            buf.extend_from_slice(&b);
                         }
                     }
                     w.write_all(&buf)?;
@@ -308,16 +284,20 @@ where
         if bits_per_sample > 24 {
             bits_per_sample = 24;
         }
-        if bits_per_sample != 16 && bits_per_sample != 24 {
+        if bits_per_sample != 16 && bits_per_sample != 20 && bits_per_sample != 24 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "FLAC: only 16 or 24-bit supported",
+                "FLAC: only 16, 20, or 24-bit supported",
             ));
         }
 
         let channels = self.num_channels as u32;
         let bps = bits_per_sample as u32;
-        let bytes_per_sample = (bits_per_sample / 8) as usize;
+        let bytes_per_sample = (if bits_per_sample == 20 {
+            3
+        } else {
+            bits_per_sample / 8
+        }) as usize;
         let total_pcm_bytes = frames as u64 * channels as u64 * bytes_per_sample as u64;
 
         // Create FLAC writer (LittleEndian because we feed little-endian sample bytes)

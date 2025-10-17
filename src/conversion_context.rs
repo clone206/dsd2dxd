@@ -605,7 +605,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     for s in 0..frames_used_per_chan {
                         let mut out_idx = pcm_pos;
                         if self.out_ctx.bits == 32 {
-                            // 32-bit float path: scale only, no dithering/clipping
+                            // 32-bit float path
                             let mut q = self.float_data[s] * self.out_ctx.scale_factor;
                             self.dither.process_samp(&mut q, chan);
                             self.write_float(&mut out_idx, q);
