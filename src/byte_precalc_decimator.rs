@@ -156,7 +156,6 @@ impl BytePrecalcDecimator {
     }
 }
 
-// ADD: missing bit reversal helper (used by BytePrecalcDecimator)
 #[inline]
 pub fn bit_reverse_u8(mut b: u8) -> u8 {
     // Reverse bits in a byte (branchless, 3 shuffle steps)
