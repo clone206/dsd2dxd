@@ -5,14 +5,18 @@
 
 use rand::Rng;
 
+use std::env;
+
 #[derive(Clone)]
 pub struct Dither {
-    noise_shaping_l: f64,  // Noise shape state L
-    noise_shaping_r: f64,  // Noise shape state R
-    byn_l: [f64; 13],      // Benford Real number weights L
-    byn_r: [f64; 13],      // Benford Real number weights R
-    fpd: u32,              // Floating-point dither
+    noise_shaping_l: f64, // Noise shape state L
+    noise_shaping_r: f64, // Noise shape state R
+    byn_l: [f64; 13],     // Benford Real number weights L
+    byn_r: [f64; 13],     // Benford Real number weights R
+    fpd: u32,             // Floating-point dither
     dither_type: char,
+    neg_scale: f64,               // Pre-dither scale
+    pos_scale: f64,               // Post-dither scale
 }
 
 impl Dither {
@@ -22,6 +26,14 @@ impl Dither {
             return Err("Invalid dither type!");
         }
 
+        // Parse env var once at construction
+        let (neg_scale, pos_scale) = match env::var("DSD2DXD_DITHERSCALE") {
+            Ok(val) => val.parse::<f64>().ok()
+                .map(|db| (10.0f64.powf(-db / 20.0), 10.0f64.powf(db / 20.0)))
+                .unwrap_or((1.0, 1.0)),
+            Err(_) => (1.0, 1.0),
+        };
+
         Ok(Self {
             noise_shaping_l: 0.0,
             noise_shaping_r: 0.0,
@@ -29,6 +41,8 @@ impl Dither {
             byn_r: [0.0; 13],
             fpd: 1,
             dither_type,
+            neg_scale,
+            pos_scale,
         })
     }
 
@@ -46,7 +60,9 @@ impl Dither {
 
     fn init_outputs(&mut self) {
         // Weights based on Benford's law. Smaller leading digits more likely.
-        let weights = [1000.0, 301.0, 176.0, 125.0, 97.0, 79.0, 67.0, 58.0, 51.0, 46.0, 1000.0];
+        let weights = [
+            1000.0, 301.0, 176.0, 125.0, 97.0, 79.0, 67.0, 58.0, 51.0, 46.0, 1000.0,
+        ];
         self.byn_l[..11].copy_from_slice(&weights);
         self.byn_r[..11].copy_from_slice(&weights);
     }
@@ -63,17 +79,19 @@ impl Dither {
         let mut rng = rand::thread_rng();
         let r1: f64 = rng.gen_range(0.0..=0.5);
         let r2: f64 = rng.gen_range(0.0..=0.5);
-        r1 - r2   // range [-0.5, 0.5], triangular distribution
+        r1 - r2 // range [-0.5, 0.5], triangular distribution
     }
 
     pub fn process_samp(&mut self, sample: &mut f64, chan: usize) {
+        *sample *= self.neg_scale;
         match self.dither_type {
             't' => *sample += self.process_tpdf(),
             'r' => *sample += self.process_rpdf(),
             'n' => self.njad(sample, chan as i32),
-            'f' => self.fpdither(sample),  // Call floating point dither
-            _ => (),   // No dithering
+            'f' => self.fpdither(sample),
+            _ => (),
         }
+        *sample *= self.pos_scale;
     }
 
     fn process_rpdf(&mut self) -> f64 {
