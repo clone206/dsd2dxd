@@ -152,7 +152,10 @@ where
                     let end = (base + FRAME_BLOCK).min(frames);
                     for i in base..end {
                         for ch in 0..self.num_channels {
-                            let v = self.samples[ch][i].to_i24();
+                            let mut v = self.samples[ch][i].to_i24();
+                            if self.bit_depth == 20 {
+                                v <<= 4;
+                            }
                             buf.extend_from_slice(&[
                                 (v & 0xFF) as u8,
                                 ((v >> 8) & 0xFF) as u8,
@@ -244,7 +247,10 @@ where
                     let end = (base + FRAME_BLOCK).min(frames);
                     for i in base..end {
                         for ch in 0..self.num_channels {
-                            let v = self.samples[ch][i].to_i24();
+                            let mut v = self.samples[ch][i].to_i24();
+                            if self.bit_depth == 20 {
+                                v <<= 4;
+                            }
                             buf.extend_from_slice(&[
                                 ((v >> 16) & 0xFF) as u8,
                                 ((v >> 8) & 0xFF) as u8,

@@ -55,8 +55,8 @@ impl OutputContext {
             return Err("Unrecognized output type".into());
         }
 
-        if output == 'f' && out_bits == 32 {
-            return Err("32 bit float not allowed with flac output".into());
+        if out_bits == 32 && output != 's' && output != 'w'{
+            return Err("32 bit float only allowed with wav or stdout".into());
         }
 
         let bytes_per_sample = if out_bits == 20 { 3 } else { out_bits / 8 };
