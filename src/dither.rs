@@ -17,15 +17,14 @@
 */
 
 use rand::Rng;
-
 use std::env;
 
 #[derive(Clone)]
 pub struct Dither {
-    fpd: u32,             // Floating-point dither
+    fpd: u32, // Floating-point dither
     dither_type: char,
-    neg_scale: f64,               // Pre-dither scale
-    pos_scale: f64,               // Post-dither scale
+    neg_scale: f64, // Pre-dither scale
+    pos_scale: f64, // Post-dither scale
 }
 
 impl Dither {
@@ -37,7 +36,9 @@ impl Dither {
 
         // Parse env var once at construction
         let (neg_scale, pos_scale) = match env::var("DSD2DXD_DITHERSCALE") {
-            Ok(val) => val.parse::<f64>().ok()
+            Ok(val) => val
+                .parse::<f64>()
+                .ok()
                 .map(|db| (10.0f64.powf(-db / 20.0), 10.0f64.powf(db / 20.0)))
                 .unwrap_or((1.0, 1.0)),
             Err(_) => (1.0, 1.0),

@@ -126,7 +126,6 @@ impl OutputContext {
     }
 
     /// Save audio file, forcibly overwriting any existing file at the target path
-    /// without relying on backend error strings. Safe for all formats.
     pub fn save_and_print_file(&self, file_name: &str, fmt: AudioFileFormat) -> Result<(), String> {
         let path = Path::new(file_name);
         if path.exists() {

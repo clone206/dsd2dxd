@@ -20,7 +20,6 @@ use crate::audio_file::AudioFileFormat;
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
-// NEW: 576 kHz -> /3 (final 192 kHz)
 use crate::filters::{
     HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
     HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
@@ -32,7 +31,6 @@ use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
 use id3::TagLike;
 use std::error::Error;
-//use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::time::Instant;
@@ -86,7 +84,6 @@ impl ConversionContext {
         let lm_slack = if upsample_ratio > 1 { 16 } else { 0 };
         let out_frames_capacity = frames_max + lm_slack;
 
-        // Build ctx first so we can use ctx.verbose instead of manual verbose checks
         let mut ctx = Self {
             in_ctx,
             out_ctx,
@@ -110,7 +107,6 @@ impl ConversionContext {
             diag_frames_out: 0,
         };
 
-        // Fractional (L/M) path stays as-is (stage1 dump removed permanently).
         if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147 || decim_ratio == 588)
         {
             let ch = ctx.in_ctx.channels_num as usize;
@@ -139,7 +135,6 @@ impl ConversionContext {
             }
         }
 
-        // Integer simple decimation path: attempt universal precalc selection.
         if ctx.eq_lm_resamplers.is_none() {
             if let Some(taps) = Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
             {
@@ -268,7 +263,7 @@ impl ConversionContext {
         }
     }
 
-    // Derive output path like the C++ writeFile(): basename + proper extension, or "output.xxx" for stdin
+    // Basename + proper extension, or generic for stdin
     fn derive_output_path(&self) -> String {
         let ext = match self.out_ctx.output.to_ascii_lowercase() {
             'w' => "wav",
@@ -459,7 +454,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         Ok(())
     }
 
-    // Unified L/M rational path channel processor
     // Unified per-channel processing: handles both LM (rational) and integer paths.
     // Returns the number of frames produced into self.float_data for this channel.
     #[inline(always)]
@@ -542,7 +536,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         };
 
         loop {
-            // Read only full frames from file; stdin always reads frame_size
+            // stdin always reads frame_size
             let to_read: usize = if reading_from_file {
                 if bytes_remaining >= frame_size as u64 {
                     frame_size
@@ -763,7 +757,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         self.last_samps_clipped_high = 0;
     }
 
-    // Make clamp a method to access self
     #[inline]
     fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
         let mut result = value;
@@ -833,7 +826,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 5
             }
         } else if out_ctx.rate == 96_000 {
-            5 // All current supported DSD rates use L=5 toward 96k
+            5 
         } else {
             5
         };

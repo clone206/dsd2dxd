@@ -16,9 +16,8 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use std::{fs::File, path::Path};
-
 use id3::Tag;
+use std::{fs::File, path::Path};
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
