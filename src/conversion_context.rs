@@ -62,10 +62,6 @@ pub struct ConversionContext {
     diag_frames_out: u64,
 }
 
-// ====================================================================================
-// END replacement
-// ====================================================================================
-
 impl ConversionContext {
     pub fn new(
         in_ctx: InputContext,
@@ -326,9 +322,6 @@ impl ConversionContext {
         );
         let wall_start = Instant::now();
 
-        // (Configuration prints intentionally unconditional; leave as-is)
-
-        // Unified processing loop (handles both LM and integer paths)
         self.process_blocks()?;
         let dsp_elapsed = wall_start.elapsed();
 
@@ -346,8 +339,6 @@ impl ConversionContext {
             self.report_timing(dsp_elapsed, total_elapsed);
         }
 
-        // Replace direct verbose_mode check with verbose call wrapping a marker + invocation
-        // (report_in_out already prints; gate with a cheap verbose boolean guard here)
         self.verbose("[DBG] Detailed output length diagnostics:", true);
         if self.verbose_mode {
             self.report_in_out();
@@ -511,8 +502,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
     }
 
-    // Dedicated LM loop removed: consolidated into process_blocks
-
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
@@ -542,7 +531,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             Box::new(io::stdin().lock())
         };
 
-        // Initialize bytes_remaining like C++
         let mut bytes_remaining: u64 = if reading_from_file {
             if self.in_ctx.audio_length > 0 {
                 self.in_ctx.audio_length
@@ -607,12 +595,12 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                         if self.out_ctx.bits == 32 {
                             // 32-bit float path
                             let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut q, chan);
+                            self.dither.process_samp(&mut q);
                             self.write_float(&mut out_idx, q);
                         } else {
                             // Integer path: dither + clamp + write_int
                             let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut qin, chan);
+                            self.dither.process_samp(&mut qin);
                             let value = Self::my_round(qin) as i32;
                             let peak = self.out_ctx.peak_level as i32;
                             let clamped = self.clamp_value(-peak, value, peak - 1);
@@ -625,13 +613,13 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                     if self.out_ctx.bits == 32 {
                         for s in 0..frames_used_per_chan {
                             let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut q, chan);
+                            self.dither.process_samp(&mut q);
                             self.out_ctx.push_samp(q as f32, chan);
                         }
                     } else {
                         for s in 0..frames_used_per_chan {
                             let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut qin, chan);
+                            self.dither.process_samp(&mut qin);
                             let value = Self::my_round(qin) as i32;
                             let peak = self.out_ctx.peak_level as i32;
                             let clamped = self.clamp_value(-peak, value, peak - 1);
@@ -676,8 +664,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
         Ok(())
     }
-
-    // Remove the separate write_file method since we're now writing directly
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         // DSD128 (2x) explicit allow list

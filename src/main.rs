@@ -67,7 +67,7 @@ struct Cli {
     #[arg(short = 's', long = "bs", default_value = "4096")]
     block_size: Option<u32>,
 
-    /// Dither type: T (TPDF), R (rectangular), N (NJAD), 
+    /// Dither type: T (TPDF), R (rectangular),
     /// F (float), X (none) [default: F for 32 bit, T otherwise]
     #[arg(short = 'd', long = "dither")]
     dither_type: Option<char>,
@@ -101,7 +101,7 @@ struct Cli {
     verbose: bool,
 
     /// Append abbreviated output rate to filename 
-    /// (e.g., _96K, _88_2K). Also appends " [<SAMPLE RATE>]" to the 
+    /// (e.g., _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to the 
     /// album tag of the output file if present.
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
