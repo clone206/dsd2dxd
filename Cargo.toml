@@ -1,0 +1,12 @@
+[package]
+name = "dsd2dxd"
+version = "2.0.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.4", features = ["derive", "wrap_help"] }
+rand = "0.8"
+flac-codec = "1.2.0"
+dsf = { path = "src/dsf/" }
+dff = { path = "src/dff/" }
+id3 = "1.16.3"

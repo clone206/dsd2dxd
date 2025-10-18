@@ -1,0 +1,6 @@
+[submodule "src/dff"]
+	path = src/dff
+	url = https://github.com/clone206/dff.git
+[submodule "src/dsf"]
+	path = src/dsf
+	url = https://gitlab.com/clone206/dsf.git
