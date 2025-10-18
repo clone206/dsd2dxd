@@ -32,7 +32,7 @@ git submodule update --init
 cargo install --path .
 ```
 
-This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`)
+This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`). When in doubt, type `which dsd2dxd` to see which binary is currently being used.
 
 ### Examples
 

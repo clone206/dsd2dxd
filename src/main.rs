@@ -18,7 +18,6 @@
 
 use clap::Parser;
 use std::error::Error;
-
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -139,7 +138,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let dither = Dither::new(dither_type)?;
 
     for input in inputs {
-        // Check for unexpanded glob patterns
         if input.contains('*') {
             verbose(
                 &format!(
@@ -153,7 +151,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         verbose(&format!("Input: {}", input), true);
 
-        // Create input context
         let in_ctx = InputContext::new(
             input.clone(),
             cli.format,
@@ -164,7 +161,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             cli.verbose,
         )?;
 
-        // Create conversion context
         let mut conv_ctx = ConversionContext::new(
             in_ctx,
             out_ctx.clone(),

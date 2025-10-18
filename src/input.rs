@@ -245,6 +245,4 @@ impl InputContext {
             }
         }
     }
-
-    // removed unused lower_cmp helper
 }
