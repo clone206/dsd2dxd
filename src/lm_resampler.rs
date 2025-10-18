@@ -1,3 +1,6 @@
+use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
+use crate::filters::HTAPS_4MHZ_7TO1_EQ;
+use crate::filters::HTAPS_576K_3TO1_EQ;
 /*
  Copyright (c) 2023 clone206
 
@@ -291,16 +294,31 @@ impl LMResampler {
                 }
 
                 if out_rate == 192_000 {
-                    if verbose {
-                        eprintln!("[DBG] Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 192k", l);
+                    if l == 5 {
+                        // DSD128 -> 192k three-stage path
+                        if verbose {
+                            eprintln!("[DBG] Three-stage L=5/M=147 path enabled: (×5 -> /7 (poly) -> /7 -> /3) => 192k");
+                        }
+                        return Self {
+                            stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_7TO_1_EQ[..], l, 7)),
+                            poly2: Some(DecimFIRSym::new_from_half(&HTAPS_4MHZ_7TO1_EQ[..], 7)),
+                            poly3: Some(DecimFIRSym::new_from_half(&HTAPS_576K_3TO1_EQ[..], 3)),
+                            s2_scratch: Vec::new(),
+                            s1_scratch: Vec::new(),
+                        };
+                    } else if l == 10 {
+                        // DSD64 -> 192k two-stage path (existing)
+                        if verbose {
+                            eprintln!("[DBG] Two-stage L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 192k");
+                        }
+                        return Self {
+                            stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX10_21TO1_EQ[..], l, 21)),
+                            poly2: Some(DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ[..], 7)),
+                            poly3: None,
+                            s2_scratch: Vec::new(),
+                            s1_scratch: Vec::new(),
+                        };
                     }
-                    return Self {
-                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX10_21TO1_EQ[..], l, 21)),
-                        poly2: Some(DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ[..], 7)),
-                        poly3: None,
-                        s2_scratch: Vec::new(),
-                        s1_scratch: Vec::new(),
-                    };
                 }
 
                 if verbose {
