@@ -49,6 +49,9 @@ impl Dsd {
             use dsf::DsfFile;
             let file_path = Path::new(&path);
             let mut dsf_file = DsfFile::open(file_path)?;
+            if let Some(e) = dsf_file.tag_read_err() {
+                eprintln!("[Warning] Attempted read of ID3 tag failed: {}", e);
+            }
             let file = dsf_file.file().try_clone()?;
             Ok(Self {
                 sample_rate: dsf_file.fmt_chunk().sampling_frequency(),
