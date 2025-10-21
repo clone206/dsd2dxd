@@ -19,7 +19,9 @@
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::fs::File;
+use std::io::Write;
 use std::path::Path;
+use std::{io, vec};
 
 pub struct OutputContext {
     // Init'd via input params
@@ -37,6 +39,7 @@ pub struct OutputContext {
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
     pub file: Option<File>,
+    stdout_buf: Vec<u8>,
 }
 
 impl OutputContext {
@@ -55,7 +58,7 @@ impl OutputContext {
             return Err("Unrecognized output type".into());
         }
 
-        if out_bits == 32 && output != 's' && output != 'w'{
+        if out_bits == 32 && output != 's' && output != 'w' {
             return Err("32 bit float only allowed with wav or stdout".into());
         }
 
@@ -72,18 +75,26 @@ impl OutputContext {
             float_file: None,
             int_file: None,
             file: None,
+            stdout_buf: Vec::new(),
         };
 
         ctx.set_scaling(out_vol);
         Ok(ctx)
     }
 
-    pub fn set_channels_num(&mut self, chan_num_out: u32) {
-        self.channels_num = chan_num_out;
-    }
-
-    pub fn init_file(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn init(
+        &mut self,
+        out_frames_capacity: usize,
+        channels_num: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        self.channels_num = channels_num;
         if self.output == 's' {
+            self.stdout_buf = vec![
+                0u8;
+                out_frames_capacity
+                    * self.channels_num as usize
+                    * self.bytes_per_sample as usize
+            ];
             return Ok(());
         }
 
@@ -125,6 +136,25 @@ impl OutputContext {
         }
     }
 
+    pub fn save_file(&self, out_path: &String) -> Result<(), String> {
+        match self.output.to_ascii_lowercase() {
+            'w' => {
+                self
+                    .save_and_print_file(out_path, AudioFileFormat::Wave)?;
+            }
+            'a' => {
+                self
+                    .save_and_print_file(out_path, AudioFileFormat::Aiff)?;
+            }
+            'f' => {
+                self
+                    .save_and_print_file(out_path, AudioFileFormat::Flac)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Save audio file, forcibly overwriting any existing file at the target path
     pub fn save_and_print_file(&self, file_name: &str, fmt: AudioFileFormat) -> Result<(), String> {
         let path = Path::new(file_name);
@@ -147,6 +177,49 @@ impl OutputContext {
         }
 
         eprintln!("Wrote to file: {}", file_name);
+        Ok(())
+    }
+
+    pub fn pack_float(&mut self, offset: &mut usize, sample: f64) {
+        // Convert to f32 and write in little-endian
+        let bytes = (sample as f32).to_le_bytes();
+        self.stdout_buf[*offset..*offset + 4].copy_from_slice(&bytes);
+        *offset += 4;
+    }
+
+    pub fn pack_int(&mut self, offset: &mut usize, value: i32) {
+        if *offset + self.bytes_per_sample as usize > self.stdout_buf.len() {
+            return;
+        }
+
+        match self.bytes_per_sample {
+            3 => {
+                // 24-bit container (also used for 20-bit). For 20-bit we left-align by shifting 4.
+                let mut v = value;
+                if self.bits == 20 {
+                    v <<= 4; // align 20 significant bits into the top of 24-bit word (LS 4 bits zero)
+                }
+                self.stdout_buf[*offset] = (v & 0xFF) as u8;
+                self.stdout_buf[*offset + 1] = ((v >> 8) & 0xFF) as u8;
+                self.stdout_buf[*offset + 2] = ((v >> 16) & 0xFF) as u8;
+            }
+            2 => {
+                let v = value as i16;
+                let b = v.to_le_bytes();
+                self.stdout_buf[*offset..*offset + 2].copy_from_slice(&b);
+            }
+            _ => return,
+        }
+        *offset += self.bytes_per_sample as usize;
+    }
+
+    pub fn write_stdout(&mut self, pcm_bytes: usize) -> Result<(), Box<dyn Error>> {
+        if pcm_bytes == 0 || pcm_bytes > self.stdout_buf.len() {
+            return Ok(());
+        }
+
+        io::stdout().write_all(&self.stdout_buf[..pcm_bytes])?;
+        io::stdout().flush()?;
         Ok(())
     }
 
@@ -176,6 +249,7 @@ impl Clone for OutputContext {
             float_file: self.float_file.clone(),
             int_file: self.int_file.clone(),
             file: None, // File cannot be cloned, so we create a new None
+            stdout_buf: self.stdout_buf.clone(),
         }
     }
 }

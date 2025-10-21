@@ -44,7 +44,6 @@ pub struct ConversionContext {
     filt_type: char,
     dsd_data: Vec<u8>,
     float_data: Vec<f64>,
-    pcm_data: Vec<u8>,
     clips: i32,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
@@ -67,10 +66,10 @@ impl ConversionContext {
         dither: Dither,
         filt_type: char,
         verbose_param: bool,
+        append_rate_suffix: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize;
         let channels = in_ctx.channels_num as usize;
-        let bytes_per_sample = out_ctx.bytes_per_sample as usize;
         let dsd_rate = in_ctx.dsd_rate;
 
         let (decim_ratio, upsample_ratio) = Self::compute_decim_and_upsample(&in_ctx, &out_ctx);
@@ -91,12 +90,11 @@ impl ConversionContext {
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
             float_data: vec![0.0; out_frames_capacity],
-            pcm_data: vec![0; out_frames_capacity * channels * bytes_per_sample],
             clips: 0,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             verbose_mode: verbose_param,
-            append_rate_suffix: false,
+            append_rate_suffix,
             precalc_decims: None,
             eq_lm_resamplers: None,
             total_dsd_bytes_processed: 0,
@@ -162,8 +160,8 @@ impl ConversionContext {
             }
         }
 
-        ctx.out_ctx.set_channels_num(ctx.in_ctx.channels_num);
-        ctx.out_ctx.init_file()?;
+        ctx.out_ctx
+            .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
         ctx.dither.init();
         Ok(ctx)
     }
@@ -271,15 +269,12 @@ impl ConversionContext {
             'f' => "flac",
             _ => "out",
         };
-        let suffix = if self.append_rate_suffix {
-            if let Some((uscore, _dot)) = abbrev_rate_pair(self.out_ctx.rate as u32) {
-                format!("_{}", uscore)
-            } else {
-                String::new()
-            }
+        let suffix = if let Some((uscore, _dot)) = self.abbrev_rate_pair(self.out_ctx.rate as u32) {
+            format!("_{}", uscore)
         } else {
             String::new()
         };
+
         if self.in_ctx.std_in {
             let base = if suffix.is_empty() {
                 "output".to_string()
@@ -288,12 +283,14 @@ impl ConversionContext {
             };
             return format!("{}.{}", base, ext);
         }
+
         let parent = self
             .in_ctx
             .parent_path
             .as_ref()
             .map(|p| p.as_path())
             .unwrap_or(Path::new(""));
+
         let stem = self
             .in_ctx
             .file_path
@@ -301,11 +298,13 @@ impl ConversionContext {
             .and_then(|p| p.file_stem())
             .and_then(|s| s.to_str())
             .unwrap_or("output");
+
         let name = if suffix.is_empty() {
             format!("{}.{}", stem, ext)
         } else {
             format!("{}{}.{}", stem, suffix, ext)
         };
+
         parent.join(name).to_string_lossy().into_owned()
     }
 
@@ -369,10 +368,6 @@ impl ConversionContext {
         );
     }
 
-    pub fn set_append_rate_suffix(&mut self, value: bool) {
-        self.append_rate_suffix = value;
-    }
-
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
     fn report_in_out(&self) {
         let ch = self.in_ctx.channels_num.max(1) as u64;
@@ -414,36 +409,13 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
         self.verbose(&format!("Derived output path: {}", out_path), true);
 
-        match self.out_ctx.output.to_ascii_lowercase() {
-            'w' => {
-                self.out_ctx
-                    .save_and_print_file(&out_path, AudioFileFormat::Wave)?;
-            }
-            'a' => {
-                self.out_ctx
-                    .save_and_print_file(&out_path, AudioFileFormat::Aiff)?;
-            }
-            'f' => {
-                self.out_ctx
-                    .save_and_print_file(&out_path, AudioFileFormat::Flac)?;
-            }
-            _ => {}
-        }
+        self.out_ctx.save_file(&out_path)?;
 
         if let Some(mut tag) = self.in_ctx.tag.clone() {
             self.verbose("Copying ID3 tags from input file...", true);
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
             if self.append_rate_suffix {
-                if let Some(album) = tag.album() {
-                    if let Some((_uscore, dot)) = abbrev_rate_pair(self.out_ctx.rate as u32) {
-                        let suffix = format!(" [{}]", dot);
-                        if !album.ends_with(&suffix) {
-                            let mut new_album = String::from(album);
-                            new_album.push_str(&suffix);
-                            tag.set_album(new_album);
-                        }
-                    }
-                }
+                self.append_album_suffix(&mut tag);
             }
             let path_out = Path::new(&out_path);
             tag.write_to_path(path_out, tag.version())?;
@@ -452,6 +424,16 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
 
         Ok(())
+    }
+
+    fn append_album_suffix(&self, tag: &mut id3::Tag) {
+        if let Some(album) = tag.album() {
+            if let Some((_uscore, dot)) = self.abbrev_rate_pair(self.out_ctx.rate as u32) {
+                let mut new_album = String::from(album);
+                new_album.push_str(&format!(" [{}]", dot));
+                tag.set_album(new_album);
+            }
+        }
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
@@ -590,7 +572,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                             // 32-bit float path
                             let mut q = self.float_data[s] * self.out_ctx.scale_factor;
                             self.dither.process_samp(&mut q);
-                            self.write_float(&mut out_idx, q);
+                            self.out_ctx.pack_float(&mut out_idx, q);
                         } else {
                             // Integer path: dither + clamp + write_int
                             let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
@@ -598,7 +580,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                             let value = Self::my_round(qin) as i32;
                             let peak = self.out_ctx.peak_level as i32;
                             let clamped = self.clamp_value(-peak, value, peak - 1);
-                            self.write_int(&mut out_idx, clamped, bps);
+                            self.out_ctx.pack_int(&mut out_idx, clamped);
                         }
                         pcm_pos += channels * bps;
                     }
@@ -631,7 +613,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             self.diag_frames_out += frames_used_per_chan as u64;
 
             if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
-                self.write_block(pcm_block_bytes)?;
+                self.out_ctx.write_stdout(pcm_block_bytes)?;
             }
 
             // Decrement for file input using actual read size
@@ -643,19 +625,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             }
         } // end loop
 
-        Ok(())
-    }
-
-    fn write_block(&mut self, pcm_bytes: usize) -> Result<(), Box<dyn Error>> {
-        if pcm_bytes == 0 || pcm_bytes > self.pcm_data.len() {
-            return Ok(());
-        }
-
-        // Only stdout; file formats are saved at end via AudioFile
-        if self.out_ctx.output == 's' {
-            io::stdout().write_all(&self.pcm_data[..pcm_bytes])?;
-            io::stdout().flush()?;
-        }
         Ok(())
     }
 
@@ -674,13 +643,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         {
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
-        // DSD256 (4x) paths: integer decimations 32, 64, 128, 147, 294 or LM decim 588; all require 'E'
-        if self.in_ctx.dsd_rate == 4
-            && !(matches!(self.decim_ratio, 32 | 64 | 128 | 147 | 294 | 588)
-                && self.filt_type == 'E')
-        {
-            return Err("With DSD256 input, only 32:1, 64:1, 128:1, 147:1, 294:1 integer or 588:1 (two-stage LM) decimation using the Equiripple filter is supported.".into());
-        }
         // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
         if self.decim_ratio == 294
             && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 2 || self.in_ctx.dsd_rate == 4))
@@ -688,52 +650,10 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             return Err("294:1 decimation is only supported for DSD128 or DSD256 with the Equiripple filter.".into());
         }
         // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
-        if self.decim_ratio == 147
-            && !(self.filt_type == 'E'
-                && (self.in_ctx.dsd_rate == 1
-                    || self.in_ctx.dsd_rate == 2
-                    || self.in_ctx.dsd_rate == 4))
-        {
-            return Err("147:1 decimation is only supported with the Equiripple filter for DSD64, DSD128, or DSD256 input.".into());
+        if self.decim_ratio == 147 && self.filt_type != 'E' {
+            return Err("147:1 decimation is only supported with the Equiripple filter.".into());
         }
         Ok(())
-    }
-
-    fn write_float(&mut self, offset: &mut usize, sample: f64) {
-        // Convert to f32 and write in little-endian
-        let bytes = (sample as f32).to_le_bytes();
-        self.pcm_data[*offset..*offset + 4].copy_from_slice(&bytes);
-        *offset += 4;
-    }
-
-    fn write_int(&mut self, offset: &mut usize, value: i32, bytes: usize) {
-        if *offset + bytes > self.pcm_data.len() {
-            return;
-        }
-
-        match bytes {
-            3 => {
-                // 24-bit container (also used for 20-bit). For 20-bit we left-align by shifting 4.
-                let mut v = value;
-                if self.out_ctx.bits == 20 {
-                    v <<= 4; // align 20 significant bits into the top of 24-bit word (LS 4 bits zero)
-                }
-                self.pcm_data[*offset] = (v & 0xFF) as u8;
-                self.pcm_data[*offset + 1] = ((v >> 8) & 0xFF) as u8;
-                self.pcm_data[*offset + 2] = ((v >> 16) & 0xFF) as u8;
-            }
-            2 => {
-                let v = value as i16;
-                let b = v.to_le_bytes();
-                self.pcm_data[*offset..*offset + 2].copy_from_slice(&b);
-            }
-            4 => {
-                let b = (value as i32).to_le_bytes();
-                self.pcm_data[*offset..*offset + 4].copy_from_slice(&b);
-            }
-            _ => return,
-        }
-        *offset += bytes;
     }
 
     // Helper function for clip stats
@@ -826,23 +746,26 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
                 5
             }
         } else if out_ctx.rate == 96_000 {
-            5 
+            5
         } else {
             5
         };
         (decim_ratio, upsample_ratio)
     }
-}
 
-/// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
-fn abbrev_rate_pair(rate: u32) -> Option<(&'static str, &'static str)> {
-    match rate {
-        88_200 => Some(("88_2K", "88.2K")),
-        96_000 => Some(("96K", "96K")),
-        176_400 => Some(("176_4K", "176.4K")),
-        192_000 => Some(("192K", "192K")),
-        352_800 => Some(("352_8K", "352.8K")),
-        384_000 => Some(("384K", "384K")),
-        _ => None,
+    /// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
+    fn abbrev_rate_pair(&self, rate: u32) -> Option<(&'static str, &'static str)> {
+        if !self.append_rate_suffix {
+            return None;
+        }
+        match rate {
+            88_200 => Some(("88_2K", "88.2K")),
+            96_000 => Some(("96K", "96K")),
+            176_400 => Some(("176_4K", "176.4K")),
+            192_000 => Some(("192K", "192K")),
+            352_800 => Some(("352_8K", "352.8K")),
+            384_000 => Some(("384K", "384K")),
+            _ => None,
+        }
     }
 }
