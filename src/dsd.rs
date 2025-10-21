@@ -26,6 +26,7 @@ pub enum ContainerFormat {
     Dsf,
 }
 
+pub const DSD_64_RATE: u32 = 2822400;
 pub const DFF_BLOCK_SIZE: u32 = 1;
 pub const DSF_BLOCK_SIZE: u32 = 4096;
 

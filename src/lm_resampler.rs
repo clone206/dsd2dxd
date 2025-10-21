@@ -16,6 +16,7 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::dsd::DSD_64_RATE;
 use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
 use crate::filters::HTAPS_288K_3TO1_EQ;
 use crate::filters::HTAPS_2MHZ_7TO1_EQ;
@@ -71,7 +72,7 @@ static ST1_TARGET: OnceLock<usize> = OnceLock::new();
 // Generalized L/M resampler
 // ====================================================================================
 pub struct LMResampler {
-    // Unified Stage1 polyphase 
+    // Unified Stage1 polyphase
     stage1_poly: Option<Stage1Poly>,
     stage2_decim: Option<DecimFIRSym>,
     stage3_decim: Option<DecimFIRSym>,
@@ -90,7 +91,10 @@ impl LMResampler {
                     }
                     return Self {
                         stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
-                        stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_28TO1_EQ[..], 28)),
+                        stage2_decim: Some(DecimFIRSym::new_from_half(
+                            &HTAPS_2_68MHZ_28TO1_EQ[..],
+                            28,
+                        )),
                         stage3_decim: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
@@ -106,7 +110,10 @@ impl LMResampler {
                     }
                     return Self {
                         stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
-                        stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_14TO1_EQ[..], 14)),
+                        stage2_decim: Some(DecimFIRSym::new_from_half(
+                            &HTAPS_2_68MHZ_14TO1_EQ[..],
+                            14,
+                        )),
                         stage3_decim: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
@@ -137,7 +144,10 @@ impl LMResampler {
                     }
                     return Self {
                         stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
-                        stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_2_68MHZ_7TO1_EQ[..], 7)),
+                        stage2_decim: Some(DecimFIRSym::new_from_half(
+                            &HTAPS_2_68MHZ_7TO1_EQ[..],
+                            7,
+                        )),
                         stage3_decim: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
@@ -152,8 +162,14 @@ impl LMResampler {
                         }
                         return Self {
                             stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_7TO_1_EQ[..], l, 7)),
-                            stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_4MHZ_7TO1_EQ[..], 7)),
-                            stage3_decim: Some(DecimFIRSym::new_from_half(&HTAPS_576K_3TO1_EQ[..], 3)),
+                            stage2_decim: Some(DecimFIRSym::new_from_half(
+                                &HTAPS_4MHZ_7TO1_EQ[..],
+                                7,
+                            )),
+                            stage3_decim: Some(DecimFIRSym::new_from_half(
+                                &HTAPS_576K_3TO1_EQ[..],
+                                3,
+                            )),
                             s2_scratch: Vec::new(),
                             s1_scratch: Vec::new(),
                         };
@@ -164,7 +180,10 @@ impl LMResampler {
                         }
                         return Self {
                             stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX10_21TO1_EQ[..], l, 21)),
-                            stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_1_34MHZ_7TO1_EQ[..], 7)),
+                            stage2_decim: Some(DecimFIRSym::new_from_half(
+                                &HTAPS_1_34MHZ_7TO1_EQ[..],
+                                7,
+                            )),
                             stage3_decim: None,
                             s2_scratch: Vec::new(),
                             s1_scratch: Vec::new(),
@@ -788,3 +807,54 @@ fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f64; 256]
     arc
 }
 
+pub fn compute_decim_and_upsample(in_rate: i32, out_rate: i32) -> (i32, u32) {
+    // Determine decimation ratio (M)
+    let decim_ratio: i32 = if out_rate == 96_000 && in_rate == 4 {
+        // DSD256 -> 96k two-stage LM path: M=588 (×5 -> /21 -> /28)
+        588
+    } else if (out_rate == 96_000 && in_rate == 2) || (out_rate == 192_000 && in_rate == 4) {
+        294
+    } else if out_rate == 96_000 || out_rate == 192_000 || out_rate == 384_000 {
+        147
+    } else {
+        // Integer ratio attempt (fallback to 64)
+        let base = DSD_64_RATE * (in_rate as u32);
+        if out_rate > 0 && base % (out_rate as u32) == 0 {
+            (base / (out_rate as u32)) as i32
+        } else {
+            64
+        }
+    };
+
+    // Upsample (L) selection
+    let upsample_ratio: u32 = if decim_ratio < 147 {
+        1
+    } else if out_rate == 384_000 {
+        // Specialized two-phase L choices for 384k: DSD64->L20, DSD128->L10, DSD256->L5
+        if in_rate == 1 {
+            20
+        } else if in_rate == 2 {
+            10
+        } else if in_rate == 4 {
+            5
+        } else {
+            5
+        }
+    } else if out_rate == 192_000 {
+        // 192k: DSD64->L10, DSD128->L5, DSD256->L5 (reuses L5 path)
+        if in_rate == 1 {
+            10
+        } else if in_rate == 2 {
+            5
+        } else if in_rate == 4 {
+            5
+        } else {
+            5
+        }
+    } else if out_rate == 96_000 {
+        5
+    } else {
+        5
+    };
+    (decim_ratio, upsample_ratio)
+}
