@@ -51,6 +51,7 @@ pub struct ConversionContext {
     diag_bits_in: u64,
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
+    reader: Box<dyn Read>,
 }
 
 impl ConversionContext {
@@ -98,6 +99,7 @@ impl ConversionContext {
             diag_bits_in: 0,
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
+            reader: Box::new(io::empty()), // Placeholder
         };
 
         if upsample_ratio > 1 {
@@ -141,7 +143,8 @@ impl ConversionContext {
             return Err(format!(
                 "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
                 ctx.decim_ratio, ctx.filt_type, dsd_rate
-            ).into());
+            )
+            .into());
         }
 
         ctx.out_ctx
@@ -152,6 +155,7 @@ impl ConversionContext {
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
+        self.reader = self.get_reader(!self.in_ctx.std_in)?;
         eprintln!(
             "Dither type: {}",
             self.dither.dither_type().to_ascii_uppercase()
@@ -183,13 +187,8 @@ impl ConversionContext {
         Ok(())
     }
 
-    fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
-        let channels = self.in_ctx.channels_num as usize;
-        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
-
-        // Open a unified reader (stdin or file), seeking if needed
-        let reading_from_file = !self.in_ctx.std_in;
-        let mut reader: Box<dyn Read> = if reading_from_file {
+    fn get_reader(&mut self, reading_from_file: bool) -> Result<Box<dyn Read>, Box<dyn Error>> {
+        if reading_from_file {
             // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
             let mut file = self
                 .in_ctx
@@ -208,49 +207,66 @@ impl ConversionContext {
                     true,
                 );
             }
-            Box::new(file)
+            Ok(Box::new(file))
         } else {
-            Box::new(io::stdin().lock())
+            Ok(Box::new(io::stdin().lock()))
+        }
+    }
+
+    #[inline(always)]
+    fn read_frame(&mut self, bytes_remaining: u64, frame_size: usize) -> Result<usize, Box<dyn Error>> {
+        // stdin always reads frame_size
+        let to_read: usize = if !self.in_ctx.std_in {
+            if bytes_remaining >= frame_size as u64 {
+                frame_size
+            } else {
+                bytes_remaining as usize
+            }
+        } else {
+            frame_size
         };
 
+        // Read one frame identically for stdin and file
+        let read_size: usize = match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
+            Ok(()) => to_read,
+            Err(e) => return Err(Box::new(e)),
+        };
+        // Track bytes processed (all channels)
+        self.total_dsd_bytes_processed += read_size as u64;
+
+        Ok(read_size)
+    }
+
+    fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
+        let channels = self.in_ctx.channels_num as usize;
+        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
+
+        // Open a unified reader (stdin or file), seeking if needed
+        let reading_from_file = !self.in_ctx.std_in;
+
         let mut bytes_remaining: u64 = if reading_from_file {
-            if self.in_ctx.audio_length > 0 {
-                self.in_ctx.audio_length
-            } else {
-                frame_size as u64
-            }
+            self.in_ctx.audio_length
         } else {
             frame_size as u64
         };
 
         loop {
-            // stdin always reads frame_size
-            let to_read: usize = if reading_from_file {
-                if bytes_remaining >= frame_size as u64 {
-                    frame_size
-                } else {
-                    bytes_remaining as usize
-                }
-            } else {
-                frame_size
-            };
-            if to_read == 0 {
-                break;
-            }
-
             // Read one frame identically for stdin and file
-            let read_size: usize = match reader.read_exact(&mut self.dsd_data[..to_read]) {
-                Ok(()) => to_read,
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(Box::new(e)),
+            let read_size: usize = match self.read_frame(bytes_remaining, frame_size) {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Some(io_err) = e.downcast_ref::<io::Error>() {
+                        if io_err.kind() == io::ErrorKind::UnexpectedEof {
+                            break;
+                        }
+                    }
+                    return Err(e);
+                }
             };
-            // Track bytes processed (all channels)
-            self.total_dsd_bytes_processed += read_size as u64;
 
             // Bytes per channel in this read
             let bytes_per_channel: usize = read_size / channels;
 
-            // ---- DIAGNOSTICS: accumulate input bits & recompute expected frames ----
             if self.verbose_mode {
                 self.diag_bits_in += (bytes_per_channel as u64) * 8;
                 self.diag_expected_frames_floor =
@@ -290,23 +306,20 @@ impl ConversionContext {
                         }
                         pcm_pos += channels * bps;
                     }
+                } else if self.out_ctx.bits == 32 {
+                    for s in 0..frames_used_per_chan {
+                        let mut q = self.float_data[s] * self.out_ctx.scale_factor;
+                        self.dither.process_samp(&mut q);
+                        self.out_ctx.push_samp(q as f32, chan);
+                    }
                 } else {
-                    // File formats: push samples into AudioFile buffers
-                    if self.out_ctx.bits == 32 {
-                        for s in 0..frames_used_per_chan {
-                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut q);
-                            self.out_ctx.push_samp(q as f32, chan);
-                        }
-                    } else {
-                        for s in 0..frames_used_per_chan {
-                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut qin);
-                            let value = Self::my_round(qin) as i32;
-                            let peak = self.out_ctx.peak_level as i32;
-                            let clamped = self.clamp_value(-peak, value, peak - 1);
-                            self.out_ctx.push_samp(clamped, chan);
-                        }
+                    for s in 0..frames_used_per_chan {
+                        let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
+                        self.dither.process_samp(&mut qin);
+                        let value = Self::my_round(qin) as i32;
+                        let peak = self.out_ctx.peak_level as i32;
+                        let clamped = self.clamp_value(-peak, value, peak - 1);
+                        self.out_ctx.push_samp(clamped, chan);
                     }
                 }
             } // end channel loop
@@ -315,8 +328,9 @@ impl ConversionContext {
             let pcm_block_bytes =
                 frames_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
 
-            // Diagnostics: add actual produced frames (per channel)
-            self.diag_frames_out += frames_used_per_chan as u64;
+            if self.verbose_mode {
+                self.diag_frames_out += frames_used_per_chan as u64;
+            }
 
             if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_block_bytes)?;

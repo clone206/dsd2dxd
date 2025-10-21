@@ -18,7 +18,6 @@
 
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::{io, vec};
@@ -38,7 +37,6 @@ pub struct OutputContext {
     // Internal state
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
-    pub file: Option<File>,
     stdout_buf: Vec<u8>,
 }
 
@@ -74,7 +72,6 @@ impl OutputContext {
             scale_factor: 1.0,
             float_file: None,
             int_file: None,
-            file: None,
             stdout_buf: Vec::new(),
         };
 
@@ -248,7 +245,6 @@ impl Clone for OutputContext {
             scale_factor: self.scale_factor,
             float_file: self.float_file.clone(),
             int_file: self.int_file.clone(),
-            file: None, // File cannot be cloned, so we create a new None
             stdout_buf: self.stdout_buf.clone(),
         }
     }
