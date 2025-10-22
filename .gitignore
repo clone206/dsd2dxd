@@ -12,6 +12,7 @@ dsd2pcm
 *.aiff
 *.aif
 *.dff
+!1kHz*.dff
 *.m4a
 dsd2dxd
 dsf2dsdiff
