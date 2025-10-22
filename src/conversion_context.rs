@@ -214,7 +214,11 @@ impl ConversionContext {
     }
 
     #[inline(always)]
-    fn read_frame(&mut self, bytes_remaining: u64, frame_size: usize) -> Result<usize, Box<dyn Error>> {
+    fn read_frame(
+        &mut self,
+        bytes_remaining: u64,
+        frame_size: usize,
+    ) -> Result<usize, Box<dyn Error>> {
         // stdin always reads frame_size
         let to_read: usize = if !self.in_ctx.std_in {
             if bytes_remaining >= frame_size as u64 {
@@ -274,66 +278,24 @@ impl ConversionContext {
             }
 
             // Track actual frames produced per channel (set by channel 0)
-            let mut frames_used_per_chan = 0usize;
+            let mut samples_used_per_chan = 0usize;
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
-                let produced = self.process_channel(chan, bytes_per_channel);
-                if chan == 0 {
-                    frames_used_per_chan = produced;
-                }
-
-                // Output / packing per channel
-                if self.out_ctx.output == 's' {
-                    // Interleave into pcm_data (handle float vs integer separately)
-                    let bps = self.out_ctx.bytes_per_sample as usize; // 4 for 32-bit float
-                    let mut pcm_pos = chan * bps;
-                    for s in 0..frames_used_per_chan {
-                        let mut out_idx = pcm_pos;
-                        if self.out_ctx.bits == 32 {
-                            // 32-bit float path
-                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut q);
-                            self.out_ctx.pack_float(&mut out_idx, q);
-                        } else {
-                            // Integer path: dither + clamp + write_int
-                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut qin);
-                            let value = Self::my_round(qin) as i32;
-                            let peak = self.out_ctx.peak_level as i32;
-                            let clamped = self.clamp_value(-peak, value, peak - 1);
-                            self.out_ctx.pack_int(&mut out_idx, clamped);
-                        }
-                        pcm_pos += channels * bps;
-                    }
-                } else if self.out_ctx.bits == 32 {
-                    for s in 0..frames_used_per_chan {
-                        let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                        self.dither.process_samp(&mut q);
-                        self.out_ctx.push_samp(q as f32, chan);
-                    }
-                } else {
-                    for s in 0..frames_used_per_chan {
-                        let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                        self.dither.process_samp(&mut qin);
-                        let value = Self::my_round(qin) as i32;
-                        let peak = self.out_ctx.peak_level as i32;
-                        let clamped = self.clamp_value(-peak, value, peak - 1);
-                        self.out_ctx.push_samp(clamped, chan);
-                    }
-                }
-            } // end channel loop
-
-            // Derive actual byte count (may differ from estimate in rational path)
-            let pcm_block_bytes =
-                frames_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
-
-            if self.verbose_mode {
-                self.diag_frames_out += frames_used_per_chan as u64;
+                samples_used_per_chan = self.process_channel(chan, bytes_per_channel);
+                self.write_to_buffer(samples_used_per_chan, chan);
             }
 
-            if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
-                self.out_ctx.write_stdout(pcm_block_bytes)?;
+            // Derive actual byte count (may differ from estimate in rational path)
+            let pcm_frame_bytes =
+                samples_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
+
+            if self.verbose_mode {
+                self.diag_frames_out += samples_used_per_chan as u64;
+            }
+
+            if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
+                self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
 
             // Decrement for file input using actual read size
@@ -346,6 +308,58 @@ impl ConversionContext {
         } // end loop
 
         Ok(())
+    }
+
+    #[inline(always)]
+    fn write_to_buffer(&mut self, samples_used_per_chan: usize, chan: usize) {
+        // Output / packing for channel
+        if self.out_ctx.output == 's' {
+            // Interleave into pcm_data (handle float vs integer separately)
+            let bps = self.out_ctx.bytes_per_sample as usize; // 4 for 32-bit float
+            let mut pcm_pos = chan * bps;
+            for s in 0..samples_used_per_chan {
+                let mut out_idx = pcm_pos;
+                if self.out_ctx.bits == 32 {
+                    // 32-bit float path
+                    let mut q = self.float_data[s];
+                    self.scale_and_dither(&mut q);
+                    self.out_ctx.pack_float(&mut out_idx, q);
+                } else {
+                    // Integer path: dither + clamp + write_int
+                    let mut qin: f64 = self.float_data[s];
+                    self.scale_and_dither(&mut qin);
+                    let quantized = self.quantize(&mut qin);
+                    self.out_ctx.pack_int(&mut out_idx, quantized);
+                }
+                pcm_pos += self.in_ctx.channels_num as usize * bps;
+            }
+        } else if self.out_ctx.bits == 32 {
+            for s in 0..samples_used_per_chan {
+                let mut q = self.float_data[s];
+                self.scale_and_dither(&mut q);
+                self.out_ctx.push_samp(q as f32, chan);
+            }
+        } else {
+            for s in 0..samples_used_per_chan {
+                let mut qin: f64 = self.float_data[s];
+                self.scale_and_dither(&mut qin);
+                let quantized = self.quantize(&mut qin);
+                self.out_ctx.push_samp(quantized, chan);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn scale_and_dither(&mut self, sample: &mut f64) {
+        *sample *= self.out_ctx.scale_factor;
+        self.dither.process_samp(sample);
+    }
+
+    #[inline(always)]
+    fn quantize(&mut self, qin: &mut f64) -> i32 {
+        let value = Self::my_round(*qin) as i32;
+        let peak = self.out_ctx.peak_level as i32;
+        self.clamp_value(-peak, value, peak - 1)
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
@@ -561,7 +575,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     }
 
     // Helper function for clip stats
-    #[inline]
+    #[inline(always)]
     fn update_clip_stats(&mut self, low: bool, high: bool) {
         if low {
             if self.last_samps_clipped_low == 1 {
@@ -581,7 +595,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         self.last_samps_clipped_high = 0;
     }
 
-    #[inline]
+    #[inline(always)]
     fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
         let mut result = value;
         if value < min {
@@ -594,7 +608,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         result
     }
 
-    #[inline]
+    #[inline(always)]
     fn my_round(x: f64) -> i64 {
         if x < 0.0 {
             (x - 0.5).floor() as i64
