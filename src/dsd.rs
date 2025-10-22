@@ -67,9 +67,22 @@ impl Dsd {
                 tag: dsf_file.id3_tag().clone(),
             })
         } else if lower.ends_with(".dff") {
+            use dff::model::*;
             use dff::DffFile;
             let file_path = Path::new(&path);
-            let dff_file = DffFile::open(file_path)?;
+            let dff_file = match DffFile::open(file_path) {
+                Ok(dff) => dff,
+                Err(Error::Id3Error(e, dff_file)) => {
+                    eprintln!(
+                        "[Warning] Attempted read of ID3 tag failed. Partial read attempted: {}",
+                        e
+                    );
+                    dff_file
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            };
             let file = dff_file.file().try_clone()?;
             Ok(Self {
                 sample_rate: dff_file.get_sample_rate()?,
