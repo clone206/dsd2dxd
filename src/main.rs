@@ -24,6 +24,7 @@ mod conversion_context;
 mod dither;
 mod dsd;
 mod filters;
+mod filters_lm;
 mod input;
 mod lm_resampler;
 mod output;

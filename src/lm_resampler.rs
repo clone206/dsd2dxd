@@ -17,19 +17,19 @@
 */
 
 use crate::dsd::DSD_64_RATE;
-use crate::filters::HTAPS_1_34MHZ_7TO1_EQ;
-use crate::filters::HTAPS_288K_3TO1_EQ;
-use crate::filters::HTAPS_2MHZ_7TO1_EQ;
-use crate::filters::HTAPS_2_68MHZ_14TO1_EQ;
-use crate::filters::HTAPS_2_68MHZ_28TO1_EQ;
-use crate::filters::HTAPS_2_68MHZ_7TO1_EQ;
-use crate::filters::HTAPS_4MHZ_7TO1_EQ;
-use crate::filters::HTAPS_576K_3TO1_EQ;
-use crate::filters::HTAPS_DDRX10_21TO1_EQ;
-use crate::filters::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
-use crate::filters::HTAPS_DDRX5_7TO_1_EQ;
-use crate::filters::HTAPS_DSDX10_21TO1_EQ;
-use crate::filters::HTAPS_DSDX5_7TO1_EQ;
+use crate::filters_lm::HTAPS_1_34MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_288K_3TO1_EQ;
+use crate::filters_lm::HTAPS_2MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_2_68MHZ_14TO1_EQ;
+use crate::filters_lm::HTAPS_2_68MHZ_28TO1_EQ;
+use crate::filters_lm::HTAPS_2_68MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_4MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_576K_3TO1_EQ;
+use crate::filters_lm::HTAPS_DDRX10_21TO1_EQ;
+use crate::filters_lm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
+use crate::filters_lm::HTAPS_DDRX5_7TO_1_EQ;
+use crate::filters_lm::HTAPS_DSDX10_21TO1_EQ;
+use crate::filters_lm::HTAPS_DSDX5_7TO1_EQ;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
