@@ -16,26 +16,20 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::audio_file::AudioFileFormat;
 use crate::byte_precalc_decimator::bit_reverse_u8;
+use crate::byte_precalc_decimator::select_precalc_taps;
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
-use crate::filters::{
-    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
-    HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD256_128TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD64_16TO1_EQ,
-    HTAPS_DSD64_32TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
-};
+use crate::dsd::DSD_64_RATE;
 use crate::input::InputContext;
+use crate::lm_resampler::compute_decim_and_upsample;
 use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
 use id3::TagLike;
 use std::error::Error;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::Instant;
-
-pub const DSD_64_RATE: u32 = 2822400;
 
 pub struct ConversionContext {
     in_ctx: InputContext,
@@ -44,7 +38,6 @@ pub struct ConversionContext {
     filt_type: char,
     dsd_data: Vec<u8>,
     float_data: Vec<f64>,
-    pcm_data: Vec<u8>,
     clips: i32,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
@@ -58,6 +51,7 @@ pub struct ConversionContext {
     diag_bits_in: u64,
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
+    reader: Box<dyn Read>,
 }
 
 impl ConversionContext {
@@ -67,13 +61,14 @@ impl ConversionContext {
         dither: Dither,
         filt_type: char,
         verbose_param: bool,
+        append_rate_suffix: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize;
         let channels = in_ctx.channels_num as usize;
-        let bytes_per_sample = out_ctx.bytes_per_sample as usize;
         let dsd_rate = in_ctx.dsd_rate;
 
-        let (decim_ratio, upsample_ratio) = Self::compute_decim_and_upsample(&in_ctx, &out_ctx);
+        let (decim_ratio, upsample_ratio) =
+            compute_decim_and_upsample(in_ctx.dsd_rate, out_ctx.rate);
 
         // Worst-case frames per channel per input block:
         // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
@@ -91,12 +86,11 @@ impl ConversionContext {
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
             float_data: vec![0.0; out_frames_capacity],
-            pcm_data: vec![0; out_frames_capacity * channels * bytes_per_sample],
             clips: 0,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             verbose_mode: verbose_param,
-            append_rate_suffix: false,
+            append_rate_suffix,
             precalc_decims: None,
             eq_lm_resamplers: None,
             total_dsd_bytes_processed: 0,
@@ -105,13 +99,12 @@ impl ConversionContext {
             diag_bits_in: 0,
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
+            reader: Box::new(io::empty()), // Placeholder
         };
 
-        if ctx.filt_type == 'E' && (decim_ratio == 294 || decim_ratio == 147 || decim_ratio == 588)
-        {
-            let ch = ctx.in_ctx.channels_num as usize;
+        if upsample_ratio > 1 {
             ctx.eq_lm_resamplers = Some(
-                (0..ch)
+                (0..channels)
                     .map(|_i| {
                         LMResampler::new(
                             ctx.upsample_ratio,
@@ -122,195 +115,47 @@ impl ConversionContext {
                     })
                     .collect(),
             );
-            if ctx.upsample_ratio > 1 {
-                let l = ctx.upsample_ratio as f64;
-                ctx.out_ctx.scale_factor *= l;
-                ctx.verbose(
-                    &format!(
-                        "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
-                        ctx.upsample_ratio, ctx.out_ctx.scale_factor
-                    ),
-                    true,
-                );
-            }
-        }
-
-        if ctx.eq_lm_resamplers.is_none() {
-            if let Some(taps) = Self::select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
-            {
-                let ch = ctx.in_ctx.channels_num as usize;
-                ctx.precalc_decims = Some(
-                    (0..ch)
-                        .map(|_| {
-                            BytePrecalcDecimator::new(taps, ctx.decim_ratio as u32)
-                                .expect("Precalc BytePrecalcDecimator init failed")
-                        })
-                        .collect(),
-                );
-                ctx.verbose(
-                    &format!(
-                        "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
-                        ctx.decim_ratio, ctx.filt_type, dsd_rate
-                    ),
-                    true,
-                );
-            } else {
-                eprintln!(
-                    "Precalc taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
+            ctx.out_ctx.scale_factor *= ctx.upsample_ratio as f64;
+            ctx.verbose(
+                &format!(
+                    "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
+                    ctx.upsample_ratio, ctx.out_ctx.scale_factor
+                ),
+                true,
+            );
+        } else if let Some(taps) = select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio) {
+            ctx.precalc_decims = Some(
+                (0..channels)
+                    .map(|_| {
+                        BytePrecalcDecimator::new(taps, ctx.decim_ratio as u32)
+                            .expect("Precalc BytePrecalcDecimator init failed")
+                    })
+                    .collect(),
+            );
+            ctx.verbose(
+                &format!(
+                    "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
                     ctx.decim_ratio, ctx.filt_type, dsd_rate
-                );
-            }
+                ),
+                true,
+            );
+        } else {
+            return Err(format!(
+                "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
+                ctx.decim_ratio, ctx.filt_type, dsd_rate
+            )
+            .into());
         }
 
-        ctx.out_ctx.set_channels_num(ctx.in_ctx.channels_num);
-        ctx.out_ctx.init_file()?;
+        ctx.out_ctx
+            .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
         ctx.dither.init();
         Ok(ctx)
     }
 
-    fn verbose(&self, message: &str, new_line: bool) {
-        if self.verbose_mode {
-            if new_line {
-                eprintln!("{}", message);
-            } else {
-                eprint!("{}", message);
-            }
-        }
-    }
-
-    // Central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
-    // Returns Some(&half_taps) if we can drive a single-stage BytePrecalcDecimator; otherwise None.
-    fn select_precalc_taps(
-        filt_type: char,
-        dsd_rate: i32,
-        decim_ratio: i32,
-    ) -> Option<&'static [f64]> {
-        match decim_ratio {
-            // 128:1 (DSD256 -> 88.2 kHz), Equiripple only
-            128 => {
-                if filt_type == 'E' && dsd_rate == 4 {
-                    Some(&HTAPS_DSD256_128TO1_EQ)
-                } else {
-                    None
-                }
-            }
-            // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, 'E' uses new equiripple, others fallback
-            8 => {
-                if dsd_rate == 1 {
-                    match filt_type {
-                        'D' => Some(&HTAPS_D2P),
-                        'X' => Some(&HTAPS_XLD),
-                        'E' => Some(&HTAPS_DSD64_8TO1_EQ),
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }
-            // 16:1
-            16 => match filt_type {
-                'X' => Some(&HTAPS_16TO1_XLD),
-                // E – equiripple: now support DSD64 with dedicated table, DSD128 with DDR table
-                'E' => {
-                    if dsd_rate == 1 {
-                        Some(&HTAPS_DSD64_16TO1_EQ)
-                    } else if dsd_rate == 2 {
-                        Some(&HTAPS_DDR_16TO1_EQ)
-                    } else {
-                        None
-                    }
-                }
-                // C – Chebyshev only provided for DSD128; fallback None for others
-                'C' => {
-                    if dsd_rate == 2 {
-                        Some(&HTAPS_DDR_16TO1_CHEB)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
-            // 32:1
-            32 => match filt_type {
-                'X' => Some(&HTAPS_32TO1),
-                'E' => {
-                    if dsd_rate == 1 {
-                        Some(&HTAPS_DSD64_32TO1_EQ)
-                    } else if dsd_rate == 4 {
-                        // New dedicated DSD256 32:1 equiripple half taps
-                        Some(&HTAPS_DSD256_32TO1_EQ)
-                    } else {
-                        Some(&HTAPS_DDR_32TO1_EQ)
-                    }
-                }
-                'C' => Some(&HTAPS_DDR_32TO1_CHEB),
-                _ => None,
-            },
-            // 64:1
-            64 => match filt_type {
-                'E' => {
-                    if dsd_rate == 4 {
-                        Some(&HTAPS_DSD256_64TO1_EQ)
-                    } else {
-                        Some(&HTAPS_DDR_64TO1_EQ)
-                    }
-                }
-                'C' => Some(&HTAPS_DDR_64TO1_CHEB),
-                'X' | 'D' => Some(&HTAPS_DDR_64TO1_EQ),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
-    // Basename + proper extension, or generic for stdin
-    fn derive_output_path(&self) -> String {
-        let ext = match self.out_ctx.output.to_ascii_lowercase() {
-            'w' => "wav",
-            'a' => "aif",
-            'f' => "flac",
-            _ => "out",
-        };
-        let suffix = if self.append_rate_suffix {
-            if let Some((uscore, _dot)) = abbrev_rate_pair(self.out_ctx.rate as u32) {
-                format!("_{}", uscore)
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-        if self.in_ctx.std_in {
-            let base = if suffix.is_empty() {
-                "output".to_string()
-            } else {
-                format!("output{}", suffix)
-            };
-            return format!("{}.{}", base, ext);
-        }
-        let parent = self
-            .in_ctx
-            .parent_path
-            .as_ref()
-            .map(|p| p.as_path())
-            .unwrap_or(Path::new(""));
-        let stem = self
-            .in_ctx
-            .file_path
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        let name = if suffix.is_empty() {
-            format!("{}.{}", stem, ext)
-        } else {
-            format!("{}{}.{}", stem, suffix, ext)
-        };
-        parent.join(name).to_string_lossy().into_owned()
-    }
-
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
+        self.reader = self.get_reader(!self.in_ctx.std_in)?;
         eprintln!(
             "Dither type: {}",
             self.dither.dither_type().to_ascii_uppercase()
@@ -342,116 +187,179 @@ impl ConversionContext {
         Ok(())
     }
 
-    // Report timing & speed
-    fn report_timing(&self, dsp_elapsed: std::time::Duration, total_elapsed: std::time::Duration) {
-        let channels = self.in_ctx.channels_num as u64;
-        // Bytes per channel
-        let bytes_per_chan = self.total_dsd_bytes_processed / channels;
-        let bits_per_chan = bytes_per_chan * 8;
-        let dsd_base_rate = (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
-        let audio_seconds = if dsd_base_rate > 0 {
-            (bits_per_chan as f64) / (dsd_base_rate as f64)
+    fn get_reader(&mut self, reading_from_file: bool) -> Result<Box<dyn Read>, Box<dyn Error>> {
+        if reading_from_file {
+            // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
+            let mut file = self
+                .in_ctx
+                .file
+                .as_ref()
+                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing input file handle"))?
+                .try_clone()?;
+
+            if self.in_ctx.audio_pos > 0 {
+                file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
+                self.verbose(
+                    &format!(
+                        "Seeked to audio start position: {}",
+                        file.stream_position()?
+                    ),
+                    true,
+                );
+            }
+            Ok(Box::new(file))
         } else {
-            0.0
-        };
-        let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
-        let total_sec = total_elapsed.as_secs_f64().max(1e-9);
-        let speed_dsp = audio_seconds / dsp_sec;
-        let speed_total = audio_seconds / total_sec;
-        // Format H:MM:SS for elapsed
-        let total_secs = total_elapsed.as_secs();
-        let h = total_secs / 3600;
-        let m = (total_secs % 3600) / 60;
-        let s = total_secs % 60;
-        eprintln!(
-            "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
-            self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
-        );
-    }
-
-    pub fn set_append_rate_suffix(&mut self, value: bool) {
-        self.append_rate_suffix = value;
-    }
-
-    // ---- Diagnostics: expected vs actual output length (verbose only) ----
-    fn report_in_out(&self) {
-        let ch = self.in_ctx.channels_num.max(1) as u64;
-        let bps = self.out_ctx.bytes_per_sample as u64;
-        let expected_frames = self.diag_expected_frames_floor;
-        let actual_frames = self.diag_frames_out;
-        // Estimate latency (frames not emitted at start) for rational path
-        let expected_bytes = expected_frames * ch * bps;
-        let actual_bytes = actual_frames * ch * bps;
-        let diff_frames = expected_frames as i64 - actual_frames as i64;
-        let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
-        let pct = if expected_frames > 0 {
-            (diff_frames as f64) * 100.0 / (expected_frames as f64)
-        } else {
-            0.0
-        };
-        eprintln!("\n[DIAG] Output length accounting:");
-        eprintln!(
-            "[DIAG] DSD bits in per channel: {}  L={}  M={}",
-            self.diag_bits_in, self.upsample_ratio, self.decim_ratio
-        );
-        eprintln!(
-            "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
-            expected_frames, actual_frames, diff_frames, pct
-        );
-        eprintln!(
-            "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
-            expected_bytes, actual_bytes, diff_bytes
-        );
-        eprintln!(
-            "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
-No data is lost due to buffer resizing; resizing only adjusts capacity."
-        );
-    }
-
-    fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
-        eprintln!("Saving to file...");
-        let out_path = self.derive_output_path();
-
-        self.verbose(&format!("Derived output path: {}", out_path), true);
-
-        match self.out_ctx.output.to_ascii_lowercase() {
-            'w' => {
-                self.out_ctx
-                    .save_and_print_file(&out_path, AudioFileFormat::Wave)?;
-            }
-            'a' => {
-                self.out_ctx
-                    .save_and_print_file(&out_path, AudioFileFormat::Aiff)?;
-            }
-            'f' => {
-                self.out_ctx
-                    .save_and_print_file(&out_path, AudioFileFormat::Flac)?;
-            }
-            _ => {}
+            Ok(Box::new(io::stdin().lock()))
         }
+    }
 
-        if let Some(mut tag) = self.in_ctx.tag.clone() {
-            self.verbose("Copying ID3 tags from input file...", true);
-            // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
-            if self.append_rate_suffix {
-                if let Some(album) = tag.album() {
-                    if let Some((_uscore, dot)) = abbrev_rate_pair(self.out_ctx.rate as u32) {
-                        let suffix = format!(" [{}]", dot);
-                        if !album.ends_with(&suffix) {
-                            let mut new_album = String::from(album);
-                            new_album.push_str(&suffix);
-                            tag.set_album(new_album);
+    #[inline(always)]
+    fn read_frame(
+        &mut self,
+        bytes_remaining: u64,
+        frame_size: usize,
+    ) -> Result<usize, Box<dyn Error>> {
+        // stdin always reads frame_size
+        let to_read: usize = if !self.in_ctx.std_in {
+            if bytes_remaining >= frame_size as u64 {
+                frame_size
+            } else {
+                bytes_remaining as usize
+            }
+        } else {
+            frame_size
+        };
+
+        // Read one frame identically for stdin and file
+        let read_size: usize = match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
+            Ok(()) => to_read,
+            Err(e) => return Err(Box::new(e)),
+        };
+        // Track bytes processed (all channels)
+        self.total_dsd_bytes_processed += read_size as u64;
+
+        Ok(read_size)
+    }
+
+    fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
+        let channels = self.in_ctx.channels_num as usize;
+        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
+
+        // Open a unified reader (stdin or file), seeking if needed
+        let reading_from_file = !self.in_ctx.std_in;
+
+        let mut bytes_remaining: u64 = if reading_from_file {
+            self.in_ctx.audio_length
+        } else {
+            frame_size as u64
+        };
+
+        loop {
+            // Read one frame identically for stdin and file
+            let read_size: usize = match self.read_frame(bytes_remaining, frame_size) {
+                Ok(s) => s,
+                Err(e) => {
+                    if let Some(io_err) = e.downcast_ref::<io::Error>() {
+                        if io_err.kind() == io::ErrorKind::UnexpectedEof {
+                            break;
                         }
                     }
+                    return Err(e);
+                }
+            };
+
+            // Bytes per channel in this read
+            let bytes_per_channel: usize = read_size / channels;
+
+            if self.verbose_mode {
+                self.diag_bits_in += (bytes_per_channel as u64) * 8;
+                self.diag_expected_frames_floor =
+                    (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
+            }
+
+            // Track actual frames produced per channel (set by channel 0)
+            let mut samples_used_per_chan = 0usize;
+
+            // Per-channel processing loop (handles both LM and integer paths)
+            for chan in 0..channels {
+                samples_used_per_chan = self.process_channel(chan, bytes_per_channel);
+                self.write_to_buffer(samples_used_per_chan, chan);
+            }
+
+            // Derive actual byte count (may differ from estimate in rational path)
+            let pcm_frame_bytes =
+                samples_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
+
+            if self.verbose_mode {
+                self.diag_frames_out += samples_used_per_chan as u64;
+            }
+
+            if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
+                self.out_ctx.write_stdout(pcm_frame_bytes)?;
+            }
+
+            // Decrement for file input using actual read size
+            if reading_from_file {
+                bytes_remaining -= read_size as u64;
+                if bytes_remaining <= 0 {
+                    break;
                 }
             }
-            let path_out = Path::new(&out_path);
-            tag.write_to_path(path_out, tag.version())?;
-        } else {
-            self.verbose("Input file has no tag; skipping tag copy.", true);
-        }
+        } // end loop
 
         Ok(())
+    }
+
+    #[inline(always)]
+    fn write_to_buffer(&mut self, samples_used_per_chan: usize, chan: usize) {
+        // Output / packing for channel
+        if self.out_ctx.output == 's' {
+            // Interleave into pcm_data (handle float vs integer separately)
+            let bps = self.out_ctx.bytes_per_sample as usize; // 4 for 32-bit float
+            let mut pcm_pos = chan * bps;
+            for s in 0..samples_used_per_chan {
+                let mut out_idx = pcm_pos;
+                if self.out_ctx.bits == 32 {
+                    // 32-bit float path
+                    let mut q = self.float_data[s];
+                    self.scale_and_dither(&mut q);
+                    self.out_ctx.pack_float(&mut out_idx, q);
+                } else {
+                    // Integer path: dither + clamp + write_int
+                    let mut qin: f64 = self.float_data[s];
+                    self.scale_and_dither(&mut qin);
+                    let quantized = self.quantize(&mut qin);
+                    self.out_ctx.pack_int(&mut out_idx, quantized);
+                }
+                pcm_pos += self.in_ctx.channels_num as usize * bps;
+            }
+        } else if self.out_ctx.bits == 32 {
+            for s in 0..samples_used_per_chan {
+                let mut q = self.float_data[s];
+                self.scale_and_dither(&mut q);
+                self.out_ctx.push_samp(q as f32, chan);
+            }
+        } else {
+            for s in 0..samples_used_per_chan {
+                let mut qin: f64 = self.float_data[s];
+                self.scale_and_dither(&mut qin);
+                let quantized = self.quantize(&mut qin);
+                self.out_ctx.push_samp(quantized, chan);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn scale_and_dither(&mut self, sample: &mut f64) {
+        *sample *= self.out_ctx.scale_factor;
+        self.dither.process_samp(sample);
+    }
+
+    #[inline(always)]
+    fn quantize(&mut self, qin: &mut f64) -> i32 {
+        let value = Self::my_round(*qin) as i32;
+        let peak = self.out_ctx.peak_level as i32;
+        self.clamp_value(-peak, value, peak - 1)
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
@@ -496,167 +404,84 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
     }
 
-    fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
-        let channels = self.in_ctx.channels_num as usize;
-        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
-
-        // Open a unified reader (stdin or file), seeking if needed
-        let reading_from_file = !self.in_ctx.std_in;
-        let mut reader: Box<dyn Read> = if reading_from_file {
-            // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
-            let mut file = self
-                .in_ctx
-                .file
-                .as_ref()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing input file handle"))?
-                .try_clone()?;
-            if self.in_ctx.audio_pos > 0 {
-                file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
-                self.verbose(
-                    &format!(
-                        "Seeked to audio start position: {}",
-                        file.stream_position()?
-                    ),
-                    true,
-                );
-            }
-            Box::new(file)
+    // Basename + proper extension, or generic for stdin
+    fn derive_output_path(&self) -> String {
+        let ext = match self.out_ctx.output.to_ascii_lowercase() {
+            'w' => "wav",
+            'a' => "aif",
+            'f' => "flac",
+            _ => "out",
+        };
+        let suffix = if let Some((uscore, _dot)) = self.abbrev_rate_pair(self.out_ctx.rate as u32) {
+            format!("_{}", uscore)
         } else {
-            Box::new(io::stdin().lock())
+            String::new()
         };
 
-        let mut bytes_remaining: u64 = if reading_from_file {
-            if self.in_ctx.audio_length > 0 {
-                self.in_ctx.audio_length
+        if self.in_ctx.std_in {
+            let base = if suffix.is_empty() {
+                "output".to_string()
             } else {
-                frame_size as u64
-            }
+                format!("output{}", suffix)
+            };
+            return format!("{}.{}", base, ext);
+        }
+
+        let parent = self
+            .in_ctx
+            .parent_path
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or(Path::new(""));
+
+        let stem = self
+            .in_ctx
+            .file_path
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("output");
+
+        let name = if suffix.is_empty() {
+            format!("{}.{}", stem, ext)
         } else {
-            frame_size as u64
+            format!("{}{}.{}", stem, suffix, ext)
         };
 
-        loop {
-            // stdin always reads frame_size
-            let to_read: usize = if reading_from_file {
-                if bytes_remaining >= frame_size as u64 {
-                    frame_size
-                } else {
-                    bytes_remaining as usize
-                }
-            } else {
-                frame_size
-            };
-            if to_read == 0 {
-                break;
+        parent.join(name).to_string_lossy().into_owned()
+    }
+
+    fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
+        eprintln!("Saving to file...");
+        let out_path = self.derive_output_path();
+
+        self.verbose(&format!("Derived output path: {}", out_path), true);
+
+        self.out_ctx.save_file(&out_path)?;
+
+        if let Some(mut tag) = self.in_ctx.tag.clone() {
+            self.verbose("Copying ID3 tags from input file...", true);
+            // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
+            if self.append_rate_suffix {
+                self.append_album_suffix(&mut tag);
             }
-
-            // Read one frame identically for stdin and file
-            let read_size: usize = match reader.read_exact(&mut self.dsd_data[..to_read]) {
-                Ok(()) => to_read,
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => break,
-                Err(e) => return Err(Box::new(e)),
-            };
-            // Track bytes processed (all channels)
-            self.total_dsd_bytes_processed += read_size as u64;
-
-            // Bytes per channel in this read
-            let bytes_per_channel: usize = read_size / channels;
-
-            // ---- DIAGNOSTICS: accumulate input bits & recompute expected frames ----
-            if self.verbose_mode {
-                self.diag_bits_in += (bytes_per_channel as u64) * 8;
-                self.diag_expected_frames_floor =
-                    (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
-            }
-
-            // Track actual frames produced per channel (set by channel 0)
-            let mut frames_used_per_chan = 0usize;
-
-            // Per-channel processing loop (handles both LM and integer paths)
-            for chan in 0..channels {
-                let produced = self.process_channel(chan, bytes_per_channel);
-                if chan == 0 {
-                    frames_used_per_chan = produced;
-                }
-
-                // Output / packing per channel
-                if self.out_ctx.output == 's' {
-                    // Interleave into pcm_data (handle float vs integer separately)
-                    let bps = self.out_ctx.bytes_per_sample as usize; // 4 for 32-bit float
-                    let mut pcm_pos = chan * bps;
-                    for s in 0..frames_used_per_chan {
-                        let mut out_idx = pcm_pos;
-                        if self.out_ctx.bits == 32 {
-                            // 32-bit float path
-                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut q);
-                            self.write_float(&mut out_idx, q);
-                        } else {
-                            // Integer path: dither + clamp + write_int
-                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut qin);
-                            let value = Self::my_round(qin) as i32;
-                            let peak = self.out_ctx.peak_level as i32;
-                            let clamped = self.clamp_value(-peak, value, peak - 1);
-                            self.write_int(&mut out_idx, clamped, bps);
-                        }
-                        pcm_pos += channels * bps;
-                    }
-                } else {
-                    // File formats: push samples into AudioFile buffers
-                    if self.out_ctx.bits == 32 {
-                        for s in 0..frames_used_per_chan {
-                            let mut q = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut q);
-                            self.out_ctx.push_samp(q as f32, chan);
-                        }
-                    } else {
-                        for s in 0..frames_used_per_chan {
-                            let mut qin: f64 = self.float_data[s] * self.out_ctx.scale_factor;
-                            self.dither.process_samp(&mut qin);
-                            let value = Self::my_round(qin) as i32;
-                            let peak = self.out_ctx.peak_level as i32;
-                            let clamped = self.clamp_value(-peak, value, peak - 1);
-                            self.out_ctx.push_samp(clamped, chan);
-                        }
-                    }
-                }
-            } // end channel loop
-
-            // Derive actual byte count (may differ from estimate in rational path)
-            let pcm_block_bytes =
-                frames_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
-
-            // Diagnostics: add actual produced frames (per channel)
-            self.diag_frames_out += frames_used_per_chan as u64;
-
-            if self.out_ctx.output == 's' && pcm_block_bytes > 0 {
-                self.write_block(pcm_block_bytes)?;
-            }
-
-            // Decrement for file input using actual read size
-            if reading_from_file {
-                bytes_remaining -= read_size as u64;
-                if bytes_remaining <= 0 {
-                    break;
-                }
-            }
-        } // end loop
+            let path_out = Path::new(&out_path);
+            tag.write_to_path(path_out, tag.version())?;
+        } else {
+            self.verbose("Input file has no tag; skipping tag copy.", true);
+        }
 
         Ok(())
     }
 
-    fn write_block(&mut self, pcm_bytes: usize) -> Result<(), Box<dyn Error>> {
-        if pcm_bytes == 0 || pcm_bytes > self.pcm_data.len() {
-            return Ok(());
+    fn append_album_suffix(&self, tag: &mut id3::Tag) {
+        if let Some(album) = tag.album() {
+            if let Some((_uscore, dot)) = self.abbrev_rate_pair(self.out_ctx.rate as u32) {
+                let mut new_album = String::from(album);
+                new_album.push_str(&format!(" [{}]", dot));
+                tag.set_album(new_album);
+            }
         }
-
-        // Only stdout; file formats are saved at end via AudioFile
-        if self.out_ctx.output == 's' {
-            io::stdout().write_all(&self.pcm_data[..pcm_bytes])?;
-            io::stdout().flush()?;
-        }
-        Ok(())
     }
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
@@ -674,13 +499,6 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         {
             return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
         }
-        // DSD256 (4x) paths: integer decimations 32, 64, 128, 147, 294 or LM decim 588; all require 'E'
-        if self.in_ctx.dsd_rate == 4
-            && !(matches!(self.decim_ratio, 32 | 64 | 128 | 147 | 294 | 588)
-                && self.filt_type == 'E')
-        {
-            return Err("With DSD256 input, only 32:1, 64:1, 128:1, 147:1, 294:1 integer or 588:1 (two-stage LM) decimation using the Equiripple filter is supported.".into());
-        }
         // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
         if self.decim_ratio == 294
             && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 2 || self.in_ctx.dsd_rate == 4))
@@ -688,56 +506,76 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
             return Err("294:1 decimation is only supported for DSD128 or DSD256 with the Equiripple filter.".into());
         }
         // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
-        if self.decim_ratio == 147
-            && !(self.filt_type == 'E'
-                && (self.in_ctx.dsd_rate == 1
-                    || self.in_ctx.dsd_rate == 2
-                    || self.in_ctx.dsd_rate == 4))
-        {
-            return Err("147:1 decimation is only supported with the Equiripple filter for DSD64, DSD128, or DSD256 input.".into());
+        if self.decim_ratio == 147 && self.filt_type != 'E' {
+            return Err("147:1 decimation is only supported with the Equiripple filter.".into());
         }
         Ok(())
     }
 
-    fn write_float(&mut self, offset: &mut usize, sample: f64) {
-        // Convert to f32 and write in little-endian
-        let bytes = (sample as f32).to_le_bytes();
-        self.pcm_data[*offset..*offset + 4].copy_from_slice(&bytes);
-        *offset += 4;
+    // Report timing & speed
+    fn report_timing(&self, dsp_elapsed: std::time::Duration, total_elapsed: std::time::Duration) {
+        let channels = self.in_ctx.channels_num as u64;
+        // Bytes per channel
+        let bytes_per_chan = self.total_dsd_bytes_processed / channels;
+        let bits_per_chan = bytes_per_chan * 8;
+        let dsd_base_rate = (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
+        let audio_seconds = if dsd_base_rate > 0 {
+            (bits_per_chan as f64) / (dsd_base_rate as f64)
+        } else {
+            0.0
+        };
+        let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
+        let total_sec = total_elapsed.as_secs_f64().max(1e-9);
+        let speed_dsp = audio_seconds / dsp_sec;
+        let speed_total = audio_seconds / total_sec;
+        // Format H:MM:SS for elapsed
+        let total_secs = total_elapsed.as_secs();
+        let h = total_secs / 3600;
+        let m = (total_secs % 3600) / 60;
+        let s = total_secs % 60;
+        eprintln!(
+            "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
+            self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
+        );
     }
 
-    fn write_int(&mut self, offset: &mut usize, value: i32, bytes: usize) {
-        if *offset + bytes > self.pcm_data.len() {
-            return;
-        }
-
-        match bytes {
-            3 => {
-                // 24-bit container (also used for 20-bit). For 20-bit we left-align by shifting 4.
-                let mut v = value;
-                if self.out_ctx.bits == 20 {
-                    v <<= 4; // align 20 significant bits into the top of 24-bit word (LS 4 bits zero)
-                }
-                self.pcm_data[*offset] = (v & 0xFF) as u8;
-                self.pcm_data[*offset + 1] = ((v >> 8) & 0xFF) as u8;
-                self.pcm_data[*offset + 2] = ((v >> 16) & 0xFF) as u8;
-            }
-            2 => {
-                let v = value as i16;
-                let b = v.to_le_bytes();
-                self.pcm_data[*offset..*offset + 2].copy_from_slice(&b);
-            }
-            4 => {
-                let b = (value as i32).to_le_bytes();
-                self.pcm_data[*offset..*offset + 4].copy_from_slice(&b);
-            }
-            _ => return,
-        }
-        *offset += bytes;
+    // ---- Diagnostics: expected vs actual output length (verbose only) ----
+    fn report_in_out(&self) {
+        let ch = self.in_ctx.channels_num.max(1) as u64;
+        let bps = self.out_ctx.bytes_per_sample as u64;
+        let expected_frames = self.diag_expected_frames_floor;
+        let actual_frames = self.diag_frames_out;
+        // Estimate latency (frames not emitted at start) for rational path
+        let expected_bytes = expected_frames * ch * bps;
+        let actual_bytes = actual_frames * ch * bps;
+        let diff_frames = expected_frames as i64 - actual_frames as i64;
+        let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
+        let pct = if expected_frames > 0 {
+            (diff_frames as f64) * 100.0 / (expected_frames as f64)
+        } else {
+            0.0
+        };
+        eprintln!("\n[DIAG] Output length accounting:");
+        eprintln!(
+            "[DIAG] DSD bits in per channel: {}  L={}  M={}",
+            self.diag_bits_in, self.upsample_ratio, self.decim_ratio
+        );
+        eprintln!(
+            "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
+            expected_frames, actual_frames, diff_frames, pct
+        );
+        eprintln!(
+            "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
+            expected_bytes, actual_bytes, diff_bytes
+        );
+        eprintln!(
+            "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
+No data is lost due to buffer resizing; resizing only adjusts capacity."
+        );
     }
 
     // Helper function for clip stats
-    #[inline]
+    #[inline(always)]
     fn update_clip_stats(&mut self, low: bool, high: bool) {
         if low {
             if self.last_samps_clipped_low == 1 {
@@ -757,7 +595,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         self.last_samps_clipped_high = 0;
     }
 
-    #[inline]
+    #[inline(always)]
     fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
         let mut result = value;
         if value < min {
@@ -770,7 +608,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         result
     }
 
-    #[inline]
+    #[inline(always)]
     fn my_round(x: f64) -> i64 {
         if x < 0.0 {
             (x - 0.5).floor() as i64
@@ -779,70 +617,29 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
     }
 
-    fn compute_decim_and_upsample(in_ctx: &InputContext, out_ctx: &OutputContext) -> (i32, u32) {
-        // Determine decimation ratio (M)
-        let decim_ratio: i32 = if out_ctx.rate == 96_000 && in_ctx.dsd_rate == 4 {
-            // DSD256 -> 96k two-stage LM path: M=588 (×5 -> /21 -> /28)
-            588
-        } else if (out_ctx.rate == 96_000 && in_ctx.dsd_rate == 2)
-            || (out_ctx.rate == 192_000 && in_ctx.dsd_rate == 4)
-        {
-            294
-        } else if out_ctx.rate == 96_000 || out_ctx.rate == 192_000 || out_ctx.rate == 384_000 {
-            147
-        } else {
-            // Integer ratio attempt (fallback to 64)
-            let base = DSD_64_RATE * (in_ctx.dsd_rate as u32);
-            if out_ctx.rate > 0 && base % (out_ctx.rate as u32) == 0 {
-                (base / (out_ctx.rate as u32)) as i32
+    fn verbose(&self, message: &str, new_line: bool) {
+        if self.verbose_mode {
+            if new_line {
+                eprintln!("{}", message);
             } else {
-                64
+                eprint!("{}", message);
             }
-        };
-
-        // Upsample (L) selection
-        let upsample_ratio: u32 = if decim_ratio < 147 {
-            1
-        } else if out_ctx.rate == 384_000 {
-            // Specialized two-phase L choices for 384k: DSD64->L20, DSD128->L10, DSD256->L5
-            if in_ctx.dsd_rate == 1 {
-                20
-            } else if in_ctx.dsd_rate == 2 {
-                10
-            } else if in_ctx.dsd_rate == 4 {
-                5
-            } else {
-                5
-            }
-        } else if out_ctx.rate == 192_000 {
-            // 192k: DSD64->L10, DSD128->L5, DSD256->L5 (reuses L5 path)
-            if in_ctx.dsd_rate == 1 {
-                10
-            } else if in_ctx.dsd_rate == 2 {
-                5
-            } else if in_ctx.dsd_rate == 4 {
-                5
-            } else {
-                5
-            }
-        } else if out_ctx.rate == 96_000 {
-            5 
-        } else {
-            5
-        };
-        (decim_ratio, upsample_ratio)
+        }
     }
-}
 
-/// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
-fn abbrev_rate_pair(rate: u32) -> Option<(&'static str, &'static str)> {
-    match rate {
-        88_200 => Some(("88_2K", "88.2K")),
-        96_000 => Some(("96K", "96K")),
-        176_400 => Some(("176_4K", "176.4K")),
-        192_000 => Some(("192K", "192K")),
-        352_800 => Some(("352_8K", "352.8K")),
-        384_000 => Some(("384K", "384K")),
-        _ => None,
+    /// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
+    fn abbrev_rate_pair(&self, rate: u32) -> Option<(&'static str, &'static str)> {
+        if !self.append_rate_suffix {
+            return None;
+        }
+        match rate {
+            88_200 => Some(("88_2K", "88.2K")),
+            96_000 => Some(("96K", "96K")),
+            176_400 => Some(("176_4K", "176.4K")),
+            192_000 => Some(("192K", "192K")),
+            352_800 => Some(("352_8K", "352.8K")),
+            384_000 => Some(("384K", "384K")),
+            _ => None,
+        }
     }
 }

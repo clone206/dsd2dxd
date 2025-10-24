@@ -24,6 +24,7 @@ mod conversion_context;
 mod dither;
 mod dsd;
 mod filters;
+mod filters_lm;
 mod input;
 mod lm_resampler;
 mod output;
@@ -48,10 +49,10 @@ struct Cli {
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
     bit_depth: i32,
 
-    /// Filter type: E (Equiripple), X (XLD. Only available with 
-    /// DSD64 input and 88200, 176400, and 352800 outputs), 
-    /// D (Original dsd2pcm. Only available with DSD64 input and 
-    /// 352800 output), C (Chebyshev. Only available with 
+    /// Filter type: E (Equiripple), X (XLD. Only available with
+    /// DSD64 input and 88200, 176400, and 352800 outputs),
+    /// D (Original dsd2pcm. Only available with DSD64 input and
+    /// 352800 output), C (Chebyshev. Only available with
     /// DSD128 input and 88200, 176400, and 352800 outputs)
     #[arg(short = 't', long = "filttype", default_value = "E")]
     filter_type: Option<char>,
@@ -71,8 +72,8 @@ struct Cli {
     #[arg(short = 'd', long = "dither")]
     dither_type: Option<char>,
 
-    /// Output sample rate in Hz. Can be 88200, 96000, 
-    /// 176400, 192000, 352800, 384000. Note that conversion 
+    /// Output sample rate in Hz. Can be 88200, 96000,
+    /// 176400, 192000, 352800, 384000. Note that conversion
     /// to multiples of 44100 are faster than 48000 multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: i32,
@@ -85,7 +86,7 @@ struct Cli {
     /// Note that W, A, or F outputs to either
     /// <basename>.[wav|aif|flac] in current directory,
     /// where <basename> is the input filename
-    /// without the extension, or output.[wav|aif|flac] 
+    /// without the extension, or output.[wav|aif|flac]
     /// (if reading from stdin.)
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
@@ -99,8 +100,8 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
-    /// Append abbreviated output rate to filename 
-    /// (e.g., _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to the 
+    /// Append abbreviated output rate to filename
+    /// (e.g., _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to the
     /// album tag of the output file if present.
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
@@ -167,10 +168,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             dither.clone(),
             cli.filter_type.unwrap().to_ascii_uppercase(),
             cli.verbose,
+            cli.append_rate,
         )?;
-        if cli.append_rate {
-            conv_ctx.set_append_rate_suffix(true);
-        }
         conv_ctx.do_conversion()?;
     }
 

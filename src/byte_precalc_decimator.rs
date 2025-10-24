@@ -44,6 +44,13 @@ or implied, of Sebastian Gesemann.
 // - Produces one output per 'decim' input bits (decim/8 bytes).
 // ============================================================================
 
+use crate::filters::{
+    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
+    HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
+    HTAPS_DSD256_128TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD64_16TO1_EQ,
+    HTAPS_DSD64_32TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
+};
+
 pub struct BytePrecalcDecimator {
     // Precomputed tables: tables[i][byte] gives partial sum for segment i
     tables: Vec<Box<[f64; 256]>>,
@@ -163,4 +170,88 @@ pub fn bit_reverse_u8(mut b: u8) -> u8 {
     b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
     b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
     b
+}
+
+// Central mapping from (filter type, dsd_rate, decimation ratio) to half-tap tables.
+// Returns Some(&half_taps) if we can drive a single-stage BytePrecalcDecimator; otherwise None.
+pub fn select_precalc_taps(
+    filt_type: char,
+    dsd_rate: i32,
+    decim_ratio: i32,
+) -> Option<&'static [f64]> {
+    match decim_ratio {
+        // 128:1 (DSD256 -> 88.2 kHz), Equiripple only
+        128 => {
+            if filt_type == 'E' && dsd_rate == 4 {
+                Some(&HTAPS_DSD256_128TO1_EQ)
+            } else {
+                None
+            }
+        }
+        // 8:1 (DSD64 only) – 'D' uses HTAPS_D2P, 'X' uses HTAPS_XLD, 'E' uses new equiripple, others fallback
+        8 => {
+            if dsd_rate == 1 {
+                match filt_type {
+                    'D' => Some(&HTAPS_D2P),
+                    'X' => Some(&HTAPS_XLD),
+                    'E' => Some(&HTAPS_DSD64_8TO1_EQ),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        // 16:1
+        16 => match filt_type {
+            'X' => Some(&HTAPS_16TO1_XLD),
+            // E – equiripple: now support DSD64 with dedicated table, DSD128 with DDR table
+            'E' => {
+                if dsd_rate == 1 {
+                    Some(&HTAPS_DSD64_16TO1_EQ)
+                } else if dsd_rate == 2 {
+                    Some(&HTAPS_DDR_16TO1_EQ)
+                } else {
+                    None
+                }
+            }
+            // C – Chebyshev only provided for DSD128; fallback None for others
+            'C' => {
+                if dsd_rate == 2 {
+                    Some(&HTAPS_DDR_16TO1_CHEB)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+        // 32:1
+        32 => match filt_type {
+            'X' => Some(&HTAPS_32TO1),
+            'E' => {
+                if dsd_rate == 1 {
+                    Some(&HTAPS_DSD64_32TO1_EQ)
+                } else if dsd_rate == 4 {
+                    // New dedicated DSD256 32:1 equiripple half taps
+                    Some(&HTAPS_DSD256_32TO1_EQ)
+                } else {
+                    Some(&HTAPS_DDR_32TO1_EQ)
+                }
+            }
+            'C' => Some(&HTAPS_DDR_32TO1_CHEB),
+            _ => None,
+        },
+        // 64:1
+        64 => match filt_type {
+            'E' => {
+                if dsd_rate == 4 {
+                    Some(&HTAPS_DSD256_64TO1_EQ)
+                } else {
+                    Some(&HTAPS_DDR_64TO1_EQ)
+                }
+            }
+            'C' => Some(&HTAPS_DDR_64TO1_CHEB),
+            _ => None,
+        },
+        _ => None,
+    }
 }
