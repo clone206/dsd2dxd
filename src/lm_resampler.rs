@@ -430,7 +430,7 @@ impl Stage1Poly {
         me
     }
 
-    #[inline]
+    #[inline(always)]
     fn set_next_bit(&mut self, is_pos: bool) {
         let word = self.wbits >> 6;
         let bit = self.wbits & 63;
@@ -488,6 +488,7 @@ impl Stage1Poly {
     }
 
     // Accumulator mode: emit all outputs scheduled for this input bit
+    #[inline(always)]
     fn push_accum_all<F: FnMut(f64)>(&mut self, bit: u8, mut emit: F) {
         // Update bitset only
         self.set_next_bit(bit != 0);
