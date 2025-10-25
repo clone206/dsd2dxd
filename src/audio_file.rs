@@ -306,10 +306,12 @@ where
         }) as usize;
         let total_pcm_bytes = frames as u64 * channels as u64 * bytes_per_sample as u64;
 
+        let opts = Options::default();
+
         // Create FLAC writer (LittleEndian because we feed little-endian sample bytes)
         let mut flac: FlacByteWriter<_, LittleEndian> = FlacByteWriter::create(
             path.as_ref(),
-            Options::default(),
+            opts,
             self.sample_rate,
             bps,
             channels.try_into().unwrap(),

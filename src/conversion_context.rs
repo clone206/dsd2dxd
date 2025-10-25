@@ -457,21 +457,70 @@ impl ConversionContext {
 
         self.verbose(&format!("Derived output path: {}", out_path), true);
 
-        self.out_ctx.save_file(&out_path)?;
-
-        if let Some(mut tag) = self.in_ctx.tag.clone() {
-            self.verbose("Copying ID3 tags from input file...", true);
+        if let Some(mut some_tag) = self.in_ctx.tag.as_ref().cloned() {
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
             if self.append_rate_suffix {
-                self.append_album_suffix(&mut tag);
+                self.append_album_suffix(&mut some_tag);
             }
-            let path_out = Path::new(&out_path);
-            tag.write_to_path(path_out, tag.version())?;
+
+            if self.out_ctx.output.to_ascii_lowercase() == 'f' {
+                self.verbose("Preparing Vorbis Comment for FLAC...", true);
+                self.id3_to_vorbis_comment(&some_tag);
+
+            }
+            self.out_ctx.save_file(&out_path)?;
+
+
+            if self.out_ctx.output.to_ascii_lowercase() != 'f' {
+                let path_out = Path::new(&out_path);
+                // Write ID3 tags directly
+                self.verbose("Writing ID3 tags to file.", true);
+                some_tag.write_to_path(path_out, some_tag.version())?;
+            }
         } else {
             self.verbose("Input file has no tag; skipping tag copy.", true);
+            self.out_ctx.save_file(&out_path)?;
         }
 
         Ok(())
+    }
+
+    fn id3_to_vorbis_comment(&mut self, tag: &id3::Tag) {
+        if self.out_ctx.vorbis.is_none() {
+            panic!("VorbisComment not initialized in OutputContext");
+        }
+
+        // Obtain a mutable reference to the boxed VorbisComment inside the Option
+        let vorbis_box = self
+            .out_ctx
+            .vorbis
+            .as_mut()
+            .expect("VorbisComment not initialized");
+        let vorbis = &mut **vorbis_box;
+
+        if let Some(artist) = tag.artist() {
+            vorbis.insert("ARTIST", artist);
+        }
+        if let Some(album) = tag.album() {
+            vorbis.insert("ALBUM", album);
+        }
+        if let Some(title) = tag.title() {
+            vorbis.insert("TITLE", title);
+        }
+        if let Some(track) = tag.track() {
+            vorbis.insert("TRACKNUMBER", &track.to_string());
+        }
+        if let Some(disc) = tag.disc() {
+            vorbis.insert("DISCNUMBER", &disc.to_string());
+        }
+        if let Some(year) = tag.year() {
+            vorbis.insert("DATE", &year.to_string());
+        }
+        if let Some(comment_frame) = tag.get("COMM") {
+            if let id3::Content::Comment(ref comm) = comment_frame.content() {
+                vorbis.insert("COMMENT", &comm.text);
+            }
+        }
     }
 
     fn append_album_suffix(&self, tag: &mut id3::Tag) {

@@ -16,6 +16,8 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use flac_codec::metadata::{self, VorbisComment};
+
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
@@ -33,6 +35,7 @@ pub struct OutputContext {
     // Set freely
     pub peak_level: i32,
     pub scale_factor: f64,
+    pub vorbis: Option<Box<VorbisComment>>,
 
     // Internal state
     float_file: Option<AudioFile<f32>>,
@@ -73,6 +76,7 @@ impl OutputContext {
             float_file: None,
             int_file: None,
             stdout_buf: Vec::new(),
+            vorbis: None,
         };
 
         ctx.set_scaling(out_vol);
@@ -94,6 +98,22 @@ impl OutputContext {
             ];
             return Ok(());
         }
+        if self.output == 'f' {
+            let unix_datetime = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or_default();
+            self.vorbis = Some(Box::new(metadata::VorbisComment {
+                vendor_string: format!(
+                    "dsd2dxd v{} Unix datetime {}",
+                    env!("CARGO_PKG_VERSION"),
+                    unix_datetime
+                ),
+                fields: Vec::new(),
+            }));
+        } else {
+            self.vorbis = None;
+        }
 
         if self.bits == 32 {
             self.float_file = Some(AudioFile::new());
@@ -103,6 +123,10 @@ impl OutputContext {
             self.set_file_params_int();
         }
         Ok(())
+    }
+
+    pub fn vorbis(&self) -> &Option<Box<VorbisComment>> {
+        &self.vorbis
     }
 
     pub fn set_scaling(&mut self, volume: f64) {
@@ -136,16 +160,13 @@ impl OutputContext {
     pub fn save_file(&self, out_path: &String) -> Result<(), String> {
         match self.output.to_ascii_lowercase() {
             'w' => {
-                self
-                    .save_and_print_file(out_path, AudioFileFormat::Wave)?;
+                self.save_and_print_file(out_path, AudioFileFormat::Wave)?;
             }
             'a' => {
-                self
-                    .save_and_print_file(out_path, AudioFileFormat::Aiff)?;
+                self.save_and_print_file(out_path, AudioFileFormat::Aiff)?;
             }
             'f' => {
-                self
-                    .save_and_print_file(out_path, AudioFileFormat::Flac)?;
+                self.save_and_print_file(out_path, AudioFileFormat::Flac)?;
             }
             _ => {}
         }
@@ -246,6 +267,7 @@ impl Clone for OutputContext {
             float_file: self.float_file.clone(),
             int_file: self.int_file.clone(),
             stdout_buf: self.stdout_buf.clone(),
+            vorbis: self.vorbis.clone(),
         }
     }
 }
