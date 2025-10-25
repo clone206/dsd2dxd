@@ -26,6 +26,7 @@ use crate::lm_resampler::compute_decim_and_upsample;
 use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
 use flac_codec::metadata;
+use flac_codec::metadata::Picture;
 use id3::TagLike;
 use std::error::Error;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -466,7 +467,7 @@ impl ConversionContext {
 
             if self.out_ctx.output.to_ascii_lowercase() == 'f' {
                 self.verbose("Preparing Vorbis Comment for FLAC...", true);
-                self.id3_to_vorbis_comment(&tag);
+                self.id3_to_flac_meta(&tag);
             }
             self.out_ctx.save_file(&out_path)?;
 
@@ -484,7 +485,7 @@ impl ConversionContext {
         Ok(())
     }
 
-    fn id3_to_vorbis_comment(&mut self, tag: &id3::Tag) {
+    fn id3_to_flac_meta(&mut self, tag: &id3::Tag) {
         let unix_datetime = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -523,6 +524,30 @@ impl ConversionContext {
         }
 
         self.out_ctx.set_vorbis(vorbis);
+
+        for pic in tag.pictures() {
+            if pic.picture_type == id3::frame::PictureType::CoverFront {
+                self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
+                let picture = flac_codec::metadata::Picture::new(
+                    flac_codec::metadata::PictureType::FrontCover,
+                    pic.description.clone(),
+                    pic.data.clone(),
+                );
+                if let Ok(my_pic) = picture {
+                    self.out_ctx.add_picture(my_pic);
+                }
+            } else if pic.picture_type == id3::frame::PictureType::CoverBack {
+                self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
+                let picture = flac_codec::metadata::Picture::new(
+                    flac_codec::metadata::PictureType::BackCover,
+                    pic.description.clone(),
+                    pic.data.clone(),
+                );
+                if let Ok(my_pic) = picture {
+                    self.out_ctx.add_picture(my_pic);
+                }
+            }
+        }
     }
 
     fn append_album_suffix(&self, tag: &mut id3::Tag) {
