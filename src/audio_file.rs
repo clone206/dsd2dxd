@@ -310,8 +310,8 @@ where
 
         let mut opts = Options::default();
 
-        if let Some(vorbis) = vorbis {
-            opts = opts.comment(vorbis);
+        if let Some(some_vorbis) = vorbis {
+            opts = opts.comment(some_vorbis);
         }
 
         // Create FLAC writer (LittleEndian because we feed little-endian sample bytes)

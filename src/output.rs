@@ -35,7 +35,7 @@ pub struct OutputContext {
     // Set freely
     pub peak_level: i32,
     pub scale_factor: f64,
-    pub vorbis: Option<Box<VorbisComment>>,
+    pub vorbis: Option<VorbisComment>,
 
     // Internal state
     float_file: Option<AudioFile<f32>>,
@@ -98,22 +98,8 @@ impl OutputContext {
             ];
             return Ok(());
         }
-        if self.output == 'f' {
-            let unix_datetime = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or_default();
-            self.vorbis = Some(Box::new(metadata::VorbisComment {
-                vendor_string: format!(
-                    "dsd2dxd v{} Unix datetime {}",
-                    env!("CARGO_PKG_VERSION"),
-                    unix_datetime
-                ),
-                fields: Vec::new(),
-            }));
-        } else {
-            self.vorbis = None;
-        }
+        // Clear for each new output
+        self.vorbis = None;
 
         if self.bits == 32 {
             self.float_file = Some(AudioFile::new());
@@ -125,7 +111,11 @@ impl OutputContext {
         Ok(())
     }
 
-    pub fn vorbis(&self) -> &Option<Box<VorbisComment>> {
+    pub fn set_vorbis(&mut self, vorbis: VorbisComment) {
+        self.vorbis = Some(vorbis);
+    }
+
+    pub fn vorbis(&self) -> &Option<VorbisComment> {
         &self.vorbis
     }
 
@@ -184,12 +174,12 @@ impl OutputContext {
 
         match (self.bits == 32, &self.float_file, &self.int_file) {
             (true, Some(file), _) => {
-                file.save(file_name, fmt, self.vorbis.as_ref().map(|b| (**b).clone()))
+                file.save(file_name, fmt, self.vorbis.clone())
                     .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             (false, _, Some(file)) => {
-                file.save(file_name, fmt, self.vorbis.as_ref().map(|b| (**b).clone()))
+                file.save(file_name, fmt, self.vorbis.clone())
                     .map_err(|e| e.to_string())?;
                 file.print_summary();
             }

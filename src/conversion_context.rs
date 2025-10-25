@@ -25,6 +25,7 @@ use crate::input::InputContext;
 use crate::lm_resampler::compute_decim_and_upsample;
 use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
+use flac_codec::metadata;
 use id3::TagLike;
 use std::error::Error;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -457,25 +458,23 @@ impl ConversionContext {
 
         self.verbose(&format!("Derived output path: {}", out_path), true);
 
-        if let Some(mut some_tag) = self.in_ctx.tag.as_ref().cloned() {
+        if let Some(mut tag) = self.in_ctx.tag.as_ref().cloned() {
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
             if self.append_rate_suffix {
-                self.append_album_suffix(&mut some_tag);
+                self.append_album_suffix(&mut tag);
             }
 
             if self.out_ctx.output.to_ascii_lowercase() == 'f' {
                 self.verbose("Preparing Vorbis Comment for FLAC...", true);
-                self.id3_to_vorbis_comment(&some_tag);
-
+                self.id3_to_vorbis_comment(&tag);
             }
             self.out_ctx.save_file(&out_path)?;
-
 
             if self.out_ctx.output.to_ascii_lowercase() != 'f' {
                 let path_out = Path::new(&out_path);
                 // Write ID3 tags directly
                 self.verbose("Writing ID3 tags to file.", true);
-                some_tag.write_to_path(path_out, some_tag.version())?;
+                tag.write_to_path(path_out, tag.version())?;
             }
         } else {
             self.verbose("Input file has no tag; skipping tag copy.", true);
@@ -486,17 +485,18 @@ impl ConversionContext {
     }
 
     fn id3_to_vorbis_comment(&mut self, tag: &id3::Tag) {
-        if self.out_ctx.vorbis.is_none() {
-            panic!("VorbisComment not initialized in OutputContext");
-        }
-
-        // Obtain a mutable reference to the boxed VorbisComment inside the Option
-        let vorbis_box = self
-            .out_ctx
-            .vorbis
-            .as_mut()
-            .expect("VorbisComment not initialized");
-        let vorbis = &mut **vorbis_box;
+        let unix_datetime = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let mut vorbis = metadata::VorbisComment {
+            vendor_string: format!(
+                "dsd2dxd v{} Unix datetime {}",
+                env!("CARGO_PKG_VERSION"),
+                unix_datetime
+            ),
+            fields: Vec::new(),
+        };
 
         if let Some(artist) = tag.artist() {
             vorbis.insert("ARTIST", artist);
@@ -521,6 +521,8 @@ impl ConversionContext {
                 vorbis.insert("COMMENT", &comm.text);
             }
         }
+
+        self.out_ctx.set_vorbis(vorbis);
     }
 
     fn append_album_suffix(&self, tag: &mut id3::Tag) {
