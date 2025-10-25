@@ -27,6 +27,7 @@ use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
 use flac_codec::metadata;
 use flac_codec::metadata::Picture;
+use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -526,26 +527,21 @@ impl ConversionContext {
         self.out_ctx.set_vorbis(vorbis);
 
         for pic in tag.pictures() {
-            if pic.picture_type == id3::frame::PictureType::CoverFront {
-                self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
-                let picture = flac_codec::metadata::Picture::new(
-                    flac_codec::metadata::PictureType::FrontCover,
-                    pic.description.clone(),
-                    pic.data.clone(),
-                );
-                if let Ok(my_pic) = picture {
-                    self.out_ctx.add_picture(my_pic);
-                }
+            let pic_type: PictureType = if pic.picture_type == id3::frame::PictureType::CoverFront {
+                flac_codec::metadata::PictureType::FrontCover
             } else if pic.picture_type == id3::frame::PictureType::CoverBack {
-                self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
-                let picture = flac_codec::metadata::Picture::new(
-                    flac_codec::metadata::PictureType::BackCover,
-                    pic.description.clone(),
-                    pic.data.clone(),
-                );
-                if let Ok(my_pic) = picture {
-                    self.out_ctx.add_picture(my_pic);
-                }
+                flac_codec::metadata::PictureType::BackCover
+            } else {
+                continue;
+            };
+            self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
+            let picture = flac_codec::metadata::Picture::new(
+                pic_type,
+                pic.description.clone(),
+                pic.data.clone(),
+            );
+            if let Ok(my_pic) = picture {
+                self.out_ctx.add_picture(my_pic);
             }
         }
     }
