@@ -16,6 +16,8 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use flac_codec::metadata::{Picture, VorbisComment};
+
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
@@ -38,6 +40,8 @@ pub struct OutputContext {
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
     stdout_buf: Vec<u8>,
+    vorbis: Option<VorbisComment>,
+    pictures: Vec<Picture>,
 }
 
 impl OutputContext {
@@ -73,6 +77,8 @@ impl OutputContext {
             float_file: None,
             int_file: None,
             stdout_buf: Vec::new(),
+            vorbis: None,
+            pictures: Vec::new(),
         };
 
         ctx.set_scaling(out_vol);
@@ -94,6 +100,9 @@ impl OutputContext {
             ];
             return Ok(());
         }
+        // Clear for each new output
+        self.vorbis = None;
+        self.pictures.clear();
 
         if self.bits == 32 {
             self.float_file = Some(AudioFile::new());
@@ -103,6 +112,14 @@ impl OutputContext {
             self.set_file_params_int();
         }
         Ok(())
+    }
+
+    pub fn add_picture(&mut self, pic: Picture) {
+        self.pictures.push(pic);
+    }
+
+    pub fn set_vorbis(&mut self, vorbis: VorbisComment) {
+        self.vorbis = Some(vorbis);
     }
 
     pub fn set_scaling(&mut self, volume: f64) {
@@ -136,16 +153,13 @@ impl OutputContext {
     pub fn save_file(&self, out_path: &String) -> Result<(), String> {
         match self.output.to_ascii_lowercase() {
             'w' => {
-                self
-                    .save_and_print_file(out_path, AudioFileFormat::Wave)?;
+                self.save_and_print_file(out_path, AudioFileFormat::Wave)?;
             }
             'a' => {
-                self
-                    .save_and_print_file(out_path, AudioFileFormat::Aiff)?;
+                self.save_and_print_file(out_path, AudioFileFormat::Aiff)?;
             }
             'f' => {
-                self
-                    .save_and_print_file(out_path, AudioFileFormat::Flac)?;
+                self.save_and_print_file(out_path, AudioFileFormat::Flac)?;
             }
             _ => {}
         }
@@ -163,11 +177,13 @@ impl OutputContext {
 
         match (self.bits == 32, &self.float_file, &self.int_file) {
             (true, Some(file), _) => {
-                file.save(file_name, fmt).map_err(|e| e.to_string())?;
+                file.save(file_name, fmt, self.vorbis.clone(), self.pictures.clone())
+                    .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             (false, _, Some(file)) => {
-                file.save(file_name, fmt).map_err(|e| e.to_string())?;
+                file.save(file_name, fmt, self.vorbis.clone(), self.pictures.clone())
+                    .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             _ => return Err("No file initialized".to_string()),
@@ -246,6 +262,8 @@ impl Clone for OutputContext {
             float_file: self.float_file.clone(),
             int_file: self.int_file.clone(),
             stdout_buf: self.stdout_buf.clone(),
+            vorbis: self.vorbis.clone(),
+            pictures: self.pictures.clone(),
         }
     }
 }
