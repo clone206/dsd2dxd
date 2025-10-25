@@ -148,6 +148,16 @@ dsd2dxd includes shell scripts to compile and test with 1kHz test tone files.
 
 Many of dsd2dxd's decimation filters were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
 
+For a best all-round sound that works in the most contexts (e.g. a smartphone, wireless earbuds, audiophile DAC with speakers, etc), I recommend the following for each of the supported DSD rates, always using the default equiripple filters:
+
+```
+DSD64  -> 96kHz    (-r 96000)
+DSD128 -> 176.4kHz (-r 176400)
+DSD256 -> 192kHz   (-r 192000)
+```
+
+Converting to uneven factors (96kHz multiples) is nothing to be afraid of with dsd2dxd. The conversions may run a little more slowly, but that's in part due to the fact that no shortcuts were taken. All of the filtering operations happen at 64 bit float, just like when converting to 88.2kHz multiples. And in some ways the 96kHz multiples are better because they use cascaded FIR filters, each with a gentle EQ curve, rather than one filter with a more severe curve (smaller fraction of the pre-decimated sample rates).
+
 For a natural sound with slight rolloff, try switching to the chebyshev filters when using dsd128 (the default is normally equiripple). For a slightly more "airy" sound when using dsd128, stay with the equiripple filters, especially if going to 176.4 kHz.
 
 For dsd64, if you like the sound of XLD then feel free to use those filters here (not the default), but personally I think the XLD filter for 88.2kHz output is not great and should possibly be avoided depending on the source material. Better to go to 176.4 kHz when sticking with the XLD filter, if the output will later be resampled to 88.2kHz or below, or if playing back the 176.4k file on a NOS DAC. If either of those are false, you may encounter harshness on playback as the 176.4kHz file is delta sigma modulated by the DAC. Note that unlike the actual XLD app, you can apply dither with dsd2dxd, even when using the XLD filters.
