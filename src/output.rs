@@ -184,11 +184,13 @@ impl OutputContext {
 
         match (self.bits == 32, &self.float_file, &self.int_file) {
             (true, Some(file), _) => {
-                file.save(file_name, fmt).map_err(|e| e.to_string())?;
+                file.save(file_name, fmt, self.vorbis.as_ref().map(|b| (**b).clone()))
+                    .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             (false, _, Some(file)) => {
-                file.save(file_name, fmt).map_err(|e| e.to_string())?;
+                file.save(file_name, fmt, self.vorbis.as_ref().map(|b| (**b).clone()))
+                    .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             _ => return Err("No file initialized".to_string()),

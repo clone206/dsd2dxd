@@ -31,6 +31,8 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write}; // add BufWriter
 use std::path::Path;
 
+use flac_codec::metadata::VorbisComment;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AudioFileFormat {
     Error,
@@ -78,11 +80,11 @@ where
         self.samples.first().map_or(0, |channel| channel.len())
     }
 
-    pub fn save<P: AsRef<Path>>(&self, path: P, format: AudioFileFormat) -> io::Result<()> {
+    pub fn save<P: AsRef<Path>>(&self, path: P, format: AudioFileFormat, vorbis: Option<VorbisComment>) -> io::Result<()> {
         match format {
             AudioFileFormat::Wave => self.save_wave_file(path),
             AudioFileFormat::Aiff => self.save_aiff_file(path),
-            AudioFileFormat::Flac => self.save_flac_file(path),
+            AudioFileFormat::Flac => self.save_flac_file(path, vorbis),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Unsupported format",
@@ -273,7 +275,7 @@ where
         Ok(())
     }
 
-    fn save_flac_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+    fn save_flac_file<P: AsRef<Path>>(&self, path: P, vorbis: Option<VorbisComment>) -> io::Result<()> {
         use flac_codec::byteorder::LittleEndian;
         use flac_codec::encode::{FlacByteWriter, Options};
 
@@ -306,7 +308,11 @@ where
         }) as usize;
         let total_pcm_bytes = frames as u64 * channels as u64 * bytes_per_sample as u64;
 
-        let opts = Options::default();
+        let mut opts = Options::default();
+
+        if let Some(vorbis) = vorbis {
+            opts = opts.comment(vorbis);
+        }
 
         // Create FLAC writer (LittleEndian because we feed little-endian sample bytes)
         let mut flac: FlacByteWriter<_, LittleEndian> = FlacByteWriter::create(
