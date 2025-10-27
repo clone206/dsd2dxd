@@ -72,6 +72,15 @@ impl OutputContext {
 
         let bytes_per_sample = if out_bits == 20 { 3 } else { out_bits / 8 };
 
+        let mut pathbuf_opt = None;
+        if let Some(p) = out_path {
+            let pb = PathBuf::from(&p);
+            if !pb.exists() {
+                return Err(format!("Specified output path does not exist: {}", pb.display()).into());
+            }
+            pathbuf_opt = Some(pb);
+        }
+
         let mut ctx = Self {
             bits: out_bits,
             output,
@@ -85,12 +94,8 @@ impl OutputContext {
             stdout_buf: Vec::new(),
             vorbis: None,
             pictures: Vec::new(),
-            path: None,
+            path: pathbuf_opt,
         };
-
-        if let Some(p) = out_path {
-            ctx.path = Some(PathBuf::from(p));
-        }
 
         ctx.set_scaling(out_vol);
         Ok(ctx)
