@@ -455,7 +455,13 @@ impl ConversionContext {
             let rel_parent = self.in_ctx.parent_path.as_ref().map(|p| p.as_path()).unwrap_or(Path::new(""));
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let rel = rel_parent.strip_prefix(&cwd).unwrap_or(rel_parent);
-            return Path::new(out_dir).join(rel).join(name).to_string_lossy().into_owned();
+            let full_dir = Path::new(out_dir).join(rel);
+            if !full_dir.exists() {
+                if let Err(e) = std::fs::create_dir_all(&full_dir) {
+                    panic!("Failed to create output directory {}: {}", full_dir.display(), e);
+                }
+            }
+            return full_dir.join(name).to_string_lossy().into_owned();
         }
 
         parent.join(name).to_string_lossy().into_owned()
