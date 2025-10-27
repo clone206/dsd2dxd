@@ -37,6 +37,10 @@ pub use output::OutputContext;
 #[derive(Parser)]
 #[command(name = "dsd2dxd")]
 struct Cli {
+    /// Output directory path for converted PCM files
+    #[arg(short = 'p', long = "path", default_value = None)]
+    path: Option<String>,
+
     /// Number of channels
     #[arg(short = 'c', long = "channels", default_value = "2")]
     channels: Option<u32>,
@@ -134,7 +138,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .dither_type
         .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
 
-    let out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate)?;
+    let out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate, cli.path)?;
 
     let dither = Dither::new(dither_type)?;
 

@@ -21,7 +21,7 @@ use flac_codec::metadata::{Picture, VorbisComment};
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{io, vec};
 
 pub struct OutputContext {
@@ -31,6 +31,7 @@ pub struct OutputContext {
     pub rate: i32,
     pub bytes_per_sample: i32,
     pub output: char,
+    pub path: Option<PathBuf>,
 
     // Set freely
     pub peak_level: i32,
@@ -50,6 +51,7 @@ impl OutputContext {
         out_type: char,
         out_vol: f64,
         out_rate: i32,
+        out_path: Option<String>,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -79,7 +81,12 @@ impl OutputContext {
             stdout_buf: Vec::new(),
             vorbis: None,
             pictures: Vec::new(),
+            path: None,
         };
+
+        if let Some(p) = out_path {
+            ctx.path = Some(PathBuf::from(p));
+        }
 
         ctx.set_scaling(out_vol);
         Ok(ctx)
@@ -264,6 +271,7 @@ impl Clone for OutputContext {
             stdout_buf: self.stdout_buf.clone(),
             vorbis: self.vorbis.clone(),
             pictures: self.pictures.clone(),
+            path: self.path.clone(),
         }
     }
 }

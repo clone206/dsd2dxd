@@ -26,7 +26,6 @@ use crate::lm_resampler::compute_decim_and_upsample;
 use crate::lm_resampler::LMResampler;
 use crate::output::OutputContext;
 use flac_codec::metadata;
-use flac_codec::metadata::Picture;
 use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
@@ -450,6 +449,14 @@ impl ConversionContext {
         } else {
             format!("{}{}.{}", stem, suffix, ext)
         };
+
+        // If an output path is specified, join it with the relative parent path
+        if let Some(ref out_dir) = self.out_ctx.path {
+            let rel_parent = self.in_ctx.parent_path.as_ref().map(|p| p.as_path()).unwrap_or(Path::new(""));
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let rel = rel_parent.strip_prefix(&cwd).unwrap_or(rel_parent);
+            return Path::new(out_dir).join(rel).join(name).to_string_lossy().into_owned();
+        }
 
         parent.join(name).to_string_lossy().into_owned()
     }
