@@ -62,6 +62,10 @@ impl OutputContext {
             return Err("Unrecognized output type".into());
         }
 
+        if output == 's' && out_path.is_some() {
+            return Err("Cannot specify output path when outputting to stdout".into());
+        }
+
         if out_bits == 32 && output != 's' && output != 'w' {
             return Err("32 bit float only allowed with wav or stdout".into());
         }
