@@ -16,14 +16,14 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::select_precalc_taps;
-use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 use crate::dsd::DSD_64_RATE;
 use crate::input::InputContext;
-use crate::lm_resampler::compute_decim_and_upsample;
 use crate::lm_resampler::LMResampler;
+use crate::lm_resampler::compute_decim_and_upsample;
 use crate::output::OutputContext;
 use flac_codec::metadata;
 use flac_codec::metadata::PictureType;
@@ -406,8 +406,7 @@ impl ConversionContext {
         }
     }
 
-    // Basename + proper extension, or generic for stdin
-    fn derive_output_path(&self) -> String {
+    fn get_output_filename(&self) -> String {
         let ext = match self.out_ctx.output.to_ascii_lowercase() {
             'w' => "wav",
             'a' => "aif",
@@ -429,13 +428,6 @@ impl ConversionContext {
             return format!("{}.{}", base, ext);
         }
 
-        let parent = self
-            .in_ctx
-            .parent_path
-            .as_ref()
-            .map(|p| p.as_path())
-            .unwrap_or(Path::new(""));
-
         let stem = self
             .in_ctx
             .file_path
@@ -444,34 +436,106 @@ impl ConversionContext {
             .and_then(|s| s.to_str())
             .unwrap_or("output");
 
-        let name = if suffix.is_empty() {
+        return if suffix.is_empty() {
             format!("{}.{}", stem, ext)
         } else {
             format!("{}{}.{}", stem, suffix, ext)
         };
+    }
 
-        // If an output path is specified, join it with the relative parent path
-        if let Some(ref out_dir) = self.out_ctx.path {
-            let rel_parent = self.in_ctx.parent_path.as_ref().map(|p| p.as_path()).unwrap_or(Path::new(""));
+    fn derive_output_dir(&self, parent: &Path) -> Result<String, Box<dyn Error>> {
+        return if self.in_ctx.std_in {
+            Ok("".to_string())
+        } else if let Some(ref out_dir) = self.out_ctx.path {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let rel = rel_parent.strip_prefix(&cwd).unwrap_or(rel_parent);
+            let rel = parent.strip_prefix(&cwd).unwrap_or(parent);
             let full_dir = Path::new(out_dir).join(rel);
+
             if !full_dir.exists() {
-                if let Err(e) = std::fs::create_dir_all(&full_dir) {
-                    panic!("Failed to create output directory {}: {}", full_dir.display(), e);
+                std::fs::create_dir_all(&full_dir)?;
+            }
+            Ok(full_dir.to_string_lossy().into_owned())
+        } else {
+            Ok(parent.to_string_lossy().into_owned())
+        };
+    }
+
+    fn copy_artwork(
+        source_dir: &Path,
+        destination_dir: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for entry in std::fs::read_dir(source_dir)? {
+            let entry = entry?;
+            let source_path = entry.path();
+
+            if !source_path.is_file() {
+                continue;
+            } else if let Some(ext) = source_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                && (ext == "jpg" || ext == "png" || ext == "jpeg")
+            {
+                let file_name = source_path.file_name().ok_or("Invalid file name")?;
+                let destination_path = destination_dir.join(file_name);
+
+                // Should be atomic, avoiding TOCTOU issues, and only copy if the file doesn't exist
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(destination_path)
+                {
+                    Ok(mut dest_file) => {
+                        // If the file was successfully created (meaning it didn't exist),
+                        // copy the contents from the source file.
+                        let mut source_file = std::fs::File::open(source_path)?;
+                        io::copy(&mut source_file, &mut dest_file)?;
+                        continue;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        continue;
+                    }
+                    Err(e) => {
+                        // Handle other potential errors during file creation.
+                        return Err(Box::new(e));
+                    }
                 }
             }
-            return full_dir.join(name).to_string_lossy().into_owned();
         }
-
-        parent.join(name).to_string_lossy().into_owned()
+        Ok(())
     }
 
     fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
         eprintln!("Saving to file...");
-        let out_path = self.derive_output_path();
+
+        let parent = self
+            .in_ctx
+            .parent_path
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or(Path::new(""));
+
+        let out_dir = self.derive_output_dir(parent)?;
+        let out_filename = self.get_output_filename();
+
+        let out_path = Path::new(&out_dir)
+            .join(&out_filename)
+            .to_string_lossy()
+            .into_owned();
 
         self.verbose(&format!("Derived output path: {}", out_path), true);
+
+        if let Err(e) = Self::copy_artwork(parent, &Path::new(&out_dir)) {
+            eprintln!(
+                "[Warning] Failed to copy artwork to output directory: {}",
+                e
+            );
+        } else {
+            self.verbose(
+                &format!("Copied artwork from {} to {}", parent.display(), out_dir),
+                true,
+            );
+        }
 
         if let Some(mut tag) = self.in_ctx.tag.as_ref().cloned() {
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
@@ -532,7 +596,7 @@ impl ConversionContext {
             vorbis.insert("DATE", &year.to_string());
         }
         if let Some(comment_frame) = tag.get("COMM") {
-            if let id3::Content::Comment(ref comm) = comment_frame.content() {
+            if let id3::Content::Comment(comm) = comment_frame.content() {
                 vorbis.insert("COMMENT", &comm.text);
             }
         }
