@@ -37,7 +37,9 @@ pub use output::OutputContext;
 #[derive(Parser)]
 #[command(name = "dsd2dxd")]
 struct Cli {
-    /// Output directory path for converted PCM files
+    /// Output directory path for converted PCM files. Directory
+    /// must already exist but any subdirectories will be created as needed.
+    /// [default: same as input file]
     #[arg(short = 'p', long = "path", default_value = None)]
     path: Option<String>,
 

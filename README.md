@@ -81,50 +81,61 @@ specified will be applied to each, except where overridden by each
 file's metadata.
 
 Options:
--c, --channels <CHANNELS>
-        Number of channels [default: 2]
--f, --fmt <FORMAT>
-        DSD data format: Interleaved (I) or Planar (P) [default: I]
--b, --bitdepth <BIT_DEPTH>
-        Output bit depth: 16, 20, 24 (fixed integer),
-        or 32 (float) [default: 24]
--t, --filttype <FILTER_TYPE>
-        Filter type: E (Equiripple), X (XLD. Only available with DSD64
-        input and 88200, 176400, and 352800 outputs), D (Original dsd2pcm.
-        Only available with DSD64 input and 352800 output), C (Chebyshev.
-        Only available with DSD128 input and 88200, 176400, and 352800
-        outputs) [default: E]
--e, --endianness <ENDIANNESS>
-        DSD data endianness: M (most significant bit first),
-        or L (least significant bit first) [default: M]
--s, --bs <BLOCK_SIZE>
-        DSD block size in bytes [default: 4096]
--d, --dither <DITHER_TYPE>
-        Dither type: T (TPDF), R (rectangular),
-        F (float), X (none) [default: F for 32 bit, T otherwise]
--r, --rate <OUTPUT_RATE>
-        Output sample rate in Hz. Can be 88200, 96000, 176400, 192000,
-        352800, 384000. Note that conversion to multiples of 44100 are
-        faster than 48000 multiples [default: 352800]
--i, --inrate <INPUT_RATE>
-        Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256) [default: 1]
--o, --output <OUTPUT>
-        Output type: S (stdout), A (aif), W (wave), F (flac) Note that W,
-        A, or F outputs to either <basename>.[wav|aif|flac] in current
-        directory, where <basename> is the input filename without the
-        extension, or output.[wav|aif|flac] (if reading from stdin.)
-        [default: S]
--l, --level <LEVEL>
-        Volume level adjustment in dB. Can be negative with the 
-        long form, e.g. --level=-3 [default: 0.0]
--v, --verbose
-        Print diagnostic messages
--a, --append
-        Append abbreviated output rate to filename (e.g., _96K, 
-        _88_2K). Also appends " [<OUTPUT_RATE>]" to the album tag
-        of the output file if present
--h, --help
-        Print help
+  -p, --path <PATH>
+          Output directory path for converted PCM files.
+          Directory must already exist but any subdirectories
+          will be created as needed [default: same as input file]
+  -c, --channels <CHANNELS>
+          Number of channels [default: 2]
+  -f, --fmt <FORMAT>
+          DSD data format: Interleaved (I) or Planar (P)
+          [default: I]
+  -b, --bitdepth <BIT_DEPTH>
+          Output bit depth: 16, 20, 24 (fixed integer), or 32
+          (float) [default: 24]
+  -t, --filttype <FILTER_TYPE>
+          Filter type: E (Equiripple), X (XLD. Only available
+          with DSD64 input and 88200, 176400, and 352800
+          outputs), D (Original dsd2pcm. Only available with
+          DSD64 input and 352800 output), C (Chebyshev. Only
+          available with DSD128 input and 88200, 176400, and
+          352800 outputs) [default: E]
+  -e, --endianness <ENDIANNESS>
+          DSD data endianness: M (most significant bit
+          first), or L (least significant bit first)
+          [default: M]
+  -s, --bs <BLOCK_SIZE>
+          DSD block size in bytes. Only set this if you know
+          what you're doing [default: 4096]
+  -d, --dither <DITHER_TYPE>
+          Dither type: T (TPDF), R (rectangular), F (float),
+          X (none) [default: F for 32 bit, T otherwise]
+  -r, --rate <OUTPUT_RATE>
+          Output sample rate in Hz. Can be 88200, 96000,
+          176400, 192000, 352800, 384000. Note that
+          conversion to multiples of 44100 are faster than
+          48000 multiples [default: 352800]
+  -i, --inrate <INPUT_RATE>
+          Input DSD rate: 1 (DSD64), 2 (DSD128), or 4
+          (DSD256) [default: 1]
+  -o, --output <OUTPUT>
+          Output type: S (stdout), A (aif), W (wave), F
+          (flac) Note that W, A, or F outputs to either
+          <basename>.[wav|aif|flac] in current directory,
+          where <basename> is the input filename without the
+          extension, or output.[wav|aif|flac] (if reading
+          from stdin.) [default: S]
+  -l, --level <LEVEL>
+          Volume level adjustment in dB. Can be negative with
+          the long form, e.g. --level=-3 [default: 0.0]
+  -v, --verbose
+          Print diagnostic messages
+  -a, --append
+          Append abbreviated output rate to filename (e.g.,
+          _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to
+          the album tag of the output file if present
+  -h, --help
+          Print help
 ```
 
 ## Testing Examples
