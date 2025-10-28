@@ -461,9 +461,16 @@ impl ConversionContext {
     }
 
     fn copy_artwork(
+        &self,
         source_dir: &Path,
         destination_dir: &Path,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+        if self.out_ctx.path.is_none() {
+            return Ok((0, 0));
+        }
+        let mut copied: u32 = 0;
+        let mut total: u32 = 0;
+
         for entry in std::fs::read_dir(source_dir)? {
             let entry = entry?;
             let source_path = entry.path();
@@ -476,6 +483,7 @@ impl ConversionContext {
                 .map(|s| s.to_ascii_lowercase())
                 && (ext == "jpg" || ext == "png" || ext == "jpeg")
             {
+                total += 1;
                 let file_name = source_path.file_name().ok_or("Invalid file name")?;
                 let destination_path = destination_dir.join(file_name);
 
@@ -490,6 +498,7 @@ impl ConversionContext {
                         // copy the contents from the source file.
                         let mut source_file = std::fs::File::open(source_path)?;
                         io::copy(&mut source_file, &mut dest_file)?;
+                        copied += 1;
                         continue;
                     }
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -502,7 +511,7 @@ impl ConversionContext {
                 }
             }
         }
-        Ok(())
+        Ok((copied, total))
     }
 
     fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
@@ -525,16 +534,22 @@ impl ConversionContext {
 
         self.verbose(&format!("Derived output path: {}", out_path), true);
 
-        if let Err(e) = Self::copy_artwork(parent, &Path::new(&out_dir)) {
-            eprintln!(
-                "[Warning] Failed to copy artwork to output directory: {}",
-                e
-            );
-        } else {
-            self.verbose(
-                &format!("Copied artwork from {} to {}", parent.display(), out_dir),
-                true,
-            );
+        match self.copy_artwork(parent, &Path::new(&out_dir)) {
+            Ok((_, total)) if total == 0 => {
+                self.verbose("No artwork files to copy.", true);
+            }
+            Ok((copied, total)) => {
+                self.verbose(
+                    &format!("Copied {} artwork file(s) out of {}.", copied, total),
+                    true,
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[Warning] Failed to copy artwork to output directory: {}",
+                    e
+                );
+            }
         }
 
         if let Some(mut tag) = self.in_ctx.tag.as_ref().cloned() {
