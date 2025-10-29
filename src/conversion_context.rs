@@ -16,22 +16,22 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::select_precalc_taps;
-use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::dither::Dither;
 use crate::dsd::DSD_64_RATE;
 use crate::input::InputContext;
-use crate::lm_resampler::compute_decim_and_upsample;
 use crate::lm_resampler::LMResampler;
+use crate::lm_resampler::compute_decim_and_upsample;
 use crate::output::OutputContext;
 use flac_codec::metadata;
-use flac_codec::metadata::Picture;
 use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 
 pub struct ConversionContext {
@@ -55,6 +55,7 @@ pub struct ConversionContext {
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
     reader: Box<dyn Read>,
+    base_dir: PathBuf,
 }
 
 impl ConversionContext {
@@ -65,6 +66,7 @@ impl ConversionContext {
         filt_type: char,
         verbose_param: bool,
         append_rate_suffix: bool,
+        base_dir: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize;
         let channels = in_ctx.channels_num as usize;
@@ -102,7 +104,8 @@ impl ConversionContext {
             diag_bits_in: 0,
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
-            reader: Box::new(io::empty()), // Placeholder
+            reader: Box::new(io::empty()), // Placeholder,
+            base_dir,
         };
 
         if upsample_ratio > 1 {
@@ -407,8 +410,7 @@ impl ConversionContext {
         }
     }
 
-    // Basename + proper extension, or generic for stdin
-    fn derive_output_path(&self) -> String {
+    fn get_output_filename(&self) -> String {
         let ext = match self.out_ctx.output.to_ascii_lowercase() {
             'w' => "wav",
             'a' => "aif",
@@ -430,13 +432,6 @@ impl ConversionContext {
             return format!("{}.{}", base, ext);
         }
 
-        let parent = self
-            .in_ctx
-            .parent_path
-            .as_ref()
-            .map(|p| p.as_path())
-            .unwrap_or(Path::new(""));
-
         let stem = self
             .in_ctx
             .file_path
@@ -445,20 +440,120 @@ impl ConversionContext {
             .and_then(|s| s.to_str())
             .unwrap_or("output");
 
-        let name = if suffix.is_empty() {
+        return if suffix.is_empty() {
             format!("{}.{}", stem, ext)
         } else {
             format!("{}{}.{}", stem, suffix, ext)
         };
+    }
 
-        parent.join(name).to_string_lossy().into_owned()
+    fn derive_output_dir(&self, parent: &Path) -> Result<String, Box<dyn Error>> {
+        return if self.in_ctx.std_in {
+            Ok("".to_string())
+        } else if let Some(ref out_dir) = self.out_ctx.path {
+            let rel = parent.strip_prefix(&self.base_dir).unwrap_or(parent);
+            let full_dir = Path::new(out_dir).join(rel);
+
+            if !full_dir.exists() {
+                std::fs::create_dir_all(&full_dir)?;
+            }
+            Ok(full_dir.to_string_lossy().into_owned())
+        } else {
+            Ok(parent.to_string_lossy().into_owned())
+        };
+    }
+
+    fn copy_artwork(
+        &self,
+        source_dir: &Path,
+        destination_dir: &Path,
+    ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
+        if self.out_ctx.path.is_none() {
+            return Ok((0, 0));
+        }
+        let mut copied: u32 = 0;
+        let mut total: u32 = 0;
+
+        for entry in std::fs::read_dir(source_dir)? {
+            let entry = entry?;
+            let source_path = entry.path();
+
+            if !source_path.is_file() {
+                continue;
+            } else if let Some(ext) = source_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase())
+                && (ext == "jpg" || ext == "png" || ext == "jpeg")
+            {
+                total += 1;
+                let file_name = source_path.file_name().ok_or("Invalid file name")?;
+                let destination_path = destination_dir.join(file_name);
+
+                // Should be atomic, avoiding TOCTOU issues, and only copy if the file doesn't exist
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(destination_path)
+                {
+                    Ok(mut dest_file) => {
+                        // If the file was successfully created (meaning it didn't exist),
+                        // copy the contents from the source file.
+                        let mut source_file = std::fs::File::open(source_path)?;
+                        io::copy(&mut source_file, &mut dest_file)?;
+                        copied += 1;
+                        continue;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        continue;
+                    }
+                    Err(e) => {
+                        // Handle other potential errors during file creation.
+                        return Err(Box::new(e));
+                    }
+                }
+            }
+        }
+        Ok((copied, total))
     }
 
     fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
         eprintln!("Saving to file...");
-        let out_path = self.derive_output_path();
+
+        let parent = self
+            .in_ctx
+            .parent_path
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or(Path::new(""));
+
+        let out_dir = self.derive_output_dir(parent)?;
+        let out_filename = self.get_output_filename();
+
+        let out_path = Path::new(&out_dir)
+            .join(&out_filename)
+            .to_string_lossy()
+            .into_owned();
 
         self.verbose(&format!("Derived output path: {}", out_path), true);
+
+        match self.copy_artwork(parent, &Path::new(&out_dir)) {
+            Ok((_, total)) if total == 0 => {
+                self.verbose("No artwork files to copy.", true);
+            }
+            Ok((copied, total)) => {
+                self.verbose(
+                    &format!("Copied {} artwork file(s) out of {}.", copied, total),
+                    true,
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[Warning] Failed to copy artwork to output directory: {}",
+                    e
+                );
+            }
+        }
 
         if let Some(mut tag) = self.in_ctx.tag.as_ref().cloned() {
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
@@ -519,7 +614,7 @@ impl ConversionContext {
             vorbis.insert("DATE", &year.to_string());
         }
         if let Some(comment_frame) = tag.get("COMM") {
-            if let id3::Content::Comment(ref comm) = comment_frame.content() {
+            if let id3::Content::Comment(comm) = comment_frame.content() {
                 vorbis.insert("COMMENT", &comm.text);
             }
         }

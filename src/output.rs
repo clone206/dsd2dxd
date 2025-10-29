@@ -21,7 +21,7 @@ use flac_codec::metadata::{Picture, VorbisComment};
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::{io, vec};
 
 pub struct OutputContext {
@@ -31,6 +31,7 @@ pub struct OutputContext {
     pub rate: i32,
     pub bytes_per_sample: i32,
     pub output: char,
+    pub path: Option<PathBuf>,
 
     // Set freely
     pub peak_level: i32,
@@ -50,6 +51,7 @@ impl OutputContext {
         out_type: char,
         out_vol: f64,
         out_rate: i32,
+        out_path: Option<String>,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -60,11 +62,24 @@ impl OutputContext {
             return Err("Unrecognized output type".into());
         }
 
+        if output == 's' && out_path.is_some() {
+            return Err("Cannot specify output path when outputting to stdout".into());
+        }
+
         if out_bits == 32 && output != 's' && output != 'w' {
             return Err("32 bit float only allowed with wav or stdout".into());
         }
 
         let bytes_per_sample = if out_bits == 20 { 3 } else { out_bits / 8 };
+
+        let mut pathbuf_opt = None;
+        if let Some(p) = out_path {
+            let pb = PathBuf::from(&p);
+            if !pb.exists() {
+                return Err(format!("Specified output path does not exist: {}", pb.display()).into());
+            }
+            pathbuf_opt = Some(pb);
+        }
 
         let mut ctx = Self {
             bits: out_bits,
@@ -79,6 +94,7 @@ impl OutputContext {
             stdout_buf: Vec::new(),
             vorbis: None,
             pictures: Vec::new(),
+            path: pathbuf_opt,
         };
 
         ctx.set_scaling(out_vol);
@@ -264,6 +280,7 @@ impl Clone for OutputContext {
             stdout_buf: self.stdout_buf.clone(),
             vorbis: self.vorbis.clone(),
             pictures: self.pictures.clone(),
+            path: self.path.clone(),
         }
     }
 }

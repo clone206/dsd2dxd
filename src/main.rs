@@ -35,8 +35,15 @@ pub use input::InputContext;
 pub use output::OutputContext;
 
 #[derive(Parser)]
-#[command(name = "dsd2dxd")]
+#[command(name = "dsd2dxd", version)]
 struct Cli {
+    /// Output directory path for converted PCM files. Directory
+    /// must already exist but any subdirectories will be created as needed.
+    /// Artwork files will be copied to the output directories.
+    /// [default: same as input file]
+    #[arg(short = 'p', long = "path", default_value = None)]
+    path: Option<String>,
+
     /// Number of channels
     #[arg(short = 'c', long = "channels", default_value = "2")]
     channels: Option<u32>,
@@ -134,9 +141,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         .dither_type
         .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
 
-    let out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate)?;
-
+    let out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate, cli.path)?;
     let dither = Dither::new(dither_type)?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     for input in inputs {
         if input.contains('*') {
@@ -169,6 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             cli.filter_type.unwrap().to_ascii_uppercase(),
             cli.verbose,
             cli.append_rate,
+            cwd.clone(),
         )?;
         conv_ctx.do_conversion()?;
     }

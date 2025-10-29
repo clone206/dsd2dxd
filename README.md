@@ -57,16 +57,17 @@ dsd2dxd -f P -e L -d N -r 176400 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 17
 # Generalized example of using with an input and output file,
 # via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
-# Recursively convert all files ending in .dsf or .DSF in the current
-# directory and subdirectories, to 24 bit flac files, using the equiripple filter
-# where the input files are dsd128 (falling back to the default filter for 
-# dsd64), with 88.2K output.
-dsd2dxd -r 88200 -b 24 -o f ./{*,**/*}.{dsf,DSF}
+# Convert all files ending in .dsf or .DSF in all subdirectories 
+# of current directory, to 24 bit flac files, with 88.2K output.
+# If using a bash shell, you can ensure the below is recursive by running
+# "shopt -s globstar" first. Outputs to the directory specified with -p, 
+# instead of the default of outputting to the same directory as each input file.
+dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
 ```
 
 ### Full Usage and Options
 
-For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-l`, for setting the output type, output sample rate, and level adjustment, respectively.
+For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-p`, for setting the output type, output sample rate, and output folder path, respectively.
 
 ```
 Usage: dsd2dxd [options] [infile(s)|-], where "-" means read from 
@@ -81,50 +82,64 @@ specified will be applied to each, except where overridden by each
 file's metadata.
 
 Options:
--c, --channels <CHANNELS>
-        Number of channels [default: 2]
--f, --fmt <FORMAT>
-        DSD data format: Interleaved (I) or Planar (P) [default: I]
--b, --bitdepth <BIT_DEPTH>
-        Output bit depth: 16, 20, 24 (fixed integer),
-        or 32 (float) [default: 24]
--t, --filttype <FILTER_TYPE>
-        Filter type: E (Equiripple), X (XLD. Only available with DSD64
-        input and 88200, 176400, and 352800 outputs), D (Original dsd2pcm.
-        Only available with DSD64 input and 352800 output), C (Chebyshev.
-        Only available with DSD128 input and 88200, 176400, and 352800
-        outputs) [default: E]
--e, --endianness <ENDIANNESS>
-        DSD data endianness: M (most significant bit first),
-        or L (least significant bit first) [default: M]
--s, --bs <BLOCK_SIZE>
-        DSD block size in bytes [default: 4096]
--d, --dither <DITHER_TYPE>
-        Dither type: T (TPDF), R (rectangular),
-        F (float), X (none) [default: F for 32 bit, T otherwise]
--r, --rate <OUTPUT_RATE>
-        Output sample rate in Hz. Can be 88200, 96000, 176400, 192000,
-        352800, 384000. Note that conversion to multiples of 44100 are
-        faster than 48000 multiples [default: 352800]
--i, --inrate <INPUT_RATE>
-        Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256) [default: 1]
--o, --output <OUTPUT>
-        Output type: S (stdout), A (aif), W (wave), F (flac) Note that W,
-        A, or F outputs to either <basename>.[wav|aif|flac] in current
-        directory, where <basename> is the input filename without the
-        extension, or output.[wav|aif|flac] (if reading from stdin.)
-        [default: S]
--l, --level <LEVEL>
-        Volume level adjustment in dB. Can be negative with the 
-        long form, e.g. --level=-3 [default: 0.0]
--v, --verbose
-        Print diagnostic messages
--a, --append
-        Append abbreviated output rate to filename (e.g., _96K, 
-        _88_2K). Also appends " [<OUTPUT_RATE>]" to the album tag
-        of the output file if present
--h, --help
-        Print help
+  -p, --path <PATH>
+          Output directory path for converted PCM files.
+          Directory must already exist but any subdirectories
+          will be created as needed. Artwork files will be copied to 
+          the output directories. [default: same as input file]
+  -c, --channels <CHANNELS>
+          Number of channels [default: 2]
+  -f, --fmt <FORMAT>
+          DSD data format: Interleaved (I) or Planar (P)
+          [default: I]
+  -b, --bitdepth <BIT_DEPTH>
+          Output bit depth: 16, 20, 24 (fixed integer), or 32
+          (float) [default: 24]
+  -t, --filttype <FILTER_TYPE>
+          Filter type: E (Equiripple), X (XLD. Only available
+          with DSD64 input and 88200, 176400, and 352800
+          outputs), D (Original dsd2pcm. Only available with
+          DSD64 input and 352800 output), C (Chebyshev. Only
+          available with DSD128 input and 88200, 176400, and
+          352800 outputs) [default: E]
+  -e, --endianness <ENDIANNESS>
+          DSD data endianness: M (most significant bit
+          first), or L (least significant bit first)
+          [default: M]
+  -s, --bs <BLOCK_SIZE>
+          DSD block size in bytes. Only set this if you know
+          what you're doing [default: 4096]
+  -d, --dither <DITHER_TYPE>
+          Dither type: T (TPDF), R (rectangular), F (float),
+          X (none) [default: F for 32 bit, T otherwise]
+  -r, --rate <OUTPUT_RATE>
+          Output sample rate in Hz. Can be 88200, 96000,
+          176400, 192000, 352800, 384000. Note that
+          conversion to multiples of 44100 are faster than
+          48000 multiples [default: 352800]
+  -i, --inrate <INPUT_RATE>
+          Input DSD rate: 1 (DSD64), 2 (DSD128), or 4
+          (DSD256) [default: 1]
+  -o, --output <OUTPUT>
+          Output type: S (stdout), A (aif), W (wave), F
+          (flac) Note that W, A, or F outputs to either
+          <basename>.[wav|aif|flac] in current directory,
+          where <basename> is the input filename without the
+          extension, or output.[wav|aif|flac] (if reading
+          from stdin.) [default: S]
+  -l, --level <LEVEL>
+          Volume level adjustment in dB. Can be negative with
+          the long form, e.g. --level=-3 [default: 0.0]
+  -v, --verbose
+          Print diagnostic messages
+  -a, --append
+          Append abbreviated output rate to filename (e.g.,
+          _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to
+          the album tag of the output file if present
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
 
 ## Testing Examples

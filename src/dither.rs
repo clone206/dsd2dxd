@@ -64,7 +64,7 @@ impl Dither {
     fn init_rand(&mut self) {
         let mut rng = rand::thread_rng();
         while self.fpd < 16386 {
-            self.fpd = rng.gen::<u32>();
+            self.fpd = rng.r#gen::<u32>();
         }
     }
 
@@ -89,7 +89,7 @@ impl Dither {
 
     fn process_rpdf(&mut self) -> f64 {
         let mut rng = rand::thread_rng();
-        rng.gen::<f64>() - 0.5
+        rng.r#gen::<f64>() - 0.5
     }
 
     fn fpdither(&mut self, sample: &mut f64) {
