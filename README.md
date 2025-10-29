@@ -57,16 +57,17 @@ dsd2dxd -f P -e L -d N -r 176400 < 1kHz_stereo_p.dsd | ffmpeg -y -f s24le -ar 17
 # Generalized example of using with an input and output file,
 # via stdin/stdout
 dsd2dxd [options] < infile.dsd > outfile.pcm
-# Recursively convert all files ending in .dsf or .DSF in the current
-# directory and subdirectories, to 24 bit flac files, using the equiripple filter
-# where the input files are dsd128 (falling back to the default filter for 
-# dsd64), with 88.2K output.
-dsd2dxd -r 88200 -b 24 -o f ./{*,**/*}.{dsf,DSF}
+# Convert all files ending in .dsf or .DSF in all subdirectories 
+# of current directory, to 24 bit flac files, with 88.2K output.
+# If using a bash shell, you can ensure the below is recursive by running
+# "shopt -s globstar" first. Outputs to the directory specified with -p, 
+# instead of the default of outputting to the same directory as each input file.
+dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
 ```
 
 ### Full Usage and Options
 
-For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-l`, for setting the output type, output sample rate, and level adjustment, respectively.
+For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-p`, for setting the output type, output sample rate, and output folder path, respectively.
 
 ```
 Usage: dsd2dxd [options] [infile(s)|-], where "-" means read from 
@@ -84,7 +85,8 @@ Options:
   -p, --path <PATH>
           Output directory path for converted PCM files.
           Directory must already exist but any subdirectories
-          will be created as needed [default: same as input file]
+          will be created as needed. Artwork files will be copied to 
+          the output directories. [default: same as input file]
   -c, --channels <CHANNELS>
           Number of channels [default: 2]
   -f, --fmt <FORMAT>
@@ -136,6 +138,8 @@ Options:
           the album tag of the output file if present
   -h, --help
           Print help
+  -V, --version
+          Print version
 ```
 
 ## Testing Examples

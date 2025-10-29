@@ -31,6 +31,7 @@ use id3::TagLike;
 use std::error::Error;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 
 pub struct ConversionContext {
@@ -54,6 +55,7 @@ pub struct ConversionContext {
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
     reader: Box<dyn Read>,
+    base_dir: PathBuf,
 }
 
 impl ConversionContext {
@@ -64,6 +66,7 @@ impl ConversionContext {
         filt_type: char,
         verbose_param: bool,
         append_rate_suffix: bool,
+        base_dir: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize;
         let channels = in_ctx.channels_num as usize;
@@ -101,7 +104,8 @@ impl ConversionContext {
             diag_bits_in: 0,
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
-            reader: Box::new(io::empty()), // Placeholder
+            reader: Box::new(io::empty()), // Placeholder,
+            base_dir,
         };
 
         if upsample_ratio > 1 {
@@ -447,8 +451,7 @@ impl ConversionContext {
         return if self.in_ctx.std_in {
             Ok("".to_string())
         } else if let Some(ref out_dir) = self.out_ctx.path {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let rel = parent.strip_prefix(&cwd).unwrap_or(parent);
+            let rel = parent.strip_prefix(&self.base_dir).unwrap_or(parent);
             let full_dir = Path::new(out_dir).join(rel);
 
             if !full_dir.exists() {
