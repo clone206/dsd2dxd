@@ -8,4 +8,4 @@ linker = "x86_64-unknown-linux-gnu-gcc"
 linker = "x86_64-w64-mingw32-gcc"
 
 [target.aarch64-pc-windows-gnullvm]
-linker = "aarch64-w64-mingw32-gcc"
+linker = "aarch64-w64-mingw32-clang"
