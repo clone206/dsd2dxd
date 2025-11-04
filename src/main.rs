@@ -113,7 +113,7 @@ struct Cli {
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
 
-    /// Input files (use - for stdin)
+    /// Input files/folders (use - for stdin)
     #[arg(name = "FILES")]
     files: Vec<String>,
 }

@@ -70,16 +70,17 @@ dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
 For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-p`, for setting the output type, output sample rate, and output folder path, respectively.
 
 ```
-Usage: dsd2dxd [options] [infile(s)|-], where "-" means read from 
+Usage: dsd2dxd [options] [infile/folder(s)|-], where "-" means read from 
 standard in (stdin).
 
 If reading from a file, certain command line options you provide 
 (e.g. block size) may be overridden using the metadata found in 
-that file (either a dsf or dff file). If neither filename(s) 
+that file (either a dsf or dff file). If neither file/folder name(s) 
 or - is provided, standard in is assumed. 
-Multiple filenames can be provided and the input-related options 
+Multiple file/folder names can be provided and the input-related options 
 specified will be applied to each, except where overridden by each 
-file's metadata.
+file's metadata. Folders will be recursively scanned for files ending in
+.dsf, .dff, or .dsd, where .dsd files are assumed to be raw dsd bitstreams.
 
 Options:
   -p, --path <PATH>
