@@ -16,7 +16,7 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::dsd::{ContainerFormat, DFF_BLOCK_SIZE, Dsd};
+use crate::dsd::{ContainerFormat, DFF_BLOCK_SIZE, DsdContainer};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -152,7 +152,7 @@ impl InputContext {
             );
 
             if let Some(format) = self.container_format {
-                match Dsd::new(path, format) {
+                match DsdContainer::new(path, format) {
                     Ok(my_dsd) => {
                         // Pull raw fields
                         let file_len = my_dsd.file.metadata()?.len();

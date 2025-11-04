@@ -30,7 +30,7 @@ pub const DSD_64_RATE: u32 = 2822400;
 pub const DFF_BLOCK_SIZE: u32 = 1;
 pub const DSF_BLOCK_SIZE: u32 = 4096;
 
-pub struct Dsd {
+pub struct DsdContainer {
     pub audio_length: u64,
     pub audio_pos: u64,
     pub channel_count: u32,
@@ -42,7 +42,7 @@ pub struct Dsd {
     pub tag: Option<Tag>,
 }
 
-impl Dsd {
+impl DsdContainer {
     pub fn new(path: &PathBuf, container_format: ContainerFormat) -> Result<Self, Box<dyn std::error::Error>> {
         if container_format == ContainerFormat::Dsf{
             use dsf::DsfFile;
