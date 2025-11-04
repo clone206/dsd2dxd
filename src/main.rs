@@ -173,7 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         conv_ctx.do_conversion()
     };
 
-    // Filter to remove any glob patterns and handle stdin, yielding all paths
+    // Filter to remove any glob patterns and handle stdin, yielding all inputted paths
     let paths = inputs
         .iter()
         .filter_map(|input| {
@@ -195,9 +195,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect::<Vec<PathBuf>>();
 
-    let file_paths = find_dsd_files_recursive(&paths)?;
-
-    for path in file_paths {
+    for path in find_dsd_files_recursive(&paths)? {
         do_conversion(Some(path))?;
     }
 
@@ -208,17 +206,14 @@ fn find_dsd_files_recursive(paths: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
     let mut file_paths = Vec::new();
     for path in paths {
         if path.is_dir() {
-            for entry in fs::read_dir(path)? {
-                let entry_path = entry?.path();
-                if entry_path.is_dir() {
-                    // Recursively call for subdirectories
-                    file_paths.extend(find_dsd_files_recursive(&[entry_path])?);
-                } else if entry_path.is_file() && is_dsd_file(&entry_path) {
-                    file_paths.push(entry_path);
-                }
-            }
+            // Recurse into all directory entries
+            let entries: Vec<PathBuf> = fs::read_dir(path)?
+                .filter_map(|e| e.ok().map(|d| d.path()))
+                .collect();
+            file_paths.extend(find_dsd_files_recursive(&entries)?);
         } else if path.is_file() && is_dsd_file(path) {
-            file_paths.push(path.clone());
+            // Single push site for matching files
+            file_paths.push(path.canonicalize()?.clone());
         }
     }
     Ok(file_paths)
