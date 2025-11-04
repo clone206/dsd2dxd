@@ -75,9 +75,9 @@ standard in (stdin).
 
 If reading from a file, certain command line options you provide 
 (e.g. block size) may be overridden using the metadata found in 
-that file (either a dsf or dff file). If neither file/folder name(s) 
+that file (either a dsf or dff file). If neither file/folder path(s) 
 or - is provided, standard in is assumed. 
-Multiple file/folder names can be provided and the input-related options 
+Multiple file/folder paths can be provided and the input-related options 
 specified will be applied to each, except where overridden by each 
 file's metadata. Folders will be recursively scanned for files ending in
 .dsf, .dff, or .dsd, where .dsd files are assumed to be raw dsd bitstreams.
