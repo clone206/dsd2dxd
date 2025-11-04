@@ -32,7 +32,7 @@ git submodule update --init
 cargo install --path .
 ```
 
-This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`). When in doubt, type `which dsd2dxd` to see which binary is currently being used.
+This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`). When in doubt on a *nix system, type `which dsd2dxd` to see which binary is currently being used.
 
 ### Examples
 
@@ -68,7 +68,8 @@ dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
 # the converted files into the ./test directory. The result
 # of converting from stdin will be a file named output.wav in the current
 # directory. You can also mix globs like the ones above with directories
-# and stdin as inputs. The shell will just expand the globs to a list of files, and dsd2dxd will expand the directories to a list of files.
+# and stdin as inputs. The shell will just expand the globs to a list of 
+# files, and dsd2dxd will expand the directories to a list of files.
 dsd2dxd -R -o w -p test . - < raw_dsd_file
 ```
 
