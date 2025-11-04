@@ -17,7 +17,7 @@
 */
 
 use id3::Tag;
-use std::{fs::File, path::{Path, PathBuf}};
+use std::{fs::{self, File}, io, path::{Path, PathBuf}};
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,4 +99,34 @@ impl DsdContainer {
             Err("Unsupported file extension; only .dsf and .dff are supported".into())
         }
     }
+}
+
+/// Recursively find all DSD files in the provided paths
+pub fn find_files_recursive(paths: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
+    let mut file_paths = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            // Recurse into all directory entries
+            let entries: Vec<PathBuf> = fs::read_dir(path)?
+                .filter_map(|e| e.ok().map(|d| d.path()))
+                .collect();
+            file_paths.extend(find_files_recursive(&entries)?);
+        } else if path.is_file() && is_dsd_file(path) {
+            // Single push site for matching files
+            file_paths.push(path.canonicalize()?.clone());
+        }
+    }
+    Ok(file_paths)
+}
+
+/// Check if the provided path is a DSD file based on its extension
+pub fn is_dsd_file(path: &PathBuf) -> bool {
+    if path.is_file()
+        && let Some(ext) = path.extension()
+        && let ext_lower = ext.to_ascii_lowercase().to_string_lossy()
+        && DSD_EXTENSIONS.contains(&ext_lower.as_ref())
+    {
+        return true;
+    }
+    false
 }

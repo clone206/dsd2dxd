@@ -17,7 +17,7 @@
 */
 
 use clap::Parser;
-use std::{error::Error, fs, io, path::PathBuf};
+use std::{error::Error, path::PathBuf};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -33,8 +33,6 @@ pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
 pub use output::OutputContext;
-
-use crate::dsd::DSD_EXTENSIONS;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -195,37 +193,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect::<Vec<PathBuf>>();
 
-    for path in find_dsd_files_recursive(&paths)? {
+    for path in dsd::find_files_recursive(&paths)? {
         do_conversion(Some(path))?;
     }
 
     Ok(())
-}
-
-fn find_dsd_files_recursive(paths: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
-    let mut file_paths = Vec::new();
-    for path in paths {
-        if path.is_dir() {
-            // Recurse into all directory entries
-            let entries: Vec<PathBuf> = fs::read_dir(path)?
-                .filter_map(|e| e.ok().map(|d| d.path()))
-                .collect();
-            file_paths.extend(find_dsd_files_recursive(&entries)?);
-        } else if path.is_file() && is_dsd_file(path) {
-            // Single push site for matching files
-            file_paths.push(path.canonicalize()?.clone());
-        }
-    }
-    Ok(file_paths)
-}
-
-pub fn is_dsd_file(path: &PathBuf) -> bool {
-    if path.is_file()
-        && let Some(ext) = path.extension()
-        && let ext_lower = ext.to_ascii_lowercase().to_string_lossy()
-        && DSD_EXTENSIONS.contains(&ext_lower.as_ref())
-    {
-        return true;
-    }
-    false
 }
