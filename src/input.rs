@@ -38,6 +38,7 @@ pub struct InputContext {
     pub audio_pos: u64,
     pub file: Option<File>,
     pub tag: Option<id3::Tag>,
+    pub container_format: Option<ContainerFormat>,
 }
 
 impl InputContext {
@@ -105,6 +106,7 @@ impl InputContext {
             audio_pos: 0,
             file: None,
             tag: None,
+            container_format,
         };
 
         ctx.set_block_size(block_size);
@@ -124,31 +126,45 @@ impl InputContext {
                 },
                 ctx.interleaved
             );
-        } else if let Some(path) = &ctx.in_path {
-            ctx.verbose(
+        } else {
+            ctx.update_from_file()?;
+        }
+
+        Ok(ctx)
+    }
+
+    fn update_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(path) = &self.in_path {
+            self.verbose(
                 &format!(
                     "Parent path: {}",
-                    ctx.parent_path.as_ref().unwrap().display()
+                    self.parent_path.as_ref().unwrap().display()
                 ),
                 true,
             );
 
-            ctx.verbose(&format!("Opening input file: {}", ctx.in_path.clone().unwrap().to_string_lossy()), true);
+            self.verbose(
+                &format!(
+                    "Opening input file: {}",
+                    self.in_path.clone().unwrap().to_string_lossy()
+                ),
+                true,
+            );
 
-            if let Some(format) = container_format {
+            if let Some(format) = self.container_format {
                 match Dsd::new(path, format) {
                     Ok(my_dsd) => {
                         // Pull raw fields
                         let file_len = my_dsd.file.metadata()?.len();
-                        ctx.verbose(&format!("File size: {} bytes", file_len), true);
+                        self.verbose(&format!("File size: {} bytes", file_len), true);
 
-                        ctx.file = Some(my_dsd.file);
-                        ctx.tag = my_dsd.tag;
+                        self.file = Some(my_dsd.file);
+                        self.tag = my_dsd.tag;
 
-                        ctx.audio_pos = my_dsd.audio_pos;
+                        self.audio_pos = my_dsd.audio_pos;
                         // Clamp audio_length to what the file can actually contain
-                        let max_len: u64 = (file_len - ctx.audio_pos).max(0);
-                        ctx.audio_length =
+                        let max_len: u64 = (file_len - self.audio_pos).max(0);
+                        self.audio_length =
                             if my_dsd.audio_length > 0 && my_dsd.audio_length <= max_len {
                                 my_dsd.audio_length
                             } else {
@@ -156,19 +172,19 @@ impl InputContext {
                             };
 
                         // Channels from container (fallback to CLI on nonsense)
-                        ctx.channels_num = if my_dsd.channel_count > 0 {
+                        self.channels_num = if my_dsd.channel_count > 0 {
                             my_dsd.channel_count
                         } else {
-                            ctx.channels_num
+                            self.channels_num
                         };
 
                         // Bit order from container
-                        ctx.lsbit_first = if my_dsd.is_lsb { 1 } else { 0 };
+                        self.lsbit_first = if my_dsd.is_lsb { 1 } else { 0 };
 
                         // Interleaving from container (DSF = block-interleaved → treat as planar per frame)
                         match my_dsd.container_format {
-                            ContainerFormat::Dsdiff => ctx.interleaved = true,
-                            ContainerFormat::Dsf => ctx.interleaved = false,
+                            ContainerFormat::Dsdiff => self.interleaved = true,
+                            ContainerFormat::Dsf => self.interleaved = false,
                         }
 
                         // Block size from container. Recompute stride/offset.
@@ -178,39 +194,42 @@ impl InputContext {
                         // representing the block size per channel and override any user
                         // supplied or default values for block size.
                         if my_dsd.block_size > DFF_BLOCK_SIZE {
-                            ctx.block_size = my_dsd.block_size;
+                            self.block_size = my_dsd.block_size;
                         }
-                        ctx.set_block_size(ctx.block_size);
+                        self.set_block_size(self.block_size);
 
                         // DSD rate from container sample_rate if valid (2.8224MHz → 1, 5.6448MHz → 2)
                         if my_dsd.sample_rate == 2_822_400 {
-                            ctx.dsd_rate = 1;
+                            self.dsd_rate = 1;
                         } else if my_dsd.sample_rate == 5_644_800 {
-                            ctx.dsd_rate = 2;
+                            self.dsd_rate = 2;
                         } else if my_dsd.sample_rate > 0 && my_dsd.sample_rate % 2_822_400 == 0 {
-                            ctx.dsd_rate = (my_dsd.sample_rate / 2_822_400) as i32;
+                            self.dsd_rate = (my_dsd.sample_rate / 2_822_400) as i32;
                         } else {
                             // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
                             eprintln!(
                                 "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
-                                my_dsd.sample_rate, ctx.dsd_rate
+                                my_dsd.sample_rate, self.dsd_rate
                             );
                         }
 
-                        ctx.verbose(
-                            &format!("Audio length in bytes: {}", ctx.audio_length),
+                        self.verbose(
+                            &format!("Audio length in bytes: {}", self.audio_length),
                             true,
                         );
                         eprintln!(
                             "Container: sr={}Hz channels={} interleaved={} block_size/ch={}",
-                            my_dsd.sample_rate, ctx.channels_num, ctx.interleaved, ctx.block_size,
+                            my_dsd.sample_rate,
+                            self.channels_num,
+                            self.interleaved,
+                            self.block_size,
                         );
                     }
                     Err(e) => {
                         eprintln!("Container open failed ({})", e);
                         if let Ok(meta) = std::fs::metadata(&path) {
-                            ctx.audio_pos = 0;
-                            ctx.audio_length = meta.len();
+                            self.audio_pos = 0;
+                            self.audio_length = meta.len();
                         } else {
                             return Err("Failed to open input file metadata".into());
                         }
@@ -219,20 +238,19 @@ impl InputContext {
             } else {
                 // Raw DSD
                 if let Ok(meta) = std::fs::metadata(&path) {
-                    ctx.audio_pos = 0;
-                    ctx.audio_length = meta.len();
-                    ctx.file = Some(File::open(&path)?);
+                    self.audio_pos = 0;
+                    self.audio_length = meta.len();
+                    self.file = Some(File::open(&path)?);
                     eprintln!("Treating input as raw DSD (no container)");
                 }
             }
         } else {
             return Err("No readable input".into());
         }
-
-        Ok(ctx)
+        Ok(())
     }
 
-    pub fn set_block_size(&mut self, block_size_in: u32) {
+    fn set_block_size(&mut self, block_size_in: u32) {
         self.block_size = block_size_in;
         self.dsd_chan_offset = if self.interleaved {
             1
