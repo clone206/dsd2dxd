@@ -126,6 +126,8 @@ pub fn find_dsd_files(paths: &[PathBuf], recurse: bool) -> io::Result<Vec<PathBu
             file_paths.push(path.canonicalize()?.clone());
         }
     }
+    file_paths.sort();
+    file_paths.dedup();
     Ok(file_paths)
 }
 
