@@ -17,7 +17,7 @@
 */
 
 use id3::Tag;
-use std::{fs::File, path::Path};
+use std::{fs::File, path::{Path, PathBuf}};
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,10 +43,8 @@ pub struct Dsd {
 }
 
 impl Dsd {
-    pub fn new(path: String) -> Result<Self, Box<dyn std::error::Error>> {
-        let lower = path.to_ascii_lowercase();
-
-        if lower.ends_with(".dsf") {
+    pub fn new(path: &PathBuf, container_format: ContainerFormat) -> Result<Self, Box<dyn std::error::Error>> {
+        if container_format == ContainerFormat::Dsf{
             use dsf::DsfFile;
             let file_path = Path::new(&path);
             let mut dsf_file = DsfFile::open(file_path)?;
@@ -66,7 +64,7 @@ impl Dsd {
                 file,
                 tag: dsf_file.id3_tag().clone(),
             })
-        } else if lower.ends_with(".dff") {
+        } else if container_format == ContainerFormat::Dsdiff {
             use dff::model::*;
             use dff::DffFile;
             let file_path = Path::new(&path);

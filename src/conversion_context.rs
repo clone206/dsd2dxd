@@ -434,7 +434,7 @@ impl ConversionContext {
 
         let stem = self
             .in_ctx
-            .file_path
+            .in_path
             .as_ref()
             .and_then(|p| p.file_stem())
             .and_then(|s| s.to_str())

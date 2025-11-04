@@ -16,7 +16,7 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use crate::dsd::{ContainerFormat, Dsd, DFF_BLOCK_SIZE};
+use crate::dsd::{ContainerFormat, DFF_BLOCK_SIZE, Dsd};
 use std::error::Error;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -27,8 +27,7 @@ pub struct InputContext {
     pub interleaved: bool,
     pub std_in: bool,
     pub dsd_rate: i32,
-    pub input: String,
-    pub file_path: Option<PathBuf>,
+    pub in_path: Option<PathBuf>,
     pub parent_path: Option<PathBuf>,
 
     pub dsd_stride: u32,
@@ -43,12 +42,13 @@ pub struct InputContext {
 
 impl InputContext {
     pub fn new(
-        input_file: String,
+        in_path: Option<PathBuf>,
         format: char,
         endian: char,
         dsd_rate: i32,
         block_size: u32,
         channels: u32,
+        std_in: bool,
         verbose: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let lsbit_first = match endian.to_ascii_lowercase() {
@@ -63,13 +63,29 @@ impl InputContext {
             _ => return Err("No fmt detected!".into()),
         };
 
-        // Determine input kind early
-        let lower_name = input_file.to_ascii_lowercase();
-        let is_container = lower_name.ends_with(".dsf") || lower_name.ends_with(".dff");
-        let is_stdin = input_file == "-";
+        let parent_path = if let Some(path) = &in_path {
+            if path.is_dir() {
+                return Err("Input path cannot be a directory".into());
+            }
+            Some(path.parent().unwrap_or(Path::new("")).to_path_buf())
+        } else {
+            None
+        };
+
+        let container_format = if let Some(path) = &in_path
+            && let Some(ext_str) = path.extension()
+        {
+            match ext_str.to_ascii_lowercase().to_string_lossy().as_ref() {
+                "dsf" => Some(ContainerFormat::Dsf),
+                "dff" => Some(ContainerFormat::Dsdiff),
+                _ => None,
+            }
+        } else {
+            None
+        };
 
         // Only enforce CLI dsd_rate for stdin or raw inputs
-        if (is_stdin || !is_container) && ![1, 2, 4].contains(&dsd_rate) {
+        if (std_in || !container_format.is_some()) && ![1, 2, 4].contains(&dsd_rate) {
             return Err("Unsupported DSD input rate.".into());
         }
 
@@ -77,11 +93,10 @@ impl InputContext {
             verbose_mode: verbose,
             lsbit_first,
             interleaved,
-            std_in: is_stdin,
+            std_in,
             dsd_rate,
-            input: input_file.clone(),
-            file_path: None,
-            parent_path: None,
+            in_path,
+            parent_path,
             dsd_stride: 0,
             dsd_chan_offset: 0,
             channels_num: channels,
@@ -94,18 +109,22 @@ impl InputContext {
 
         ctx.set_block_size(block_size);
 
-        if !ctx.std_in {
-            let path = PathBuf::from(&input_file);
-            ctx.file_path = Some(path.clone());
-            ctx.parent_path = Some(path.parent().unwrap_or(Path::new("")).to_path_buf());
-
-            ctx.verbose(
-                &format!(
-                    "Input file basename: {}",
-                    path.file_stem().unwrap_or_default().to_string_lossy()
-                ),
-                true,
+        if ctx.std_in {
+            // Handle stdin case
+            eprintln!("Reading from stdin");
+            ctx.audio_length = u64::MAX;
+            ctx.audio_pos = 0;
+            eprintln!(
+                "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
+                ctx.channels_num,
+                if ctx.lsbit_first == 1 {
+                    "true"
+                } else {
+                    "false"
+                },
+                ctx.interleaved
             );
+        } else if let Some(path) = &ctx.in_path {
             ctx.verbose(
                 &format!(
                     "Parent path: {}",
@@ -114,13 +133,10 @@ impl InputContext {
                 true,
             );
 
-            ctx.verbose(&format!("Opening input file: {}", input_file), true);
+            ctx.verbose(&format!("Opening input file: {}", ctx.in_path.clone().unwrap().to_string_lossy()), true);
 
-            let lower_name = input_file.to_ascii_lowercase();
-            let use_container = lower_name.ends_with(".dsf") || lower_name.ends_with(".dff");
-
-            if use_container {
-                match Dsd::new(input_file.clone()) {
+            if let Some(format) = container_format {
+                match Dsd::new(path, format) {
                     Ok(my_dsd) => {
                         // Pull raw fields
                         let file_len = my_dsd.file.metadata()?.len();
@@ -156,7 +172,7 @@ impl InputContext {
                         }
 
                         // Block size from container. Recompute stride/offset.
-                        // For dff, which always has a block size per channel of 1, 
+                        // For dff, which always has a block size per channel of 1,
                         // we accept the user-supplied or default block size and calculate
                         // the stride accordingly. For DSF, we treat the block size as
                         // representing the block size per channel and override any user
@@ -187,15 +203,12 @@ impl InputContext {
                         );
                         eprintln!(
                             "Container: sr={}Hz channels={} interleaved={} block_size/ch={}",
-                            my_dsd.sample_rate,
-                            ctx.channels_num,
-                            ctx.interleaved,
-                            ctx.block_size,
+                            my_dsd.sample_rate, ctx.channels_num, ctx.interleaved, ctx.block_size,
                         );
                     }
                     Err(e) => {
                         eprintln!("Container open failed ({})", e);
-                        if let Ok(meta) = std::fs::metadata(&input_file) {
+                        if let Ok(meta) = std::fs::metadata(&path) {
                             ctx.audio_pos = 0;
                             ctx.audio_length = meta.len();
                         } else {
@@ -205,22 +218,15 @@ impl InputContext {
                 }
             } else {
                 // Raw DSD
-                if let Ok(meta) = std::fs::metadata(&input_file) {
+                if let Ok(meta) = std::fs::metadata(&path) {
                     ctx.audio_pos = 0;
                     ctx.audio_length = meta.len();
-                    ctx.file = Some(File::open(&input_file)?);
+                    ctx.file = Some(File::open(&path)?);
                     eprintln!("Treating input as raw DSD (no container)");
                 }
             }
         } else {
-            // Handle stdin case
-            eprintln!("Reading from stdin");
-            ctx.audio_length = u64::MAX;
-            ctx.audio_pos = 0;
-            eprintln!(
-                "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
-                ctx.channels_num, if ctx.lsbit_first == 1 { "true" } else { "false" }, ctx.interleaved
-            );
+            return Err("No readable input".into());
         }
 
         Ok(ctx)
@@ -228,7 +234,11 @@ impl InputContext {
 
     pub fn set_block_size(&mut self, block_size_in: u32) {
         self.block_size = block_size_in;
-        self.dsd_chan_offset = if self.interleaved { 1 } else { block_size_in as i32 };
+        self.dsd_chan_offset = if self.interleaved {
+            1
+        } else {
+            block_size_in as i32
+        };
         self.dsd_stride = if self.interleaved {
             self.channels_num
         } else {

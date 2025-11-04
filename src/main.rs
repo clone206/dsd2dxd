@@ -157,15 +157,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
+        let is_stdin = input == "-";
+
+        let in_path = if !is_stdin {
+            Some(std::path::PathBuf::from(&input))
+        } else {
+            None
+        };
+
         verbose(&format!("Input: {}", input), true);
 
         let in_ctx = InputContext::new(
-            input.clone(),
+            in_path,
             cli.format,
             cli.endianness,
             cli.input_rate,
             cli.block_size.unwrap_or(4096),
             cli.channels.unwrap_or(2),
+            is_stdin,
             cli.verbose,
         )?;
 
