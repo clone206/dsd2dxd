@@ -101,16 +101,26 @@ impl DsdContainer {
     }
 }
 
-/// Recursively find all DSD files in the provided paths
-pub fn find_files_recursive(paths: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
+/// Find all DSD files in the provided paths, optionally recursing into directories
+pub fn find_dsd_files(paths: &[PathBuf], recurse: bool) -> io::Result<Vec<PathBuf>> {
     let mut file_paths = Vec::new();
     for path in paths {
         if path.is_dir() {
-            // Recurse into all directory entries
-            let entries: Vec<PathBuf> = fs::read_dir(path)?
-                .filter_map(|e| e.ok().map(|d| d.path()))
-                .collect();
-            file_paths.extend(find_files_recursive(&entries)?);
+            if recurse {
+                // Recurse into all directory entries
+                let entries: Vec<PathBuf> = fs::read_dir(path)?
+                    .filter_map(|e| e.ok().map(|d| d.path()))
+                    .collect();
+                file_paths.extend(find_dsd_files(&entries, recurse)?);
+            } else {
+                // Non-recursive: include only top-level files that are DSD
+                for entry in fs::read_dir(path)? {
+                    let entry_path = entry?.path();
+                    if entry_path.is_file() && is_dsd_file(&entry_path) {
+                        file_paths.push(entry_path.canonicalize()?.clone());
+                    }
+                }
+            }
         } else if path.is_file() && is_dsd_file(path) {
             // Single push site for matching files
             file_paths.push(path.canonicalize()?.clone());

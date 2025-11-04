@@ -113,6 +113,10 @@ struct Cli {
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
 
+    /// Recurse into directories when the supplied input paths include folders
+    #[arg(short = 'R', long = "recurse")]
+    recurse: bool,
+
     /// Input files/folders (use - for stdin)
     #[arg(name = "FILES")]
     files: Vec<String>,
@@ -193,7 +197,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         })
         .collect::<Vec<PathBuf>>();
 
-    for path in dsd::find_files_recursive(&paths)? {
+    for path in dsd::find_dsd_files(&paths, cli.recurse)? {
         do_conversion(Some(path))?;
     }
 
