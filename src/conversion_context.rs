@@ -751,15 +751,16 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
 
     #[inline(always)]
     fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
-        let mut result = value;
-        if value < min {
-            result = min;
+        return if value < min {
             self.update_clip_stats(true, false);
+            min
         } else if value > max {
-            result = max;
             self.update_clip_stats(false, true);
-        }
-        result
+            max
+        } else {
+            self.update_clip_stats(false, false);
+            value
+        };
     }
 
     #[inline(always)]
