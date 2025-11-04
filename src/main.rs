@@ -17,7 +17,7 @@
 */
 
 use clap::Parser;
-use std::error::Error;
+use std::{error::Error, fs, io, path::PathBuf};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -33,6 +33,8 @@ pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
 pub use output::OutputContext;
+
+use crate::dsd::DSD_EXTENSIONS;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -121,15 +123,25 @@ struct Cli {
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    let verbose = |message: &str, new_line: bool| {
+    let verbose = |message: &str| {
         if cli.verbose {
-            if new_line {
-                eprintln!("{}", message);
-            } else {
-                eprint!("{}", message);
-            }
+            eprintln!("{}", message);
         }
     };
+
+    let dither_type = cli
+        .dither_type
+        .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
+
+    let out_ctx = OutputContext::new(
+        cli.bit_depth,
+        cli.output,
+        cli.level,
+        cli.output_rate,
+        cli.path,
+    )?;
+    let dither = Dither::new(dither_type)?;
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     let inputs = if cli.files.is_empty() {
         vec!["-".to_string()]
@@ -137,44 +149,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli.files.clone()
     };
 
-    let dither_type = cli
-        .dither_type
-        .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
-
-    let out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate, cli.path)?;
-    let dither = Dither::new(dither_type)?;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-
-    for input in inputs {
-        if input.contains('*') {
-            verbose(
-                &format!(
-                    "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
-                    input
-                ),
-                true,
-            );
-            continue;
-        }
-
-        let is_stdin = input == "-";
-
-        let in_path = if !is_stdin {
-            Some(std::path::PathBuf::from(&input))
-        } else {
-            None
-        };
-
-        verbose(&format!("Input: {}", input), true);
-
+    let do_conversion = |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
         let in_ctx = InputContext::new(
-            in_path,
+            path.clone(),
             cli.format,
             cli.endianness,
             cli.input_rate,
             cli.block_size.unwrap_or(4096),
             cli.channels.unwrap_or(2),
-            is_stdin,
+            path.is_none(),
             cli.verbose,
         )?;
 
@@ -187,8 +170,67 @@ fn main() -> Result<(), Box<dyn Error>> {
             cli.append_rate,
             cwd.clone(),
         )?;
-        conv_ctx.do_conversion()?;
+        conv_ctx.do_conversion()
+    };
+
+    // Filter to remove any glob patterns and handle stdin, yielding all paths
+    let paths = inputs
+        .iter()
+        .filter_map(|input| {
+            if input.contains('*') {
+                verbose(&format!(
+                    "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
+                    input
+                ));
+                None
+            } else if input == "-" {
+                if let Err(e) = do_conversion(None) {
+                    panic!("Error processing stdin: {}", e);
+                }
+                None
+            } else {
+                verbose(&format!("Input: {}", input));
+                Some(PathBuf::from(input))
+            }
+        })
+        .collect::<Vec<PathBuf>>();
+
+    let file_paths = find_dsd_files_recursive(&paths)?;
+
+    for path in file_paths {
+        do_conversion(Some(path))?;
     }
 
     Ok(())
+}
+
+fn find_dsd_files_recursive(paths: &[PathBuf]) -> io::Result<Vec<PathBuf>> {
+    let mut file_paths = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            for entry in fs::read_dir(path)? {
+                let entry_path = entry?.path();
+                if entry_path.is_dir() {
+                    // Recursively call for subdirectories
+                    file_paths.extend(find_dsd_files_recursive(&[entry_path])?);
+                } else if entry_path.is_file() && is_dsd_file(&entry_path) {
+                    file_paths.push(entry_path);
+                }
+            }
+        } else if path.is_file() && is_dsd_file(path) {
+            file_paths.push(path.clone());
+        }
+    }
+    Ok(file_paths)
+}
+
+pub fn is_dsd_file(path: &PathBuf) -> bool {
+    if path.is_file()
+        && let Some(ext) = path.extension()
+        && let ext_lower = ext.to_ascii_lowercase().to_string_lossy()
+        && DSD_EXTENSIONS.contains(&ext_lower.as_ref())
+    {
+        return true;
+    }
+    false
 }

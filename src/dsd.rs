@@ -30,6 +30,8 @@ pub const DSD_64_RATE: u32 = 2822400;
 pub const DFF_BLOCK_SIZE: u32 = 1;
 pub const DSF_BLOCK_SIZE: u32 = 4096;
 
+pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
+
 pub struct DsdContainer {
     pub audio_length: u64,
     pub audio_pos: u64,

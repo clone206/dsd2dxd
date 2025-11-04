@@ -652,30 +652,17 @@ impl ConversionContext {
     }
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
-        // DSD128 (2x) explicit allow list
-        if self.in_ctx.dsd_rate == 2 && ![16, 32, 64, 147, 294].contains(&self.decim_ratio) {
-            return Err(
-                "Only decimation value of 16, 32, 64, 147, or 294 allowed with DSD128 input."
-                    .into(),
-            );
-        }
-        // DSD64 (1x) allow list (8/16/32 always; 147 only with 'E')
-        if self.in_ctx.dsd_rate == 1
-            && !([8, 16, 32].contains(&self.decim_ratio)
-                || (self.decim_ratio == 147 && self.filt_type == 'E'))
+        if let Some(path) = &self.in_ctx.in_path
+            && !path.canonicalize()?.starts_with(&self.base_dir)
         {
-            return Err("With DSD64 input, allowed decimation values are 8, 16, 32, or 147 (with Equiripple filter).".into());
+            return Err(format!(
+                "Input file '{}' is outside the base directory of '{}'.",
+                path.display(),
+                self.base_dir.display()
+            )
+            .into());
         }
-        // 294:1 constraint (must be E; allowed for DSD128 and DSD256)
-        if self.decim_ratio == 294
-            && !(self.filt_type == 'E' && (self.in_ctx.dsd_rate == 2 || self.in_ctx.dsd_rate == 4))
-        {
-            return Err("294:1 decimation is only supported for DSD128 or DSD256 with the Equiripple filter.".into());
-        }
-        // 147:1 constraint (must be E and one of the allowed dsd rates: 64/128/256)
-        if self.decim_ratio == 147 && self.filt_type != 'E' {
-            return Err("147:1 decimation is only supported with the Equiripple filter.".into());
-        }
+
         Ok(())
     }
 
