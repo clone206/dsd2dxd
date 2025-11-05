@@ -133,8 +133,7 @@ impl OutputContext {
         if self.bits == 32 {
             self.float_file = Some(AudioFile::new());
             self.set_file_params_float();
-        }
-        else {
+        } else {
             self.int_file = Some(AudioFile::new());
             self.set_file_params_int();
         }
@@ -177,7 +176,7 @@ impl OutputContext {
         }
     }
 
-    pub fn save_file(&self, out_path: &String) -> Result<(), String> {
+    pub fn save_file(&self, out_path: &PathBuf) -> Result<(), String> {
         match self.output.to_ascii_lowercase() {
             'w' => {
                 self.save_and_print_file(out_path, AudioFileFormat::Wave)?;
@@ -196,16 +195,17 @@ impl OutputContext {
     /// Save audio file, forcibly overwriting any existing file at the target path
     pub fn save_and_print_file(
         &self,
-        file_name: &str,
+        out_path: &PathBuf,
         fmt: AudioFileFormat,
     ) -> Result<(), String> {
-        let path = Path::new(file_name);
+        let path = out_path.as_path();
         if path.exists() {
             // Best effort remove; propagate error if it fails (e.g. permission issues)
             std::fs::remove_file(path).map_err(|e| {
                 format!(
                     "Failed to remove existing file '{}': {}",
-                    file_name, e
+                    out_path.to_string_lossy(),
+                    e
                 )
             })?;
         }
@@ -213,7 +213,7 @@ impl OutputContext {
         match (self.bits == 32, &self.float_file, &self.int_file) {
             (true, Some(file), _) => {
                 file.save(
-                    file_name,
+                    out_path,
                     fmt,
                     self.vorbis.clone(),
                     self.pictures.clone(),
@@ -223,7 +223,7 @@ impl OutputContext {
             }
             (false, _, Some(file)) => {
                 file.save(
-                    file_name,
+                    out_path,
                     fmt,
                     self.vorbis.clone(),
                     self.pictures.clone(),
@@ -234,7 +234,7 @@ impl OutputContext {
             _ => return Err("No file initialized".to_string()),
         }
 
-        eprintln!("Wrote to file: {}", file_name);
+        eprintln!("Wrote to file: {}", out_path.to_string_lossy());
         Ok(())
     }
 
@@ -290,8 +290,7 @@ impl OutputContext {
             if let Some(file) = &mut self.float_file {
                 file.samples[channel].push(samp.to_f32());
             }
-        }
-        else {
+        } else {
             if let Some(file) = &mut self.int_file {
                 file.samples[channel].push(samp.to_i32());
             }

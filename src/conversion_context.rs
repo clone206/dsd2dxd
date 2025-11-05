@@ -29,6 +29,7 @@ use flac_codec::metadata;
 use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::path::PathBuf;
@@ -129,8 +130,7 @@ impl ConversionContext {
                 ),
                 true,
             );
-        }
-        else if let Some(taps) =
+        } else if let Some(taps) =
             select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
         {
             ctx.precalc_decims = Some(
@@ -151,8 +151,7 @@ impl ConversionContext {
                 ),
                 true,
             );
-        }
-        else {
+        } else {
             return Err(format!(
                 "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
                 ctx.decim_ratio, ctx.filt_type, dsd_rate
@@ -229,8 +228,7 @@ impl ConversionContext {
                 );
             }
             Ok(Box::new(file))
-        }
-        else {
+        } else {
             Ok(Box::new(io::stdin().lock()))
         }
     }
@@ -245,12 +243,10 @@ impl ConversionContext {
         let to_read: usize = if !self.in_ctx.std_in {
             if bytes_remaining >= frame_size as u64 {
                 frame_size
-            }
-            else {
+            } else {
                 bytes_remaining as usize
             }
-        }
-        else {
+        } else {
             frame_size
         };
 
@@ -276,8 +272,7 @@ impl ConversionContext {
 
         let mut bytes_remaining: u64 = if reading_from_file {
             self.in_ctx.audio_length
-        }
-        else {
+        } else {
             frame_size as u64
         };
 
@@ -360,8 +355,7 @@ impl ConversionContext {
                     let mut q = self.float_data[s];
                     self.scale_and_dither(&mut q);
                     self.out_ctx.pack_float(&mut out_idx, q);
-                }
-                else {
+                } else {
                     // Integer path: dither + clamp + write_int
                     let mut qin: f64 = self.float_data[s];
                     self.scale_and_dither(&mut qin);
@@ -370,15 +364,13 @@ impl ConversionContext {
                 }
                 pcm_pos += self.in_ctx.channels_num as usize * bps;
             }
-        }
-        else if self.out_ctx.bits == 32 {
+        } else if self.out_ctx.bits == 32 {
             for s in 0..samples_used_per_chan {
                 let mut q = self.float_data[s];
                 self.scale_and_dither(&mut q);
                 self.out_ctx.push_samp(q as f32, chan);
             }
-        }
-        else {
+        } else {
             for s in 0..samples_used_per_chan {
                 let mut qin: f64 = self.float_data[s];
                 self.scale_and_dither(&mut qin);
@@ -415,8 +407,7 @@ impl ConversionContext {
         let lsb_first = self.in_ctx.lsbit_first != 0;
         let stride = if dsd_stride >= 0 {
             dsd_stride as usize
-        }
-        else {
+        } else {
             0
         };
         let mut chan_bytes = Vec::with_capacity(bytes_per_channel);
@@ -433,8 +424,7 @@ impl ConversionContext {
 
         if lm_mode {
             // LM path: use rational resampler, honor actual produced count
-            let Some(resamps) = self.eq_lm_resamplers.as_mut()
-            else {
+            let Some(resamps) = self.eq_lm_resamplers.as_mut() else {
                 return 0;
             };
             let rs = &mut resamps[chan];
@@ -443,11 +433,9 @@ impl ConversionContext {
                 true,
                 &mut self.float_data,
             );
-        }
-        else {
+        } else {
             // Integer path: use precalc decimator; conventionally return the estimate
-            let Some(ref mut v) = self.precalc_decims
-            else {
+            let Some(ref mut v) = self.precalc_decims else {
                 return 0;
             };
             let dec = &mut v[chan];
@@ -455,56 +443,66 @@ impl ConversionContext {
         }
     }
 
-    fn get_output_filename(&self) -> String {
+    fn get_out_filename_path(&self) -> PathBuf {
         let ext = match self.out_ctx.output.to_ascii_lowercase() {
             'w' => "wav",
             'a' => "aif",
             'f' => "flac",
             _ => "out",
         };
-        let suffix = if let Some((uscore, _dot)) =
+        let suffix: OsString = if let Some((uscore, _dot)) =
             self.abbrev_rate_pair(self.out_ctx.rate as u32)
         {
-            format!("_{}", uscore)
-        }
-        else {
-            String::new()
+            OsString::from(format!("_{}", uscore))
+        } else {
+            OsString::from("")
         };
+        let suffix: &OsStr = suffix.as_os_str();
+
+        let mut filename: OsString = OsString::new();
 
         if self.in_ctx.std_in {
-            let base = if suffix.is_empty() {
-                "output".to_string()
+            filename.push("output");
+            if !suffix.is_empty() {
+                filename.push(suffix);
             }
-            else {
-                format!("output{}", suffix)
-            };
-            return format!("{}.{}", base, ext);
+            filename.push(format!(".{}", ext));
+            return PathBuf::from(filename);
         }
 
-        let stem = self
-            .in_ctx
-            .in_path
-            .as_ref()
-            .and_then(|p| p.file_stem())
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
+        filename.push(
+            self.in_ctx
+                .in_path
+                .clone()
+                .and_then(|p| {
+                    p.file_stem().map(|stem| stem.to_os_string())
+                })
+                .unwrap_or_else(|| OsString::from("output")),
+        );
 
-        return if suffix.is_empty() {
-            format!("{}.{}", stem, ext)
+        self.verbose(
+            &format!(
+                "Derived base filename: {}",
+                filename.to_string_lossy()
+            ),
+            true,
+        );
+
+        if !suffix.is_empty() {
+            filename.push(suffix);
         }
-        else {
-            format!("{}{}.{}", stem, suffix, ext)
-        };
+        filename.push(format!(".{}", ext));
+        let file_path = PathBuf::from(&filename);
+        file_path
     }
 
     fn derive_output_dir(
         &self,
         parent: &Path,
-    ) -> Result<String, Box<dyn Error>> {
-        return if self.in_ctx.std_in {
-            Ok("".to_string())
-        }
-        else if let Some(ref out_dir) = self.out_ctx.path {
+    ) -> Result<PathBuf, Box<dyn Error>> {
+        if self.in_ctx.std_in {
+            Ok(PathBuf::from(""))
+        } else if let Some(ref out_dir) = self.out_ctx.path {
             let rel =
                 parent.strip_prefix(&self.base_dir).unwrap_or(parent);
             let full_dir = Path::new(out_dir).join(rel);
@@ -512,11 +510,10 @@ impl ConversionContext {
             if !full_dir.exists() {
                 std::fs::create_dir_all(&full_dir)?;
             }
-            Ok(full_dir.to_string_lossy().into_owned())
+            Ok(full_dir)
+        } else {
+            Ok(parent.to_path_buf())
         }
-        else {
-            Ok(parent.to_string_lossy().into_owned())
-        };
     }
 
     fn copy_artwork(
@@ -536,8 +533,7 @@ impl ConversionContext {
 
             if !source_path.is_file() {
                 continue;
-            }
-            else if let Some(ext) = source_path
+            } else if let Some(ext) = source_path
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(|s| s.to_ascii_lowercase())
@@ -587,16 +583,13 @@ impl ConversionContext {
             .unwrap_or(Path::new(""));
 
         let out_dir = self.derive_output_dir(parent)?;
-        let out_filename = self.get_output_filename();
+        let out_filename = self.get_out_filename_path();
 
-        let out_path = Path::new(&out_dir)
-            .join(&out_filename)
-            .to_string_lossy()
-            .into_owned();
+        let out_path = out_dir.join(&out_filename);
 
-        self.verbose(&format!("Derived output path: {}", out_path), true);
+        self.verbose(&format!("Derived output path: {}", out_path.display()), true);
 
-        match self.copy_artwork(parent, &Path::new(&out_dir)) {
+        match self.copy_artwork(parent, &out_dir) {
             Ok((_, total)) if total == 0 => {
                 self.verbose("No artwork files to copy.", true);
             }
@@ -630,13 +623,11 @@ impl ConversionContext {
             self.out_ctx.save_file(&out_path)?;
 
             if self.out_ctx.output.to_ascii_lowercase() != 'f' {
-                let path_out = Path::new(&out_path);
                 // Write ID3 tags directly
                 self.verbose("Writing ID3 tags to file.", true);
-                tag.write_to_path(path_out, tag.version())?;
+                tag.write_to_path(&out_path, tag.version())?;
             }
-        }
-        else {
+        } else {
             self.verbose(
                 "Input file has no tag; skipping tag copy.",
                 true,
@@ -692,13 +683,11 @@ impl ConversionContext {
                 == id3::frame::PictureType::CoverFront
             {
                 flac_codec::metadata::PictureType::FrontCover
-            }
-            else if pic.picture_type
+            } else if pic.picture_type
                 == id3::frame::PictureType::CoverBack
             {
                 flac_codec::metadata::PictureType::BackCover
-            }
-            else {
+            } else {
                 continue;
             };
             self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
@@ -754,8 +743,7 @@ impl ConversionContext {
             (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
         let audio_seconds = if dsd_base_rate > 0 {
             (bits_per_chan as f64) / (dsd_base_rate as f64)
-        }
-        else {
+        } else {
             0.0
         };
         let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
@@ -791,8 +779,7 @@ impl ConversionContext {
         let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
         let pct = if expected_frames > 0 {
             (diff_frames as f64) * 100.0 / (expected_frames as f64)
-        }
-        else {
+        } else {
             0.0
         };
         eprintln!("\n[DIAG] Output length accounting:");
@@ -840,12 +827,10 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         return if value < min {
             self.update_clip_stats(true, false);
             min
-        }
-        else if value > max {
+        } else if value > max {
             self.update_clip_stats(false, true);
             max
-        }
-        else {
+        } else {
             self.update_clip_stats(false, false);
             value
         };
@@ -855,8 +840,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     fn my_round(x: f64) -> i64 {
         if x < 0.0 {
             (x - 0.5).floor() as i64
-        }
-        else {
+        } else {
             (x + 0.5).floor() as i64
         }
     }
@@ -865,8 +849,7 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         if self.verbose_mode {
             if new_line {
                 eprintln!("{}", message);
-            }
-            else {
+            } else {
                 eprint!("{}", message);
             }
         }
