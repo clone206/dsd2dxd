@@ -129,12 +129,18 @@ impl ConversionContext {
                 ),
                 true,
             );
-        } else if let Some(taps) = select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio) {
+        }
+        else if let Some(taps) =
+            select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
+        {
             ctx.precalc_decims = Some(
                 (0..channels)
                     .map(|_| {
-                        BytePrecalcDecimator::new(taps, ctx.decim_ratio as u32)
-                            .expect("Precalc BytePrecalcDecimator init failed")
+                        BytePrecalcDecimator::new(
+                            taps,
+                            ctx.decim_ratio as u32,
+                        )
+                        .expect("Precalc BytePrecalcDecimator init failed")
                     })
                     .collect(),
             );
@@ -145,7 +151,8 @@ impl ConversionContext {
                 ),
                 true,
             );
-        } else {
+        }
+        else {
             return Err(format!(
                 "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
                 ctx.decim_ratio, ctx.filt_type, dsd_rate
@@ -193,14 +200,22 @@ impl ConversionContext {
         Ok(())
     }
 
-    fn get_reader(&mut self, reading_from_file: bool) -> Result<Box<dyn Read>, Box<dyn Error>> {
+    fn get_reader(
+        &mut self,
+        reading_from_file: bool,
+    ) -> Result<Box<dyn Read>, Box<dyn Error>> {
         if reading_from_file {
             // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
             let mut file = self
                 .in_ctx
                 .file
                 .as_ref()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Missing input file handle"))?
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        "Missing input file handle",
+                    )
+                })?
                 .try_clone()?;
 
             if self.in_ctx.audio_pos > 0 {
@@ -214,7 +229,8 @@ impl ConversionContext {
                 );
             }
             Ok(Box::new(file))
-        } else {
+        }
+        else {
             Ok(Box::new(io::stdin().lock()))
         }
     }
@@ -229,18 +245,21 @@ impl ConversionContext {
         let to_read: usize = if !self.in_ctx.std_in {
             if bytes_remaining >= frame_size as u64 {
                 frame_size
-            } else {
+            }
+            else {
                 bytes_remaining as usize
             }
-        } else {
+        }
+        else {
             frame_size
         };
 
         // Read one frame identically for stdin and file
-        let read_size: usize = match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
-            Ok(()) => to_read,
-            Err(e) => return Err(Box::new(e)),
-        };
+        let read_size: usize =
+            match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
+                Ok(()) => to_read,
+                Err(e) => return Err(Box::new(e)),
+            };
         // Track bytes processed (all channels)
         self.total_dsd_bytes_processed += read_size as u64;
 
@@ -249,20 +268,24 @@ impl ConversionContext {
 
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
-        let frame_size: usize = (self.in_ctx.block_size as usize) * channels;
+        let frame_size: usize =
+            (self.in_ctx.block_size as usize) * channels;
 
         // Open a unified reader (stdin or file), seeking if needed
         let reading_from_file = !self.in_ctx.std_in;
 
         let mut bytes_remaining: u64 = if reading_from_file {
             self.in_ctx.audio_length
-        } else {
+        }
+        else {
             frame_size as u64
         };
 
         loop {
             // Read one frame identically for stdin and file
-            let read_size: usize = match self.read_frame(bytes_remaining, frame_size) {
+            let read_size: usize = match self
+                .read_frame(bytes_remaining, frame_size)
+            {
                 Ok(s) => s,
                 Err(e) => {
                     if let Some(io_err) = e.downcast_ref::<io::Error>() {
@@ -279,8 +302,9 @@ impl ConversionContext {
 
             if self.verbose_mode {
                 self.diag_bits_in += (bytes_per_channel as u64) * 8;
-                self.diag_expected_frames_floor =
-                    (self.diag_bits_in * self.upsample_ratio as u64) / self.decim_ratio as u64;
+                self.diag_expected_frames_floor = (self.diag_bits_in
+                    * self.upsample_ratio as u64)
+                    / self.decim_ratio as u64;
             }
 
             // Track actual frames produced per channel (set by channel 0)
@@ -288,13 +312,15 @@ impl ConversionContext {
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
-                samples_used_per_chan = self.process_channel(chan, bytes_per_channel);
+                samples_used_per_chan =
+                    self.process_channel(chan, bytes_per_channel);
                 self.write_to_buffer(samples_used_per_chan, chan);
             }
 
             // Derive actual byte count (may differ from estimate in rational path)
-            let pcm_frame_bytes =
-                samples_used_per_chan * channels * (self.out_ctx.bytes_per_sample as usize);
+            let pcm_frame_bytes = samples_used_per_chan
+                * channels
+                * (self.out_ctx.bytes_per_sample as usize);
 
             if self.verbose_mode {
                 self.diag_frames_out += samples_used_per_chan as u64;
@@ -317,7 +343,11 @@ impl ConversionContext {
     }
 
     #[inline(always)]
-    fn write_to_buffer(&mut self, samples_used_per_chan: usize, chan: usize) {
+    fn write_to_buffer(
+        &mut self,
+        samples_used_per_chan: usize,
+        chan: usize,
+    ) {
         // Output / packing for channel
         if self.out_ctx.output == 's' {
             // Interleave into pcm_data (handle float vs integer separately)
@@ -330,7 +360,8 @@ impl ConversionContext {
                     let mut q = self.float_data[s];
                     self.scale_and_dither(&mut q);
                     self.out_ctx.pack_float(&mut out_idx, q);
-                } else {
+                }
+                else {
                     // Integer path: dither + clamp + write_int
                     let mut qin: f64 = self.float_data[s];
                     self.scale_and_dither(&mut qin);
@@ -339,13 +370,15 @@ impl ConversionContext {
                 }
                 pcm_pos += self.in_ctx.channels_num as usize * bps;
             }
-        } else if self.out_ctx.bits == 32 {
+        }
+        else if self.out_ctx.bits == 32 {
             for s in 0..samples_used_per_chan {
                 let mut q = self.float_data[s];
                 self.scale_and_dither(&mut q);
                 self.out_ctx.push_samp(q as f32, chan);
             }
-        } else {
+        }
+        else {
             for s in 0..samples_used_per_chan {
                 let mut qin: f64 = self.float_data[s];
                 self.scale_and_dither(&mut qin);
@@ -371,14 +404,19 @@ impl ConversionContext {
     // Unified per-channel processing: handles both LM (rational) and integer paths.
     // Returns the number of frames produced into self.float_data for this channel.
     #[inline(always)]
-    fn process_channel(&mut self, chan: usize, bytes_per_channel: usize) -> usize {
+    fn process_channel(
+        &mut self,
+        chan: usize,
+        bytes_per_channel: usize,
+    ) -> usize {
         // Build contiguous per-channel byte buffer with proper bit endianness.
         let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
         let dsd_stride = self.in_ctx.dsd_stride as isize;
         let lsb_first = self.in_ctx.lsbit_first != 0;
         let stride = if dsd_stride >= 0 {
             dsd_stride as usize
-        } else {
+        }
+        else {
             0
         };
         let mut chan_bytes = Vec::with_capacity(bytes_per_channel);
@@ -395,14 +433,21 @@ impl ConversionContext {
 
         if lm_mode {
             // LM path: use rational resampler, honor actual produced count
-            let Some(resamps) = self.eq_lm_resamplers.as_mut() else {
+            let Some(resamps) = self.eq_lm_resamplers.as_mut()
+            else {
                 return 0;
             };
             let rs = &mut resamps[chan];
-            return rs.process_bytes_lm(&chan_bytes, true, &mut self.float_data);
-        } else {
+            return rs.process_bytes_lm(
+                &chan_bytes,
+                true,
+                &mut self.float_data,
+            );
+        }
+        else {
             // Integer path: use precalc decimator; conventionally return the estimate
-            let Some(ref mut v) = self.precalc_decims else {
+            let Some(ref mut v) = self.precalc_decims
+            else {
                 return 0;
             };
             let dec = &mut v[chan];
@@ -417,16 +462,20 @@ impl ConversionContext {
             'f' => "flac",
             _ => "out",
         };
-        let suffix = if let Some((uscore, _dot)) = self.abbrev_rate_pair(self.out_ctx.rate as u32) {
+        let suffix = if let Some((uscore, _dot)) =
+            self.abbrev_rate_pair(self.out_ctx.rate as u32)
+        {
             format!("_{}", uscore)
-        } else {
+        }
+        else {
             String::new()
         };
 
         if self.in_ctx.std_in {
             let base = if suffix.is_empty() {
                 "output".to_string()
-            } else {
+            }
+            else {
                 format!("output{}", suffix)
             };
             return format!("{}.{}", base, ext);
@@ -442,23 +491,30 @@ impl ConversionContext {
 
         return if suffix.is_empty() {
             format!("{}.{}", stem, ext)
-        } else {
+        }
+        else {
             format!("{}{}.{}", stem, suffix, ext)
         };
     }
 
-    fn derive_output_dir(&self, parent: &Path) -> Result<String, Box<dyn Error>> {
+    fn derive_output_dir(
+        &self,
+        parent: &Path,
+    ) -> Result<String, Box<dyn Error>> {
         return if self.in_ctx.std_in {
             Ok("".to_string())
-        } else if let Some(ref out_dir) = self.out_ctx.path {
-            let rel = parent.strip_prefix(&self.base_dir).unwrap_or(parent);
+        }
+        else if let Some(ref out_dir) = self.out_ctx.path {
+            let rel =
+                parent.strip_prefix(&self.base_dir).unwrap_or(parent);
             let full_dir = Path::new(out_dir).join(rel);
 
             if !full_dir.exists() {
                 std::fs::create_dir_all(&full_dir)?;
             }
             Ok(full_dir.to_string_lossy().into_owned())
-        } else {
+        }
+        else {
             Ok(parent.to_string_lossy().into_owned())
         };
     }
@@ -480,14 +536,16 @@ impl ConversionContext {
 
             if !source_path.is_file() {
                 continue;
-            } else if let Some(ext) = source_path
+            }
+            else if let Some(ext) = source_path
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(|s| s.to_ascii_lowercase())
                 && (ext == "jpg" || ext == "png" || ext == "jpeg")
             {
                 total += 1;
-                let file_name = source_path.file_name().ok_or("Invalid file name")?;
+                let file_name =
+                    source_path.file_name().ok_or("Invalid file name")?;
                 let destination_path = destination_dir.join(file_name);
 
                 // Should be atomic, avoiding TOCTOU issues, and only copy if the file doesn't exist
@@ -499,7 +557,8 @@ impl ConversionContext {
                     Ok(mut dest_file) => {
                         // If the file was successfully created (meaning it didn't exist),
                         // copy the contents from the source file.
-                        let mut source_file = std::fs::File::open(source_path)?;
+                        let mut source_file =
+                            std::fs::File::open(source_path)?;
                         io::copy(&mut source_file, &mut dest_file)?;
                         copied += 1;
                         continue;
@@ -543,7 +602,10 @@ impl ConversionContext {
             }
             Ok((copied, total)) => {
                 self.verbose(
-                    &format!("Copied {} artwork file(s) out of {}.", copied, total),
+                    &format!(
+                        "Copied {} artwork file(s) out of {}.",
+                        copied, total
+                    ),
                     true,
                 );
             }
@@ -573,8 +635,12 @@ impl ConversionContext {
                 self.verbose("Writing ID3 tags to file.", true);
                 tag.write_to_path(path_out, tag.version())?;
             }
-        } else {
-            self.verbose("Input file has no tag; skipping tag copy.", true);
+        }
+        else {
+            self.verbose(
+                "Input file has no tag; skipping tag copy.",
+                true,
+            );
             self.out_ctx.save_file(&out_path)?;
         }
 
@@ -622,11 +688,17 @@ impl ConversionContext {
         self.out_ctx.set_vorbis(vorbis);
 
         for pic in tag.pictures() {
-            let pic_type: PictureType = if pic.picture_type == id3::frame::PictureType::CoverFront {
+            let pic_type: PictureType = if pic.picture_type
+                == id3::frame::PictureType::CoverFront
+            {
                 flac_codec::metadata::PictureType::FrontCover
-            } else if pic.picture_type == id3::frame::PictureType::CoverBack {
+            }
+            else if pic.picture_type
+                == id3::frame::PictureType::CoverBack
+            {
                 flac_codec::metadata::PictureType::BackCover
-            } else {
+            }
+            else {
                 continue;
             };
             self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
@@ -643,7 +715,9 @@ impl ConversionContext {
 
     fn append_album_suffix(&self, tag: &mut id3::Tag) {
         if let Some(album) = tag.album() {
-            if let Some((_uscore, dot)) = self.abbrev_rate_pair(self.out_ctx.rate as u32) {
+            if let Some((_uscore, dot)) =
+                self.abbrev_rate_pair(self.out_ctx.rate as u32)
+            {
                 let mut new_album = String::from(album);
                 new_album.push_str(&format!(" [{}]", dot));
                 tag.set_album(new_album);
@@ -667,15 +741,21 @@ impl ConversionContext {
     }
 
     // Report timing & speed
-    fn report_timing(&self, dsp_elapsed: std::time::Duration, total_elapsed: std::time::Duration) {
+    fn report_timing(
+        &self,
+        dsp_elapsed: std::time::Duration,
+        total_elapsed: std::time::Duration,
+    ) {
         let channels = self.in_ctx.channels_num as u64;
         // Bytes per channel
         let bytes_per_chan = self.total_dsd_bytes_processed / channels;
         let bits_per_chan = bytes_per_chan * 8;
-        let dsd_base_rate = (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
+        let dsd_base_rate =
+            (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
         let audio_seconds = if dsd_base_rate > 0 {
             (bits_per_chan as f64) / (dsd_base_rate as f64)
-        } else {
+        }
+        else {
             0.0
         };
         let dsp_sec = dsp_elapsed.as_secs_f64().max(1e-9);
@@ -689,7 +769,12 @@ impl ConversionContext {
         let s = total_secs % 60;
         eprintln!(
             "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
-            self.total_dsd_bytes_processed, h, m, s, speed_dsp, speed_total
+            self.total_dsd_bytes_processed,
+            h,
+            m,
+            s,
+            speed_dsp,
+            speed_total
         );
     }
 
@@ -706,7 +791,8 @@ impl ConversionContext {
         let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
         let pct = if expected_frames > 0 {
             (diff_frames as f64) * 100.0 / (expected_frames as f64)
-        } else {
+        }
+        else {
             0.0
         };
         eprintln!("\n[DIAG] Output length accounting:");
@@ -754,10 +840,12 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         return if value < min {
             self.update_clip_stats(true, false);
             min
-        } else if value > max {
+        }
+        else if value > max {
             self.update_clip_stats(false, true);
             max
-        } else {
+        }
+        else {
             self.update_clip_stats(false, false);
             value
         };
@@ -767,7 +855,8 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
     fn my_round(x: f64) -> i64 {
         if x < 0.0 {
             (x - 0.5).floor() as i64
-        } else {
+        }
+        else {
             (x + 0.5).floor() as i64
         }
     }
@@ -776,14 +865,18 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         if self.verbose_mode {
             if new_line {
                 eprintln!("{}", message);
-            } else {
+            }
+            else {
                 eprint!("{}", message);
             }
         }
     }
 
     /// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
-    fn abbrev_rate_pair(&self, rate: u32) -> Option<(&'static str, &'static str)> {
+    fn abbrev_rate_pair(
+        &self,
+        rate: u32,
+    ) -> Option<(&'static str, &'static str)> {
         if !self.append_rate_suffix {
             return None;
         }

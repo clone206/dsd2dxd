@@ -17,7 +17,11 @@
 */
 
 use id3::Tag;
-use std::{fs::{self, File}, io, path::{Path, PathBuf}};
+use std::{
+    fs::{self, File},
+    io,
+    path::{Path, PathBuf},
+};
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,13 +49,19 @@ pub struct DsdContainer {
 }
 
 impl DsdContainer {
-    pub fn new(path: &PathBuf, container_format: ContainerFormat) -> Result<Self, Box<dyn std::error::Error>> {
-        if container_format == ContainerFormat::Dsf{
+    pub fn new(
+        path: &PathBuf,
+        container_format: ContainerFormat,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        if container_format == ContainerFormat::Dsf {
             use dsf::DsfFile;
             let file_path = Path::new(&path);
             let mut dsf_file = DsfFile::open(file_path)?;
             if let Some(e) = dsf_file.tag_read_err() {
-                eprintln!("[Warning] Attempted read of ID3 tag failed. Partial read attempted: {}", e);
+                eprintln!(
+                    "[Warning] Attempted read of ID3 tag failed. Partial read attempted: {}",
+                    e
+                );
             }
             let file = dsf_file.file().try_clone()?;
             Ok(Self {
@@ -66,9 +76,10 @@ impl DsdContainer {
                 file,
                 tag: dsf_file.id3_tag().clone(),
             })
-        } else if container_format == ContainerFormat::Dsdiff {
-            use dff::model::*;
+        }
+        else if container_format == ContainerFormat::Dsdiff {
             use dff::DffFile;
+            use dff::model::*;
             let file_path = Path::new(&path);
             let dff_file = match DffFile::open(file_path) {
                 Ok(dff) => dff,
@@ -95,14 +106,19 @@ impl DsdContainer {
                 file,
                 tag: dff_file.id3_tag().clone(),
             })
-        } else {
-            Err("Unsupported file extension; only .dsf and .dff are supported".into())
+        }
+        else {
+            Err("Unsupported file extension; only .dsf and .dff are supported"
+                .into())
         }
     }
 }
 
 /// Find all DSD files in the provided paths, optionally recursing into directories
-pub fn find_dsd_files(paths: &[PathBuf], recurse: bool) -> io::Result<Vec<PathBuf>> {
+pub fn find_dsd_files(
+    paths: &[PathBuf],
+    recurse: bool,
+) -> io::Result<Vec<PathBuf>> {
     let mut file_paths = Vec::new();
     for path in paths {
         if path.is_dir() {
@@ -112,16 +128,19 @@ pub fn find_dsd_files(paths: &[PathBuf], recurse: bool) -> io::Result<Vec<PathBu
                     .filter_map(|e| e.ok().map(|d| d.path()))
                     .collect();
                 file_paths.extend(find_dsd_files(&entries, recurse)?);
-            } else {
+            }
+            else {
                 // Non-recursive: include only top-level files that are DSD
                 for entry in fs::read_dir(path)? {
                     let entry_path = entry?.path();
                     if entry_path.is_file() && is_dsd_file(&entry_path) {
-                        file_paths.push(entry_path.canonicalize()?.clone());
+                        file_paths
+                            .push(entry_path.canonicalize()?.clone());
                     }
                 }
             }
-        } else if path.is_file() && is_dsd_file(path) {
+        }
+        else if path.is_file() && is_dsd_file(path) {
             // Single push site for matching files
             file_paths.push(path.canonicalize()?.clone());
         }

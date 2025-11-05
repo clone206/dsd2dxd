@@ -131,9 +131,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let dither_type = cli
-        .dither_type
-        .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
+    let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
+        'F'
+    }
+    else {
+        'T'
+    });
 
     let out_ctx = OutputContext::new(
         cli.bit_depth,
@@ -143,37 +146,40 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli.path,
     )?;
     let dither = Dither::new(dither_type)?;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     let inputs = if cli.files.is_empty() {
         vec!["-".to_string()]
-    } else {
+    }
+    else {
         cli.files.clone()
     };
 
-    let do_conversion = |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
-        let in_ctx = InputContext::new(
-            path.clone(),
-            cli.format,
-            cli.endianness,
-            cli.input_rate,
-            cli.block_size.unwrap_or(4096),
-            cli.channels.unwrap_or(2),
-            path.is_none(),
-            cli.verbose,
-        )?;
+    let do_conversion =
+        |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
+            let in_ctx = InputContext::new(
+                path.clone(),
+                cli.format,
+                cli.endianness,
+                cli.input_rate,
+                cli.block_size.unwrap_or(4096),
+                cli.channels.unwrap_or(2),
+                path.is_none(),
+                cli.verbose,
+            )?;
 
-        let mut conv_ctx = ConversionContext::new(
-            in_ctx,
-            out_ctx.clone(),
-            dither.clone(),
-            cli.filter_type.unwrap().to_ascii_uppercase(),
-            cli.verbose,
-            cli.append_rate,
-            cwd.clone(),
-        )?;
-        conv_ctx.do_conversion()
-    };
+            let mut conv_ctx = ConversionContext::new(
+                in_ctx,
+                out_ctx.clone(),
+                dither.clone(),
+                cli.filter_type.unwrap().to_ascii_uppercase(),
+                cli.verbose,
+                cli.append_rate,
+                cwd.clone(),
+            )?;
+            conv_ctx.do_conversion()
+        };
 
     // Filter to remove any glob patterns and handle stdin, yielding all inputted paths
     let paths = inputs
@@ -185,12 +191,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     input
                 ));
                 None
-            } else if input == "-" {
+            }
+            else if input == "-" {
                 if let Err(e) = do_conversion(None) {
                     panic!("Error processing stdin: {}", e);
                 }
                 None
-            } else {
+            }
+            else {
                 verbose(&format!("Input: {}", input));
                 Some(PathBuf::from(input))
             }

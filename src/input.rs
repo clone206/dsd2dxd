@@ -86,7 +86,9 @@ impl InputContext {
         };
 
         // Only enforce CLI dsd_rate for stdin or raw inputs
-        if (std_in || !container_format.is_some()) && ![1, 2, 4].contains(&dsd_rate) {
+        if (std_in || !container_format.is_some())
+            && ![1, 2, 4].contains(&dsd_rate)
+        {
             return Err("Unsupported DSD input rate.".into());
         }
 
@@ -133,7 +135,9 @@ impl InputContext {
         Ok(ctx)
     }
 
-    fn update_from_file(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    fn update_from_file(
+        &mut self,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(path) = &self.in_path {
             self.verbose(
                 &format!(
@@ -156,20 +160,25 @@ impl InputContext {
                     Ok(my_dsd) => {
                         // Pull raw fields
                         let file_len = my_dsd.file.metadata()?.len();
-                        self.verbose(&format!("File size: {} bytes", file_len), true);
+                        self.verbose(
+                            &format!("File size: {} bytes", file_len),
+                            true,
+                        );
 
                         self.file = Some(my_dsd.file);
                         self.tag = my_dsd.tag;
 
                         self.audio_pos = my_dsd.audio_pos;
                         // Clamp audio_length to what the file can actually contain
-                        let max_len: u64 = (file_len - self.audio_pos).max(0);
-                        self.audio_length =
-                            if my_dsd.audio_length > 0 && my_dsd.audio_length <= max_len {
-                                my_dsd.audio_length
-                            } else {
-                                max_len
-                            };
+                        let max_len: u64 =
+                            (file_len - self.audio_pos).max(0);
+                        self.audio_length = if my_dsd.audio_length > 0
+                            && my_dsd.audio_length <= max_len
+                        {
+                            my_dsd.audio_length
+                        } else {
+                            max_len
+                        };
 
                         // Channels from container (fallback to CLI on nonsense)
                         self.channels_num = if my_dsd.channel_count > 0 {
@@ -179,12 +188,17 @@ impl InputContext {
                         };
 
                         // Bit order from container
-                        self.lsbit_first = if my_dsd.is_lsb { 1 } else { 0 };
+                        self.lsbit_first =
+                            if my_dsd.is_lsb { 1 } else { 0 };
 
                         // Interleaving from container (DSF = block-interleaved → treat as planar per frame)
                         match my_dsd.container_format {
-                            ContainerFormat::Dsdiff => self.interleaved = true,
-                            ContainerFormat::Dsf => self.interleaved = false,
+                            ContainerFormat::Dsdiff => {
+                                self.interleaved = true
+                            }
+                            ContainerFormat::Dsf => {
+                                self.interleaved = false
+                            }
                         }
 
                         // Block size from container. Recompute stride/offset.
@@ -203,8 +217,11 @@ impl InputContext {
                             self.dsd_rate = 1;
                         } else if my_dsd.sample_rate == 5_644_800 {
                             self.dsd_rate = 2;
-                        } else if my_dsd.sample_rate > 0 && my_dsd.sample_rate % 2_822_400 == 0 {
-                            self.dsd_rate = (my_dsd.sample_rate / 2_822_400) as i32;
+                        } else if my_dsd.sample_rate > 0
+                            && my_dsd.sample_rate % 2_822_400 == 0
+                        {
+                            self.dsd_rate =
+                                (my_dsd.sample_rate / 2_822_400) as i32;
                         } else {
                             // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
                             eprintln!(
@@ -214,7 +231,10 @@ impl InputContext {
                         }
 
                         self.verbose(
-                            &format!("Audio length in bytes: {}", self.audio_length),
+                            &format!(
+                                "Audio length in bytes: {}",
+                                self.audio_length
+                            ),
                             true,
                         );
                         eprintln!(
@@ -231,7 +251,10 @@ impl InputContext {
                             self.audio_pos = 0;
                             self.audio_length = meta.len();
                         } else {
-                            return Err("Failed to open input file metadata".into());
+                            return Err(
+                                "Failed to open input file metadata"
+                                    .into(),
+                            );
                         }
                     }
                 }
