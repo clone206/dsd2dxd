@@ -29,7 +29,7 @@ use flac_codec::metadata;
 use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
-use std::ffi::{OsString};
+use std::ffi::OsString;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::path::PathBuf;
