@@ -488,9 +488,10 @@ impl ConversionContext {
         &self,
         parent: &Path,
     ) -> Result<PathBuf, Box<dyn Error>> {
-        if self.in_ctx.std_in {
-            Ok(PathBuf::from(""))
-        } else if let Some(ref out_dir) = self.out_ctx.path {
+        if let Some(ref out_dir) = self.out_ctx.path {
+            if self.in_ctx.std_in {
+                return Ok(out_dir.clone());
+            }
             let rel =
                 parent.strip_prefix(&self.base_dir).unwrap_or(parent);
             let full_dir = Path::new(out_dir).join(rel);
@@ -499,6 +500,8 @@ impl ConversionContext {
                 std::fs::create_dir_all(&full_dir)?;
             }
             Ok(full_dir)
+        } else if self.in_ctx.std_in {
+            Ok(PathBuf::from(""))
         } else {
             Ok(parent.to_path_buf())
         }
