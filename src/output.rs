@@ -21,7 +21,7 @@ use flac_codec::metadata::{Picture, VorbisComment};
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 use std::{io, vec};
 
 pub struct OutputContext {

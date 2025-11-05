@@ -29,7 +29,7 @@ use flac_codec::metadata;
 use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
-use std::ffi::{OsStr, OsString};
+use std::ffi::{OsString};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::path::PathBuf;
@@ -123,13 +123,10 @@ impl ConversionContext {
                     .collect(),
             );
             ctx.out_ctx.scale_factor *= ctx.upsample_ratio as f64;
-            ctx.verbose(
-                &format!(
-                    "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
-                    ctx.upsample_ratio, ctx.out_ctx.scale_factor
-                ),
-                true,
-            );
+            ctx.verbose(&format!(
+                "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
+                ctx.upsample_ratio, ctx.out_ctx.scale_factor
+            ));
         } else if let Some(taps) =
             select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
         {
@@ -148,8 +145,7 @@ impl ConversionContext {
                 &format!(
                     "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
                     ctx.decim_ratio, ctx.filt_type, dsd_rate
-                ),
-                true,
+                )
             );
         } else {
             return Err(format!(
@@ -191,7 +187,6 @@ impl ConversionContext {
             self.report_timing(dsp_elapsed, total_elapsed);
         }
 
-        self.verbose("[DBG] Detailed output length diagnostics:", true);
         if self.verbose_mode {
             self.report_in_out();
         }
@@ -219,13 +214,10 @@ impl ConversionContext {
 
             if self.in_ctx.audio_pos > 0 {
                 file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
-                self.verbose(
-                    &format!(
-                        "Seeked to audio start position: {}",
-                        file.stream_position()?
-                    ),
-                    true,
-                );
+                self.verbose(&format!(
+                    "Seeked to audio start position: {}",
+                    file.stream_position()?
+                ));
             }
             Ok(Box::new(file))
         } else {
@@ -450,14 +442,13 @@ impl ConversionContext {
             'f' => "flac",
             _ => "out",
         };
-        let suffix: OsString = if let Some((uscore, _dot)) =
+        let suffix = if let Some((uscore, _dot)) =
             self.abbrev_rate_pair(self.out_ctx.rate as u32)
         {
-            OsString::from(format!("_{}", uscore))
+            format!("_{}", uscore)
         } else {
-            OsString::from("")
+            "".to_string()
         };
-        let suffix: &OsStr = suffix.as_os_str();
 
         let mut filename: OsString = OsString::new();
 
@@ -480,13 +471,10 @@ impl ConversionContext {
                 .unwrap_or_else(|| OsString::from("output")),
         );
 
-        self.verbose(
-            &format!(
-                "Derived base filename: {}",
-                filename.to_string_lossy()
-            ),
-            true,
-        );
+        self.verbose(&format!(
+            "Derived base filename: {}",
+            filename.to_string_lossy()
+        ));
 
         if !suffix.is_empty() {
             filename.push(suffix);
@@ -587,20 +575,20 @@ impl ConversionContext {
 
         let out_path = out_dir.join(&out_filename);
 
-        self.verbose(&format!("Derived output path: {}", out_path.display()), true);
+        self.verbose(&format!(
+            "Derived output path: {}",
+            out_path.display()
+        ));
 
         match self.copy_artwork(parent, &out_dir) {
             Ok((_, total)) if total == 0 => {
-                self.verbose("No artwork files to copy.", true);
+                self.verbose("No artwork files to copy.");
             }
             Ok((copied, total)) => {
-                self.verbose(
-                    &format!(
-                        "Copied {} artwork file(s) out of {}.",
-                        copied, total
-                    ),
-                    true,
-                );
+                self.verbose(&format!(
+                    "Copied {} artwork file(s) out of {}.",
+                    copied, total
+                ));
             }
             Err(e) => {
                 eprintln!(
@@ -617,21 +605,18 @@ impl ConversionContext {
             }
 
             if self.out_ctx.output.to_ascii_lowercase() == 'f' {
-                self.verbose("Preparing Vorbis Comment for FLAC...", true);
+                self.verbose("Preparing Vorbis Comment for FLAC...");
                 self.id3_to_flac_meta(&tag);
             }
             self.out_ctx.save_file(&out_path)?;
 
             if self.out_ctx.output.to_ascii_lowercase() != 'f' {
                 // Write ID3 tags directly
-                self.verbose("Writing ID3 tags to file.", true);
+                self.verbose("Writing ID3 tags to file.");
                 tag.write_to_path(&out_path, tag.version())?;
             }
         } else {
-            self.verbose(
-                "Input file has no tag; skipping tag copy.",
-                true,
-            );
+            self.verbose("Input file has no tag; skipping tag copy.");
             self.out_ctx.save_file(&out_path)?;
         }
 
@@ -690,7 +675,7 @@ impl ConversionContext {
             } else {
                 continue;
             };
-            self.verbose(&format!("Adding ID3 Picture: {}", pic), true);
+            self.verbose(&format!("Adding ID3 Picture: {}", pic));
             let picture = flac_codec::metadata::Picture::new(
                 pic_type,
                 pic.description.clone(),
@@ -768,6 +753,7 @@ impl ConversionContext {
 
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
     fn report_in_out(&self) {
+        eprintln!("[DBG] Detailed output length diagnostics:");
         let ch = self.in_ctx.channels_num.max(1) as u64;
         let bps = self.out_ctx.bytes_per_sample as u64;
         let expected_frames = self.diag_expected_frames_floor;
@@ -845,13 +831,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         }
     }
 
-    fn verbose(&self, message: &str, new_line: bool) {
+    fn verbose(&self, message: &str) {
         if self.verbose_mode {
-            if new_line {
-                eprintln!("{}", message);
-            } else {
-                eprint!("{}", message);
-            }
+            eprintln!("{}", message);
         }
     }
 
