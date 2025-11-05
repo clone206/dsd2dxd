@@ -63,7 +63,7 @@ dsd2dxd [options] < infile.dsd > outfile.pcm
 # "shopt -s globstar" first. Outputs to the directory specified with -p, 
 # instead of the default of outputting to the same directory as each input file.
 dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
-# Convert all .dsf, .dff, and .dsd files in the current directory, 
+# Advanced: Convert all .dsf, .dff, and .dsd files in the current directory, 
 # recursively, as well as a raw dsd file via stdin, to wav files, and place
 # the converted files into the ./test directory. The test directory must
 # already exist, but any needed subdirectories will be created within. 
