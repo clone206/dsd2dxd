@@ -21,7 +21,7 @@ use flac_codec::metadata::{Picture, VorbisComment};
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::{io, vec};
 
 pub struct OutputContext {
@@ -51,7 +51,7 @@ impl OutputContext {
         out_type: char,
         out_vol: f64,
         out_rate: i32,
-        out_path: Option<String>,
+        out_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -63,22 +63,29 @@ impl OutputContext {
         }
 
         if output == 's' && out_path.is_some() {
-            return Err("Cannot specify output path when outputting to stdout".into());
+            return Err(
+                "Cannot specify output path when outputting to stdout"
+                    .into(),
+            );
         }
 
         if out_bits == 32 && output != 's' && output != 'w' {
-            return Err("32 bit float only allowed with wav or stdout".into());
+            return Err(
+                "32 bit float only allowed with wav or stdout".into()
+            );
         }
 
-        let bytes_per_sample = if out_bits == 20 { 3 } else { out_bits / 8 };
+        let bytes_per_sample =
+            if out_bits == 20 { 3 } else { out_bits / 8 };
 
-        let mut pathbuf_opt = None;
-        if let Some(p) = out_path {
-            let pb = PathBuf::from(&p);
-            if !pb.exists() {
-                return Err(format!("Specified output path does not exist: {}", pb.display()).into());
-            }
-            pathbuf_opt = Some(pb);
+        if let Some(p) = &out_path
+            && !p.exists()
+        {
+            return Err(format!(
+                "Specified output path does not exist: {}",
+                p.display()
+            )
+            .into());
         }
 
         let mut ctx = Self {
@@ -94,7 +101,7 @@ impl OutputContext {
             stdout_buf: Vec::new(),
             vorbis: None,
             pictures: Vec::new(),
-            path: pathbuf_opt,
+            path: out_path,
         };
 
         ctx.set_scaling(out_vol);
@@ -166,7 +173,7 @@ impl OutputContext {
         }
     }
 
-    pub fn save_file(&self, out_path: &String) -> Result<(), String> {
+    pub fn save_file(&self, out_path: &PathBuf) -> Result<(), String> {
         match self.output.to_ascii_lowercase() {
             'w' => {
                 self.save_and_print_file(out_path, AudioFileFormat::Wave)?;
@@ -183,29 +190,48 @@ impl OutputContext {
     }
 
     /// Save audio file, forcibly overwriting any existing file at the target path
-    pub fn save_and_print_file(&self, file_name: &str, fmt: AudioFileFormat) -> Result<(), String> {
-        let path = Path::new(file_name);
+    pub fn save_and_print_file(
+        &self,
+        out_path: &PathBuf,
+        fmt: AudioFileFormat,
+    ) -> Result<(), String> {
+        let path = out_path.as_path();
         if path.exists() {
             // Best effort remove; propagate error if it fails (e.g. permission issues)
-            std::fs::remove_file(path)
-                .map_err(|e| format!("Failed to remove existing file '{}': {}", file_name, e))?;
+            std::fs::remove_file(path).map_err(|e| {
+                format!(
+                    "Failed to remove existing file '{}': {}",
+                    out_path.to_string_lossy(),
+                    e
+                )
+            })?;
         }
 
         match (self.bits == 32, &self.float_file, &self.int_file) {
             (true, Some(file), _) => {
-                file.save(file_name, fmt, self.vorbis.clone(), self.pictures.clone())
-                    .map_err(|e| e.to_string())?;
+                file.save(
+                    out_path,
+                    fmt,
+                    self.vorbis.clone(),
+                    self.pictures.clone(),
+                )
+                .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             (false, _, Some(file)) => {
-                file.save(file_name, fmt, self.vorbis.clone(), self.pictures.clone())
-                    .map_err(|e| e.to_string())?;
+                file.save(
+                    out_path,
+                    fmt,
+                    self.vorbis.clone(),
+                    self.pictures.clone(),
+                )
+                .map_err(|e| e.to_string())?;
                 file.print_summary();
             }
             _ => return Err("No file initialized".to_string()),
         }
 
-        eprintln!("Wrote to file: {}", file_name);
+        eprintln!("Wrote to file: {}", out_path.to_string_lossy());
         Ok(())
     }
 
@@ -217,7 +243,8 @@ impl OutputContext {
     }
 
     pub fn pack_int(&mut self, offset: &mut usize, value: i32) {
-        if *offset + self.bytes_per_sample as usize > self.stdout_buf.len() {
+        if *offset + self.bytes_per_sample as usize > self.stdout_buf.len()
+        {
             return;
         }
 
@@ -242,7 +269,10 @@ impl OutputContext {
         *offset += self.bytes_per_sample as usize;
     }
 
-    pub fn write_stdout(&mut self, pcm_bytes: usize) -> Result<(), Box<dyn Error>> {
+    pub fn write_stdout(
+        &mut self,
+        pcm_bytes: usize,
+    ) -> Result<(), Box<dyn Error>> {
         if pcm_bytes == 0 || pcm_bytes > self.stdout_buf.len() {
             return Ok(());
         }

@@ -18,18 +18,18 @@
 
 use crate::dsd::DSD_64_RATE;
 use crate::filters_lm::HTAPS_1_34MHZ_7TO1_EQ;
-use crate::filters_lm::HTAPS_288K_3TO1_EQ;
-use crate::filters_lm::HTAPS_2MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_2_68MHZ_7TO1_EQ;
 use crate::filters_lm::HTAPS_2_68MHZ_14TO1_EQ;
 use crate::filters_lm::HTAPS_2_68MHZ_28TO1_EQ;
-use crate::filters_lm::HTAPS_2_68MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_2MHZ_7TO1_EQ;
 use crate::filters_lm::HTAPS_4MHZ_7TO1_EQ;
+use crate::filters_lm::HTAPS_288K_3TO1_EQ;
 use crate::filters_lm::HTAPS_576K_3TO1_EQ;
-use crate::filters_lm::HTAPS_DDRX10_21TO1_EQ;
-use crate::filters_lm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
 use crate::filters_lm::HTAPS_DDRX5_7TO_1_EQ;
-use crate::filters_lm::HTAPS_DSDX10_21TO1_EQ;
+use crate::filters_lm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× up, 14:1 down)
+use crate::filters_lm::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters_lm::HTAPS_DSDX5_7TO1_EQ;
+use crate::filters_lm::HTAPS_DSDX10_21TO1_EQ;
 use std::collections::HashMap;
 use std::env;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -49,8 +49,9 @@ struct Stage1LutKey {
     hash: u64,
 }
 
-static STAGE1_LUT_CACHE: OnceLock<Mutex<HashMap<Stage1LutKey, Arc<Stage1LutTable>>>> =
-    OnceLock::new();
+static STAGE1_LUT_CACHE: OnceLock<
+    Mutex<HashMap<Stage1LutKey, Arc<Stage1LutTable>>>,
+> = OnceLock::new();
 
 // One-time config diagnostics guards
 static ST1_DIAG_ONCE: OnceLock<()> = OnceLock::new();
@@ -87,10 +88,17 @@ impl LMResampler {
                 // DSD256 -> 96k two‑stage path: (×5 -> /21) => ~10.752 MHz -> /28 => 96k
                 if out_rate == 96_000 && l == 5 {
                     if verbose {
-                        eprintln!("[DBG] Two-stage DSD256->96k: (×{} -> /21) -> /28 [DDRX10_21TO1 + 2.68MHz 28:1]", l);
+                        eprintln!(
+                            "[DBG] Two-stage DSD256->96k: (×{} -> /21) -> /28 [DDRX10_21TO1 + 2.68MHz 28:1]",
+                            l
+                        );
                     }
                     return Self {
-                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
+                        stage1_poly: Some(Stage1Poly::new(
+                            &HTAPS_DDRX10_21TO1_EQ[..],
+                            l,
+                            21,
+                        )),
                         stage2_decim: Some(DecimFIRSym::new_from_half(
                             &HTAPS_2_68MHZ_28TO1_EQ[..],
                             28,
@@ -106,10 +114,17 @@ impl LMResampler {
                 // DSD256 -> 192k two‑stage path: (×5 -> /21) => 2.688 MHz -> /14 => 192k
                 if out_rate == 192_000 && l == 5 {
                     if verbose {
-                        eprintln!("[DBG] Two-stage DSD256->192k: (×{} -> /21) -> /14 [DDRX10_21TO1 + 2.68MHz 14:1]", l);
+                        eprintln!(
+                            "[DBG] Two-stage DSD256->192k: (×{} -> /21) -> /14 [DDRX10_21TO1 + 2.68MHz 14:1]",
+                            l
+                        );
                     }
                     return Self {
-                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
+                        stage1_poly: Some(Stage1Poly::new(
+                            &HTAPS_DDRX10_21TO1_EQ[..],
+                            l,
+                            21,
+                        )),
                         stage2_decim: Some(DecimFIRSym::new_from_half(
                             &HTAPS_2_68MHZ_14TO1_EQ[..],
                             14,
@@ -122,16 +137,26 @@ impl LMResampler {
                 // Original cascade Stage1 definitions
                 if verbose {
                     eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
-                            l
-                        );
+                        "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
+                        l
+                    );
                 }
                 return Self {
                     // Stage 2 (decimator by 7)
-                    stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ, 7)),
+                    stage2_decim: Some(DecimFIRSym::new_from_half(
+                        &HTAPS_2MHZ_7TO1_EQ,
+                        7,
+                    )),
                     // Stage 3 (decimator by 3)
-                    stage3_decim: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ, 3)),
-                    stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_14TO1_EQ, l, 14)),
+                    stage3_decim: Some(DecimFIRSym::new_from_half(
+                        &HTAPS_288K_3TO1_EQ,
+                        3,
+                    )),
+                    stage1_poly: Some(Stage1Poly::new(
+                        &HTAPS_DDRX5_14TO1_EQ,
+                        l,
+                        14,
+                    )),
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
                 };
@@ -140,10 +165,17 @@ impl LMResampler {
                 // DSD128 -> 384k two‑stage path (×L -> /21) -> /7
                 if out_rate == 384_000 {
                     if verbose {
-                        eprintln!("[DBG] Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k", l);
+                        eprintln!(
+                            "[DBG] Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k",
+                            l
+                        );
                     }
                     return Self {
-                        stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX10_21TO1_EQ[..], l, 21)),
+                        stage1_poly: Some(Stage1Poly::new(
+                            &HTAPS_DDRX10_21TO1_EQ[..],
+                            l,
+                            21,
+                        )),
                         stage2_decim: Some(DecimFIRSym::new_from_half(
                             &HTAPS_2_68MHZ_7TO1_EQ[..],
                             7,
@@ -158,32 +190,50 @@ impl LMResampler {
                     if l == 5 {
                         // DSD128 -> 192k three-stage path
                         if verbose {
-                            eprintln!("[DBG] Three-stage L=5/M=147 path enabled: (×5 -> /7 (poly) -> /7 -> /3) => 192k");
+                            eprintln!(
+                                "[DBG] Three-stage L=5/M=147 path enabled: (×5 -> /7 (poly) -> /7 -> /3) => 192k"
+                            );
                         }
                         return Self {
-                            stage1_poly: Some(Stage1Poly::new(&HTAPS_DDRX5_7TO_1_EQ[..], l, 7)),
-                            stage2_decim: Some(DecimFIRSym::new_from_half(
-                                &HTAPS_4MHZ_7TO1_EQ[..],
+                            stage1_poly: Some(Stage1Poly::new(
+                                &HTAPS_DDRX5_7TO_1_EQ[..],
+                                l,
                                 7,
                             )),
-                            stage3_decim: Some(DecimFIRSym::new_from_half(
-                                &HTAPS_576K_3TO1_EQ[..],
-                                3,
-                            )),
+                            stage2_decim: Some(
+                                DecimFIRSym::new_from_half(
+                                    &HTAPS_4MHZ_7TO1_EQ[..],
+                                    7,
+                                ),
+                            ),
+                            stage3_decim: Some(
+                                DecimFIRSym::new_from_half(
+                                    &HTAPS_576K_3TO1_EQ[..],
+                                    3,
+                                ),
+                            ),
                             s2_scratch: Vec::new(),
                             s1_scratch: Vec::new(),
                         };
                     } else if l == 10 {
                         // DSD64 -> 192k two-stage path (existing)
                         if verbose {
-                            eprintln!("[DBG] Two-stage L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 192k");
+                            eprintln!(
+                                "[DBG] Two-stage L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 192k"
+                            );
                         }
                         return Self {
-                            stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX10_21TO1_EQ[..], l, 21)),
-                            stage2_decim: Some(DecimFIRSym::new_from_half(
-                                &HTAPS_1_34MHZ_7TO1_EQ[..],
-                                7,
+                            stage1_poly: Some(Stage1Poly::new(
+                                &HTAPS_DSDX10_21TO1_EQ[..],
+                                l,
+                                21,
                             )),
+                            stage2_decim: Some(
+                                DecimFIRSym::new_from_half(
+                                    &HTAPS_1_34MHZ_7TO1_EQ[..],
+                                    7,
+                                ),
+                            ),
                             stage3_decim: None,
                             s2_scratch: Vec::new(),
                             s1_scratch: Vec::new(),
@@ -193,16 +243,26 @@ impl LMResampler {
 
                 if verbose {
                     eprintln!(
-                            "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) [Stage2/3 direct] => 96K",
-                            l
-                        );
+                        "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) [Stage2/3 direct] => 96K",
+                        l
+                    );
                 }
                 return Self {
-                    stage1_poly: Some(Stage1Poly::new(&HTAPS_DSDX5_7TO1_EQ[..], l, 7)),
+                    stage1_poly: Some(Stage1Poly::new(
+                        &HTAPS_DSDX5_7TO1_EQ[..],
+                        l,
+                        7,
+                    )),
                     // Stage 2 (decimator by 7)
-                    stage2_decim: Some(DecimFIRSym::new_from_half(&HTAPS_2MHZ_7TO1_EQ[..], 7)),
+                    stage2_decim: Some(DecimFIRSym::new_from_half(
+                        &HTAPS_2MHZ_7TO1_EQ[..],
+                        7,
+                    )),
                     // Stage 3 (decimator by 3)
-                    stage3_decim: Some(DecimFIRSym::new_from_half(&HTAPS_288K_3TO1_EQ[..], 3)),
+                    stage3_decim: Some(DecimFIRSym::new_from_half(
+                        &HTAPS_288K_3TO1_EQ[..],
+                        3,
+                    )),
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
                 };
@@ -213,7 +273,12 @@ impl LMResampler {
 
     // Returns number of PCM frames produced into `out`.
     #[inline(always)]
-    pub fn process_bytes_lm(&mut self, bytes: &[u8], lsb_first: bool, out: &mut [f64]) -> usize {
+    pub fn process_bytes_lm(
+        &mut self,
+        bytes: &[u8],
+        lsb_first: bool,
+        out: &mut [f64],
+    ) -> usize {
         let s1 = match self.stage1_poly.as_mut() {
             Some(x) => x,
             None => return 0,
@@ -228,21 +293,23 @@ impl LMResampler {
         let mut i = 0usize; // byte cursor
 
         // Precompute an upper bound on stage1 outputs/byte to size chunks conservatively.
-        let y1_per_byte_ub = ((8 * s1.l as usize) + (s1.m as usize) - 1) / (s1.m as usize);
+        let y1_per_byte_ub =
+            ((8 * s1.l as usize) + (s1.m as usize) - 1) / (s1.m as usize);
         let y1_per_byte_ub = y1_per_byte_ub.max(1);
 
         // Helper to emit stage1 outputs for a byte into s1_scratch
-        let push_byte = |b: u8, s1: &mut Stage1Poly, lsb: bool, dst: &mut Vec<f64>| {
-            if lsb {
-                for bit in 0..8 {
-                    s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
+        let push_byte =
+            |b: u8, s1: &mut Stage1Poly, lsb: bool, dst: &mut Vec<f64>| {
+                if lsb {
+                    for bit in 0..8 {
+                        s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
+                    }
+                } else {
+                    for bit in (0..8).rev() {
+                        s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
+                    }
                 }
-            } else {
-                for bit in (0..8).rev() {
-                    s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
-                }
-            }
-        };
+            };
 
         while i < bytes.len() && produced_total < out.len() {
             // Budget frames we can still write this call
@@ -287,20 +354,29 @@ impl LMResampler {
             }
 
             // 2) Stage2: decimate; target is either s2_scratch (3-stage) or out (2-stage)
-            let used_s1 = core::cmp::min(self.s1_scratch.len(), need_s1_out);
+            let used_s1 =
+                core::cmp::min(self.s1_scratch.len(), need_s1_out);
             if let Some(ref mut p3) = p3_opt {
                 let cap_s2 = need_s2_in.max(1);
                 if self.s2_scratch.len() < cap_s2 {
                     self.s2_scratch.resize(cap_s2, 0.0);
                 }
-                let n2 =
-                    p2.process_block(&self.s1_scratch[..used_s1], &mut self.s2_scratch[..cap_s2]);
+                let n2 = p2.process_block(
+                    &self.s1_scratch[..used_s1],
+                    &mut self.s2_scratch[..cap_s2],
+                );
                 // 3) Stage3: decimate into out
-                let n3 = p3.process_block(&self.s2_scratch[..n2], &mut out[produced_total..]);
+                let n3 = p3.process_block(
+                    &self.s2_scratch[..n2],
+                    &mut out[produced_total..],
+                );
                 produced_total += n3;
             } else {
                 // Two-stage: write directly to out
-                let n2 = p2.process_block(&self.s1_scratch[..used_s1], &mut out[produced_total..]);
+                let n2 = p2.process_block(
+                    &self.s1_scratch[..used_s1],
+                    &mut out[produced_total..],
+                );
                 produced_total += n2;
             }
 
@@ -346,7 +422,7 @@ impl Stage1Poly {
         // Full symmetric taps length when mirroring right_half as [rev(right_half), right_half]
         let n = (right_half.len() * 2) as u64;
         let delay_high = (n - 1) / 2; // (N-1)/2
-                                      // Max taps per phase is ceil(n / l)
+        // Max taps per phase is ceil(n / l)
         let max_len = ((n as usize) + l as usize - 1) / l as usize;
         let cap = max_len.next_power_of_two().max(128);
         let input_delay = (delay_high + (l as u64 - 1)) / l as u64; // used only in Accum. Always use f64 LUTs
@@ -415,7 +491,8 @@ impl Stage1Poly {
             } else {
                 (0, 0)
             };
-            let (st1_mult, st1_align, st1_target) = get_stage1_chunk_params();
+            let (st1_mult, st1_align, st1_target) =
+                get_stage1_chunk_params();
             let example_groups = max_g;
             let chunk_eff = if example_groups > 0 {
                 compute_stage1_chunk(example_groups, m as usize, l)
@@ -424,7 +501,14 @@ impl Stage1Poly {
             };
             eprintln!(
                 "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode=lut(f64) (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
-                l, m, min_g, max_g, chunk_eff, st1_mult, st1_target, st1_align
+                l,
+                m,
+                min_g,
+                max_g,
+                chunk_eff,
+                st1_mult,
+                st1_target,
+                st1_align
             );
         }
         me
@@ -482,7 +566,11 @@ impl Stage1Poly {
         let phase = (idx_high % self.l as u64) as usize;
         let tbl = self.lut_f64.as_ref().unwrap();
         // Use chunked summation with baked chunk size
-        let chunk = compute_stage1_chunk(tbl[phase].len(), self.m as usize, self.l);
+        let chunk = compute_stage1_chunk(
+            tbl[phase].len(),
+            self.m as usize,
+            self.l,
+        );
         let sum = self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
         emit(sum);
     }
@@ -502,14 +590,20 @@ impl Stage1Poly {
                     self.primed = true;
                 } else {
                     // Advance phase even when not emitting to keep alignment
-                    self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
+                    self.phase_mod =
+                        (self.phase_mod + (self.m % self.l)) % self.l;
                     continue;
                 }
             }
             let phase = self.phase_mod as usize;
             let tbl = self.lut_f64.as_ref().unwrap();
-            let chunk = compute_stage1_chunk(tbl[phase].len(), self.m as usize, self.l);
-            let sum = self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
+            let chunk = compute_stage1_chunk(
+                tbl[phase].len(),
+                self.m as usize,
+                self.l,
+            );
+            let sum =
+                self.sum_phase_groups_chunked(&tbl[phase][..], chunk);
             emit(sum);
             self.phase_mod = (self.phase_mod + (self.m % self.l)) % self.l;
         }
@@ -519,14 +613,19 @@ impl Stage1Poly {
     // LUTs, but process groups in chunks of up to `chunk_bytes` to
     // reduce loop overhead and improve locality of byte extraction.
     #[inline]
-    fn sum_phase_groups_chunked(&self, phase_lut: &[[f64; 256]], chunk_bytes: usize) -> f64 {
+    fn sum_phase_groups_chunked(
+        &self,
+        phase_lut: &[[f64; 256]],
+        chunk_bytes: usize,
+    ) -> f64 {
         let mut sum = 0.0;
         let total_groups = phase_lut.len();
         if total_groups == 0 {
             return 0.0;
         }
         // Start at last written rolling byte (newest 8-bit window)
-        let mut bidx = (self.wbyte.wrapping_add(self.byte_mask)) & self.byte_mask; // newest byte index (time t)
+        let mut bidx =
+            (self.wbyte.wrapping_add(self.byte_mask)) & self.byte_mask; // newest byte index (time t)
         let capb = self.byte_mask + 1;
         let mask = self.byte_mask;
         let mut g = 0usize;
@@ -535,7 +634,10 @@ impl Stage1Poly {
             // Non-unrolled inner loop
             let mut k = 0usize;
             while k < this_chunk {
-                let idx = bidx.wrapping_add(capb).wrapping_sub((k as usize) << 3) & mask;
+                let idx = bidx
+                    .wrapping_add(capb)
+                    .wrapping_sub((k as usize) << 3)
+                    & mask;
                 let byte = self.byte_ring[idx] as usize;
                 sum += phase_lut[g + k][byte];
                 k += 1;
@@ -570,7 +672,8 @@ struct DecimFIRSym {
 impl DecimFIRSym {
     fn new_from_half(right_half: &[f64], decim: usize) -> Self {
         // Reconstruct full taps (mirror right_half)
-        let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
+        let mut full: Vec<f64> =
+            right_half.iter().rev().cloned().collect();
         full.extend_from_slice(right_half);
         let len = full.len();
         let center = (len - 1) / 2;
@@ -703,9 +806,12 @@ fn round_down_to_multiple(x: usize, a: usize) -> usize {
 #[inline]
 fn get_stage1_chunk_params() -> (usize, usize, usize) {
     // Allow zeros as sentinels to enable baked defaults downstream (ALIGN=M, TARGET=128)
-    let mult = *ST1_MULT.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_MULT", 0));
-    let align = *ST1_ALIGN.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_ALIGN", 0));
-    let target = *ST1_TARGET.get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_TARGET", 256));
+    let mult = *ST1_MULT
+        .get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_MULT", 0));
+    let align = *ST1_ALIGN
+        .get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_ALIGN", 0));
+    let target = *ST1_TARGET
+        .get_or_init(|| env_usize("DSD2DXD_STAGE1_CHUNK_TARGET", 256));
     (mult, align, target)
 }
 
@@ -751,7 +857,10 @@ fn hash_f64_slice_fnv1a(v: &[f64]) -> u64 {
     h
 }
 
-fn build_stage1_lut_from_right_half(right_half: &[f64], l: u32) -> Vec<Vec<[f64; 256]>> {
+fn build_stage1_lut_from_right_half(
+    right_half: &[f64],
+    l: u32,
+) -> Vec<Vec<[f64; 256]>> {
     // Reconstruct full symmetric taps and polyphase decomposition
     let mut full: Vec<f64> = right_half.iter().rev().cloned().collect();
     full.extend_from_slice(right_half);
@@ -790,13 +899,17 @@ fn build_stage1_lut_from_right_half(right_half: &[f64], l: u32) -> Vec<Vec<[f64;
     out
 }
 
-fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f64; 256]>>> {
+fn get_or_build_stage1_lut(
+    right_half: &[f64],
+    l: u32,
+) -> Arc<Vec<Vec<[f64; 256]>>> {
     let key = Stage1LutKey {
         l,
         n: right_half.len() as u32,
         hash: hash_f64_slice_fnv1a(right_half),
     };
-    let cache = STAGE1_LUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache =
+        STAGE1_LUT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     // Fast path: try hit
     if let Some(found) = cache.lock().unwrap().get(&key) {
         return found.clone();
@@ -808,14 +921,22 @@ fn get_or_build_stage1_lut(right_half: &[f64], l: u32) -> Arc<Vec<Vec<[f64; 256]
     arc
 }
 
-pub fn compute_decim_and_upsample(in_rate: i32, out_rate: i32) -> (i32, u32) {
+pub fn compute_decim_and_upsample(
+    in_rate: i32,
+    out_rate: i32,
+) -> (i32, u32) {
     // Determine decimation ratio (M)
     let decim_ratio: i32 = if out_rate == 96_000 && in_rate == 4 {
         // DSD256 -> 96k two-stage LM path: M=588 (×5 -> /21 -> /28)
         588
-    } else if (out_rate == 96_000 && in_rate == 2) || (out_rate == 192_000 && in_rate == 4) {
+    } else if (out_rate == 96_000 && in_rate == 2)
+        || (out_rate == 192_000 && in_rate == 4)
+    {
         294
-    } else if out_rate == 96_000 || out_rate == 192_000 || out_rate == 384_000 {
+    } else if out_rate == 96_000
+        || out_rate == 192_000
+        || out_rate == 384_000
+    {
         147
     } else {
         // Integer ratio attempt (fallback to 64)

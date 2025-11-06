@@ -45,10 +45,11 @@ or implied, of Sebastian Gesemann.
 // ============================================================================
 
 use crate::filters::{
-    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB, HTAPS_DDR_16TO1_EQ,
-    HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ, HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ,
-    HTAPS_DSD256_128TO1_EQ, HTAPS_DSD256_32TO1_EQ, HTAPS_DSD256_64TO1_EQ, HTAPS_DSD64_16TO1_EQ,
-    HTAPS_DSD64_32TO1_EQ, HTAPS_DSD64_8TO1_EQ, HTAPS_XLD,
+    HTAPS_16TO1_XLD, HTAPS_32TO1, HTAPS_D2P, HTAPS_DDR_16TO1_CHEB,
+    HTAPS_DDR_16TO1_EQ, HTAPS_DDR_32TO1_CHEB, HTAPS_DDR_32TO1_EQ,
+    HTAPS_DDR_64TO1_CHEB, HTAPS_DDR_64TO1_EQ, HTAPS_DSD64_8TO1_EQ,
+    HTAPS_DSD64_16TO1_EQ, HTAPS_DSD64_32TO1_EQ, HTAPS_DSD256_32TO1_EQ,
+    HTAPS_DSD256_64TO1_EQ, HTAPS_DSD256_128TO1_EQ, HTAPS_XLD,
 };
 
 pub struct BytePrecalcDecimator {
@@ -76,13 +77,14 @@ impl BytePrecalcDecimator {
         // Number of 8-bit windows covering half the filter
         let num_tables = (half + 7) / 8;
         // Precompute 256-entry table for each window (like C precalc)
-        let mut tables: Vec<Box<[f64; 256]>> = Vec::with_capacity(num_tables);
+        let mut tables: Vec<Box<[f64; 256]>> =
+            Vec::with_capacity(num_tables);
         for t in 0..num_tables {
             let base = t * 8;
             let remain = half.saturating_sub(base);
             let k = remain.min(8); // up to 8 taps in this window
-                                   // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
-                                   // by pushing and later indexing appropriately. Simpler: store in reverse now.
+            // Table index is reversed order (ctx->numTables-1 - t) in C; we can mimic
+            // by pushing and later indexing appropriately. Simpler: store in reverse now.
             let mut arr = Box::new([0.0f64; 256]);
             for dsd_seq in 0..256u16 {
                 let mut acc = 0.0;
@@ -114,7 +116,11 @@ impl BytePrecalcDecimator {
 
     /// Feed a block of DSD bytes; produce decimated PCM outputs.
     /// Returns number of PCM samples written to `out`.
-    pub fn process_bytes(&mut self, bytes: &[u8], out: &mut [f64]) -> usize {
+    pub fn process_bytes(
+        &mut self,
+        bytes: &[u8],
+        out: &mut [f64],
+    ) -> usize {
         if self.num_tables == 0 || self.bytes_per_out == 0 {
             return 0;
         }
@@ -139,7 +145,8 @@ impl BytePrecalcDecimator {
                     // Recent window i
                     let idx1 = cur.wrapping_sub(1 + i) & mask;
                     // Mirrored window
-                    let idx2 = cur.wrapping_sub(1 + (self.table_span - i)) & mask;
+                    let idx2 =
+                        cur.wrapping_sub(1 + (self.table_span - i)) & mask;
                     let byte1 = self.fifo[idx1];
                     let byte2 = self.fifo[idx2];
                     // Table i corresponds to tables[i]; mirrored byte must be bit-reversed
@@ -150,7 +157,8 @@ impl BytePrecalcDecimator {
                 // Handle startup latency (group delay)
                 if self.delay_count > 0 {
                     self.delay_count -= 1;
-                } else if produced < out.len() {
+                }
+                else if produced < out.len() {
                     out[produced] = acc;
                     produced += 1;
                 }
@@ -184,7 +192,8 @@ pub fn select_precalc_taps(
         128 => {
             if filt_type == 'E' && dsd_rate == 4 {
                 Some(&HTAPS_DSD256_128TO1_EQ)
-            } else {
+            }
+            else {
                 None
             }
         }
@@ -197,7 +206,8 @@ pub fn select_precalc_taps(
                     'E' => Some(&HTAPS_DSD64_8TO1_EQ),
                     _ => None,
                 }
-            } else {
+            }
+            else {
                 None
             }
         }
@@ -208,9 +218,11 @@ pub fn select_precalc_taps(
             'E' => {
                 if dsd_rate == 1 {
                     Some(&HTAPS_DSD64_16TO1_EQ)
-                } else if dsd_rate == 2 {
+                }
+                else if dsd_rate == 2 {
                     Some(&HTAPS_DDR_16TO1_EQ)
-                } else {
+                }
+                else {
                     None
                 }
             }
@@ -218,7 +230,8 @@ pub fn select_precalc_taps(
             'C' => {
                 if dsd_rate == 2 {
                     Some(&HTAPS_DDR_16TO1_CHEB)
-                } else {
+                }
+                else {
                     None
                 }
             }
@@ -230,10 +243,12 @@ pub fn select_precalc_taps(
             'E' => {
                 if dsd_rate == 1 {
                     Some(&HTAPS_DSD64_32TO1_EQ)
-                } else if dsd_rate == 4 {
+                }
+                else if dsd_rate == 4 {
                     // New dedicated DSD256 32:1 equiripple half taps
                     Some(&HTAPS_DSD256_32TO1_EQ)
-                } else {
+                }
+                else {
                     Some(&HTAPS_DDR_32TO1_EQ)
                 }
             }
@@ -245,7 +260,8 @@ pub fn select_precalc_taps(
             'E' => {
                 if dsd_rate == 4 {
                     Some(&HTAPS_DSD256_64TO1_EQ)
-                } else {
+                }
+                else {
                     Some(&HTAPS_DDR_64TO1_EQ)
                 }
             }

@@ -17,7 +17,7 @@
 */
 
 use clap::Parser;
-use std::error::Error;
+use std::{error::Error, path::PathBuf};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -42,7 +42,7 @@ struct Cli {
     /// Artwork files will be copied to the output directories.
     /// [default: same as input file]
     #[arg(short = 'p', long = "path", default_value = None)]
-    path: Option<String>,
+    path: Option<PathBuf>,
 
     /// Number of channels
     #[arg(short = 'c', long = "channels", default_value = "2")]
@@ -113,72 +113,101 @@ struct Cli {
     #[arg(short = 'a', long = "append")]
     append_rate: bool,
 
-    /// Input files (use - for stdin)
+    /// Recurse into directories when the supplied input paths include folders
+    #[arg(short = 'R', long = "recurse")]
+    recurse: bool,
+
+    /// Input files/folders (use - for stdin)
     #[arg(name = "FILES")]
-    files: Vec<String>,
+    files: Vec<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    let verbose = |message: &str, new_line: bool| {
+    let verbose = |message: &str| {
         if cli.verbose {
-            if new_line {
-                eprintln!("{}", message);
-            } else {
-                eprint!("{}", message);
-            }
+            eprintln!("{}", message);
         }
     };
 
-    let inputs = if cli.files.is_empty() {
-        vec!["-".to_string()]
+    let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
+        'F'
+    } else {
+        'T'
+    });
+
+    let out_ctx = OutputContext::new(
+        cli.bit_depth,
+        cli.output,
+        cli.level,
+        cli.output_rate,
+        cli.path,
+    )?;
+    let dither = Dither::new(dither_type)?;
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let mut inputs = if cli.files.is_empty() {
+        vec![PathBuf::from("-")]
     } else {
         cli.files.clone()
     };
+    inputs.sort();
+    inputs.dedup();
 
-    let dither_type = cli
-        .dither_type
-        .unwrap_or(if cli.bit_depth == 32 { 'F' } else { 'T' });
+    let do_conversion =
+        |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
+            let in_ctx = InputContext::new(
+                path.clone(),
+                cli.format,
+                cli.endianness,
+                cli.input_rate,
+                cli.block_size.unwrap_or(4096),
+                cli.channels.unwrap_or(2),
+                path.is_none(),
+                cli.verbose,
+            )?;
 
-    let out_ctx = OutputContext::new(cli.bit_depth, cli.output, cli.level, cli.output_rate, cli.path)?;
-    let dither = Dither::new(dither_type)?;
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let mut conv_ctx = ConversionContext::new(
+                in_ctx,
+                out_ctx.clone(),
+                dither.clone(),
+                cli.filter_type.unwrap().to_ascii_uppercase(),
+                cli.verbose,
+                cli.append_rate,
+                cwd.clone(),
+            )?;
+            conv_ctx.do_conversion()
+        };
 
-    for input in inputs {
-        if input.contains('*') {
-            verbose(
-                &format!(
+    // Filter to remove any glob patterns and handle stdin, yielding all inputted paths
+    let paths = inputs
+        .iter()
+        .filter_map(|input| {
+            if input.to_string_lossy().contains('*') {
+                verbose(&format!(
                     "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
-                    input
-                ),
-                true,
-            );
-            continue;
-        }
+                    input.display()
+                ));
+                None
+            }
+            else if input == &PathBuf::from("-") {
+                if let Err(e) = do_conversion(None) {
+                    panic!("Error processing stdin: {}", e);
+                }
+                None
+            }
+            else {
+                verbose(&format!("Input: {}", input.display()));
+                Some(input)
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
 
-        verbose(&format!("Input: {}", input), true);
-
-        let in_ctx = InputContext::new(
-            input.clone(),
-            cli.format,
-            cli.endianness,
-            cli.input_rate,
-            cli.block_size.unwrap_or(4096),
-            cli.channels.unwrap_or(2),
-            cli.verbose,
-        )?;
-
-        let mut conv_ctx = ConversionContext::new(
-            in_ctx,
-            out_ctx.clone(),
-            dither.clone(),
-            cli.filter_type.unwrap().to_ascii_uppercase(),
-            cli.verbose,
-            cli.append_rate,
-            cwd.clone(),
-        )?;
-        conv_ctx.do_conversion()?;
+    for path in dsd::find_dsd_files(&paths, cli.recurse)? {
+        do_conversion(Some(path))?;
     }
 
     Ok(())

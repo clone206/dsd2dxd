@@ -80,11 +80,19 @@ where
         self.samples.first().map_or(0, |channel| channel.len())
     }
 
-    pub fn save<P: AsRef<Path>>(&self, path: P, format: AudioFileFormat, vorbis: Option<VorbisComment>, pictures: Vec<Picture>) -> io::Result<()> {
+    pub fn save<P: AsRef<Path>>(
+        &self,
+        path: P,
+        format: AudioFileFormat,
+        vorbis: Option<VorbisComment>,
+        pictures: Vec<Picture>,
+    ) -> io::Result<()> {
         match format {
             AudioFileFormat::Wave => self.save_wave_file(path),
             AudioFileFormat::Aiff => self.save_aiff_file(path),
-            AudioFileFormat::Flac => self.save_flac_file(path, vorbis, pictures),
+            AudioFileFormat::Flac => {
+                self.save_flac_file(path, vorbis, pictures)
+            }
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Unsupported format",
@@ -100,12 +108,15 @@ where
         let channels = self.num_channels as u16;
         let bytes_per_sample = if self.bit_depth == 20 {
             3
-        } else {
+        }
+        else {
             (self.bit_depth / 8) as u16
         };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
-        let data_size = (frames * self.num_channels * bytes_per_sample as usize) as u32;
+        let data_size = (frames
+            * self.num_channels
+            * bytes_per_sample as usize) as u32;
         let file_size = data_size + 36;
 
         // RIFF header
@@ -132,7 +143,8 @@ where
         // Stream samples in blocks to reduce temporary allocation
         // Choose a frame block size that stays cache friendly
         const FRAME_BLOCK: usize = 16_384;
-        let mut buf: Vec<u8> = Vec::with_capacity(FRAME_BLOCK * block_align as usize);
+        let mut buf: Vec<u8> =
+            Vec::with_capacity(FRAME_BLOCK * block_align as usize);
 
         match self.bit_depth {
             16 => {
@@ -141,7 +153,8 @@ where
                     let end = (base + FRAME_BLOCK).min(frames);
                     for i in base..end {
                         for ch in 0..self.num_channels {
-                            let s = self.samples[ch][i].to_i16().to_le_bytes();
+                            let s =
+                                self.samples[ch][i].to_i16().to_le_bytes();
                             buf.extend_from_slice(&s);
                         }
                     }
@@ -174,7 +187,8 @@ where
                     let end = (base + FRAME_BLOCK).min(frames);
                     for i in base..end {
                         for ch in 0..self.num_channels {
-                            let b = self.samples[ch][i].to_f32().to_le_bytes();
+                            let b =
+                                self.samples[ch][i].to_f32().to_le_bytes();
                             buf.extend_from_slice(&b);
                         }
                     }
@@ -185,7 +199,7 @@ where
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Unsupported bit depth",
-                ))
+                ));
             }
         }
 
@@ -198,10 +212,17 @@ where
         let mut w = BufWriter::with_capacity(1 << 20, file);
 
         let channels = self.num_channels as u16;
-        let bytes_per_sample = if self.bit_depth == 20 { 3 } else { (self.bit_depth / 8) as u16 };
+        let bytes_per_sample = if self.bit_depth == 20 {
+            3
+        }
+        else {
+            (self.bit_depth / 8) as u16
+        };
         let block_align = channels * bytes_per_sample;
         let frames = self.get_num_samples_per_channel();
-        let data_size = (frames * self.num_channels * bytes_per_sample as usize) as u32;
+        let data_size = (frames
+            * self.num_channels
+            * bytes_per_sample as usize) as u32;
 
         // FORM chunk
         w.write_all(b"FORM")?;
@@ -227,7 +248,8 @@ where
         w.write_all(&0u32.to_be_bytes())?; // block size
 
         const FRAME_BLOCK: usize = 16_384;
-        let mut buf: Vec<u8> = Vec::with_capacity(FRAME_BLOCK * block_align as usize);
+        let mut buf: Vec<u8> =
+            Vec::with_capacity(FRAME_BLOCK * block_align as usize);
 
         match self.bit_depth {
             16 => {
@@ -236,7 +258,8 @@ where
                     let end = (base + FRAME_BLOCK).min(frames);
                     for i in base..end {
                         for ch in 0..self.num_channels {
-                            let b = self.samples[ch][i].to_i16().to_be_bytes();
+                            let b =
+                                self.samples[ch][i].to_i16().to_be_bytes();
                             buf.extend_from_slice(&b);
                         }
                     }
@@ -267,7 +290,7 @@ where
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Unsupported bit depth",
-                ))
+                ));
             }
         }
 
@@ -275,16 +298,27 @@ where
         Ok(())
     }
 
-    fn save_flac_file<P: AsRef<Path>>(&self, path: P, vorbis: Option<VorbisComment>, pictures: Vec<Picture>) -> io::Result<()> {
+    fn save_flac_file<P: AsRef<Path>>(
+        &self,
+        path: P,
+        vorbis: Option<VorbisComment>,
+        pictures: Vec<Picture>,
+    ) -> io::Result<()> {
         use flac_codec::byteorder::LittleEndian;
         use flac_codec::encode::{FlacByteWriter, Options};
 
         if self.num_channels == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "No channels"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "No channels",
+            ));
         }
         let frames = self.get_num_samples_per_channel();
         if frames == 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "No samples"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "No samples",
+            ));
         }
 
         // Support 16 or 24 bit (truncate >24).
@@ -292,7 +326,10 @@ where
         if bits_per_sample > 24 {
             bits_per_sample = 24;
         }
-        if bits_per_sample != 16 && bits_per_sample != 20 && bits_per_sample != 24 {
+        if bits_per_sample != 16
+            && bits_per_sample != 20
+            && bits_per_sample != 24
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "FLAC: only 16, 20, or 24-bit supported",
@@ -303,10 +340,12 @@ where
         let bps = bits_per_sample as u32;
         let bytes_per_sample = (if bits_per_sample == 20 {
             3
-        } else {
+        }
+        else {
             bits_per_sample / 8
         }) as usize;
-        let total_pcm_bytes = frames as u64 * channels as u64 * bytes_per_sample as u64;
+        let total_pcm_bytes =
+            frames as u64 * channels as u64 * bytes_per_sample as u64;
 
         let mut opts = Options::default();
 
@@ -318,19 +357,26 @@ where
         }
 
         // Create FLAC writer (LittleEndian because we feed little-endian sample bytes)
-        let mut flac: FlacByteWriter<_, LittleEndian> = FlacByteWriter::create(
-            path.as_ref(),
-            opts,
-            self.sample_rate,
-            bps,
-            channels.try_into().unwrap(),
-            Some(total_pcm_bytes),
-        )
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("FLAC create: {e}")))?;
+        let mut flac: FlacByteWriter<_, LittleEndian> =
+            FlacByteWriter::create(
+                path.as_ref(),
+                opts,
+                self.sample_rate,
+                bps,
+                channels.try_into().unwrap(),
+                Some(total_pcm_bytes),
+            )
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("FLAC create: {e}"),
+                )
+            })?;
 
         const FRAME_BLOCK: usize = 16_384;
-        let mut buf: Vec<u8> =
-            Vec::with_capacity(FRAME_BLOCK * channels as usize * bytes_per_sample);
+        let mut buf: Vec<u8> = Vec::with_capacity(
+            FRAME_BLOCK * channels as usize * bytes_per_sample,
+        );
 
         if bits_per_sample == 16 {
             for base in (0..frames).step_by(FRAME_BLOCK) {
@@ -338,12 +384,15 @@ where
                 let end = (base + FRAME_BLOCK).min(frames);
                 for i in base..end {
                     for ch in 0..self.num_channels {
-                        buf.extend_from_slice(&self.samples[ch][i].to_i16().to_le_bytes());
+                        buf.extend_from_slice(
+                            &self.samples[ch][i].to_i16().to_le_bytes(),
+                        );
                     }
                 }
                 flac.write_all(&buf)?;
             }
-        } else {
+        }
+        else {
             // 24-bit
             for base in (0..frames).step_by(FRAME_BLOCK) {
                 buf.clear();
@@ -363,8 +412,12 @@ where
             }
         }
 
-        flac.finalize()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("FLAC finalize: {e}")))?;
+        flac.finalize().map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("FLAC finalize: {e}"),
+            )
+        })?;
         Ok(())
     }
 
@@ -395,7 +448,8 @@ where
 
         // Mantissa includes the leading 1-bit (integer bit) in the top of the 64-bit field.
         // Compute with u128 to detect rounding overflow to 2^64, then downcast to u64.
-        let mut mant128: u128 = (value * ((1u128 << 63) as f64)).round() as u128;
+        let mut mant128: u128 =
+            (value * ((1u128 << 63) as f64)).round() as u128;
         if mant128 == (1u128 << 64) {
             // value rounded to 2.0; renormalize
             mant128 = 1u128 << 63;

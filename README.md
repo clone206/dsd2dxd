@@ -32,7 +32,7 @@ git submodule update --init
 cargo install --path .
 ```
 
-This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`). When in doubt, type `which dsd2dxd` to see which binary is currently being used.
+This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`). When in doubt on a *nix system, type `which dsd2dxd` to see which binary is currently being used.
 
 ### Examples
 
@@ -63,6 +63,15 @@ dsd2dxd [options] < infile.dsd > outfile.pcm
 # "shopt -s globstar" first. Outputs to the directory specified with -p, 
 # instead of the default of outputting to the same directory as each input file.
 dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
+# Advanced: Convert all .dsf, .dff, and .dsd files in the current directory, 
+# recursively, as well as a raw dsd file via stdin, to wav files, and place
+# the converted files into the ./test directory. The ./test directory must
+# already exist, but any needed subdirectories will be created within. 
+# The result of converting from stdin (-) will be a file named output.wav.
+# You can also mix globs (wildcards) like the ones above with directories
+# and stdin as inputs. The shell will just expand the globs to a list of 
+# files, and dsd2dxd will also expand the directories to a list of files.
+dsd2dxd -R -o w -p test . - < raw_dsd_file
 ```
 
 ### Full Usage and Options
@@ -70,16 +79,19 @@ dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
 For many users, the majority of the below options can usually be ignored, as you will probably mostly be reading from .dsf or .dff files, which contain metadata that is read by dsd2dxd and used to set a lot of the options automatically. For that use case, the most important options are probably `-o`, `-r`, and `-p`, for setting the output type, output sample rate, and output folder path, respectively.
 
 ```
-Usage: dsd2dxd [options] [infile(s)|-], where "-" means read from 
+Usage: dsd2dxd [options] [infile/folder(s)|-], where "-" means read from 
 standard in (stdin).
 
 If reading from a file, certain command line options you provide 
 (e.g. block size) may be overridden using the metadata found in 
-that file (either a dsf or dff file). If neither filename(s) 
+that file (either a dsf or dff file). If neither file/folder path(s) 
 or - is provided, standard in is assumed. 
-Multiple filenames can be provided and the input-related options 
+Multiple file/folder paths can be provided and the input-related options 
 specified will be applied to each, except where overridden by each 
-file's metadata.
+file's metadata. When -R/--recurse is supplied, folders will be recursively
+scanned for files ending in .dsf, .dff, or .dsd, where .dsd files are assumed
+to be raw dsd bitstreams. Without -R, directories are not traversed; provide
+explicit file paths if you don’t want recursion.
 
 Options:
   -p, --path <PATH>
@@ -136,6 +148,8 @@ Options:
           Append abbreviated output rate to filename (e.g.,
           _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to
           the album tag of the output file if present
+  -R, --recurse
+          Recurse into directories when the supplied input paths include folders
   -h, --help
           Print help
   -V, --version
