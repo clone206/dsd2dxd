@@ -51,7 +51,7 @@ impl OutputContext {
         out_type: char,
         out_vol: f64,
         out_rate: i32,
-        out_path: Option<String>,
+        out_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -78,17 +78,14 @@ impl OutputContext {
         let bytes_per_sample =
             if out_bits == 20 { 3 } else { out_bits / 8 };
 
-        let mut pathbuf_opt = None;
-        if let Some(p) = out_path {
-            let pb = PathBuf::from(&p);
-            if !pb.exists() {
-                return Err(format!(
-                    "Specified output path does not exist: {}",
-                    pb.display()
-                )
-                .into());
-            }
-            pathbuf_opt = Some(pb);
+        if let Some(p) = &out_path
+            && !p.exists()
+        {
+            return Err(format!(
+                "Specified output path does not exist: {}",
+                p.display()
+            )
+            .into());
         }
 
         let mut ctx = Self {
@@ -104,7 +101,7 @@ impl OutputContext {
             stdout_buf: Vec::new(),
             vorbis: None,
             pictures: Vec::new(),
-            path: pathbuf_opt,
+            path: out_path,
         };
 
         ctx.set_scaling(out_vol);

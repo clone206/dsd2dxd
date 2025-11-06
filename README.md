@@ -65,7 +65,7 @@ dsd2dxd [options] < infile.dsd > outfile.pcm
 dsd2dxd -r 88200 -o f -p ../some/other/directory **/*.{dsf,DSF}
 # Advanced: Convert all .dsf, .dff, and .dsd files in the current directory, 
 # recursively, as well as a raw dsd file via stdin, to wav files, and place
-# the converted files into the ./test directory. The test directory must
+# the converted files into the ./test directory. The ./test directory must
 # already exist, but any needed subdirectories will be created within. 
 # The result of converting from stdin (-) will be a file named output.wav.
 # You can also mix globs (wildcards) like the ones above with directories

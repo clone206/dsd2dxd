@@ -512,7 +512,7 @@ impl ConversionContext {
         source_dir: &Path,
         destination_dir: &Path,
     ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-        if self.out_ctx.path.is_none() {
+        if self.out_ctx.path.is_none() || self.in_ctx.std_in {
             return Ok((0, 0));
         }
         let mut copied: u32 = 0;

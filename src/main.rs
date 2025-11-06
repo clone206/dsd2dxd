@@ -17,7 +17,10 @@
 */
 
 use clap::Parser;
-use std::{error::Error, path::PathBuf};
+use std::{
+    error::Error,
+    path::PathBuf,
+};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -42,7 +45,7 @@ struct Cli {
     /// Artwork files will be copied to the output directories.
     /// [default: same as input file]
     #[arg(short = 'p', long = "path", default_value = None)]
-    path: Option<String>,
+    path: Option<PathBuf>,
 
     /// Number of channels
     #[arg(short = 'c', long = "channels", default_value = "2")]
@@ -119,7 +122,7 @@ struct Cli {
 
     /// Input files/folders (use - for stdin)
     #[arg(name = "FILES")]
-    files: Vec<String>,
+    files: Vec<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -133,8 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
-    }
-    else {
+    } else {
         'T'
     });
 
@@ -149,12 +151,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
-    let inputs = if cli.files.is_empty() {
-        vec!["-".to_string()]
-    }
-    else {
+    let mut inputs = if cli.files.is_empty() {
+        vec![PathBuf::from("-")]
+    } else {
         cli.files.clone()
     };
+    inputs.sort();
+    inputs.dedup();
 
     let do_conversion =
         |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
@@ -185,25 +188,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     let paths = inputs
         .iter()
         .filter_map(|input| {
-            if input.contains('*') {
+            if input.to_string_lossy().contains('*') {
                 verbose(&format!(
                     "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
-                    input
+                    input.display()
                 ));
                 None
             }
-            else if input == "-" {
+            else if input == &PathBuf::from("-") {
                 if let Err(e) = do_conversion(None) {
                     panic!("Error processing stdin: {}", e);
                 }
                 None
             }
             else {
-                verbose(&format!("Input: {}", input));
-                Some(PathBuf::from(input))
+                verbose(&format!("Input: {}", input.display()));
+                Some(input)
             }
         })
-        .collect::<Vec<PathBuf>>();
+        .cloned()
+        .collect::<Vec<_>>();
 
     for path in dsd::find_dsd_files(&paths, cli.recurse)? {
         do_conversion(Some(path))?;
