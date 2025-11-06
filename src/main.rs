@@ -17,10 +17,7 @@
 */
 
 use clap::Parser;
-use std::{
-    error::Error,
-    path::PathBuf,
-};
+use std::{error::Error, path::PathBuf};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
