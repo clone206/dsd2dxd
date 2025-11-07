@@ -162,13 +162,13 @@ dsd2dxd includes shell scripts to compile and test with 1kHz test tone files.
 
 ```bash
 # Compile code; convert and play mono, planar/LSB-first, 24bit, test file w 4dB boost
-./build_test_mono.sh P 24 L 4 1kHz_mono_p.dsd
+./build_test_mono.sh P 24 L 4 test/1kHz_mono_p.dsd
 
 # Compile code; convert and play stereo, planar/LSB-first, 16bit, test file w 4dB cut
-./build_test_stereo.sh P 16 L -4 1kHz_stereo_p.dsd
+./build_test_stereo.sh P 16 L -4 test/1kHz_stereo_p.dsd
 
 # Compile code; convert and play stereo, planar/LSB-first, 32bit float, test file with no volume adj
-./build_test_stereo_flt.sh P L 0 1kHz_stereo_p.dsd
+./build_test_stereo_flt.sh P L 0 test/1kHz_stereo_p.dsd
 ```
 
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off. This means they have a block size of `4096` and are planar format.
