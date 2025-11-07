@@ -143,6 +143,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli.level,
         cli.output_rate,
         cli.path,
+        cli.verbose,
     )?;
     let dither = Dither::new(dither_type)?;
     let cwd = std::env::current_dir()

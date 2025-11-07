@@ -25,8 +25,6 @@ use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
 use crate::output::OutputContext;
-use flac_codec::metadata;
-use flac_codec::metadata::PictureType;
 use id3::TagLike;
 use std::error::Error;
 use std::ffi::OsString;
@@ -71,7 +69,6 @@ impl ConversionContext {
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize;
         let channels = in_ctx.channels_num as usize;
-        let dsd_rate = in_ctx.dsd_rate;
 
         let (decim_ratio, upsample_ratio) =
             compute_decim_and_upsample(in_ctx.dsd_rate, out_ctx.rate);
@@ -109,56 +106,61 @@ impl ConversionContext {
             base_dir,
         };
 
-        if upsample_ratio > 1 {
-            ctx.eq_lm_resamplers = Some(
-                (0..channels)
-                    .map(|_i| {
-                        LMResampler::new(
-                            ctx.upsample_ratio,
-                            decim_ratio,
-                            ctx.verbose_mode,
-                            ctx.out_ctx.rate as u32,
-                        )
-                    })
-                    .collect(),
-            );
-            ctx.out_ctx.scale_factor *= ctx.upsample_ratio as f64;
-            ctx.verbose(&format!(
-                "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
-                ctx.upsample_ratio, ctx.out_ctx.scale_factor
-            ));
-        } else if let Some(taps) =
-            select_precalc_taps(ctx.filt_type, dsd_rate, ctx.decim_ratio)
-        {
-            ctx.precalc_decims = Some(
-                (0..channels)
-                    .map(|_| {
-                        BytePrecalcDecimator::new(
-                            taps,
-                            ctx.decim_ratio as u32,
-                        )
-                        .expect("Precalc BytePrecalcDecimator init failed")
-                    })
-                    .collect(),
-            );
-            ctx.verbose(
-                &format!(
-                    "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
-                    ctx.decim_ratio, ctx.filt_type, dsd_rate
-                )
-            );
-        } else {
-            return Err(format!(
-                "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
-                ctx.decim_ratio, ctx.filt_type, dsd_rate
-            )
-            .into());
-        }
+        ctx.setup_resamplers()?;
 
         ctx.out_ctx
             .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
         ctx.dither.init();
         Ok(ctx)
+    }
+
+    fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.upsample_ratio > 1 {
+            self.eq_lm_resamplers = Some(
+                (0..self.in_ctx.channels_num)
+                    .map(|_i| {
+                        LMResampler::new(
+                            self.upsample_ratio,
+                            self.decim_ratio,
+                            self.verbose_mode,
+                            self.out_ctx.rate as u32,
+                        )
+                    })
+                    .collect(),
+            );
+            self.out_ctx.scale_factor *= self.upsample_ratio as f64;
+            self.verbose(&format!(
+                "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
+                self.upsample_ratio, self.out_ctx.scale_factor
+            ));
+        } else if let Some(taps) =
+            select_precalc_taps(self.filt_type, self.in_ctx.dsd_rate, self.decim_ratio)
+        {
+            self.precalc_decims = Some(
+                (0..self.in_ctx.channels_num)
+                    .map(|_| {
+                        BytePrecalcDecimator::new(
+                            taps,
+                            self.decim_ratio as u32,
+                        )
+                        .expect("Precalc BytePrecalcDecimator init failed")
+                    })
+                    .collect(),
+            );
+            self.verbose(
+                &format!(
+                    "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
+                    self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate
+                )
+            );
+        } else {
+            return Err(format!(
+                "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
+                self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate
+            )
+            .into());
+        }
+        Ok(())
     }
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
@@ -176,10 +178,10 @@ impl ConversionContext {
         eprintln!("Clipped {} times.", self.clips);
         eprintln!("");
 
-        if self.out_ctx.output != 's' {
-            if let Err(e) = self.write_file() {
-                eprintln!("Error writing file: {e}");
-            }
+        if self.out_ctx.output != 's'
+            && let Err(e) = self.write_file()
+        {
+            eprintln!("Error writing file: {e}");
         }
         let total_elapsed = wall_start.elapsed();
 
@@ -198,31 +200,30 @@ impl ConversionContext {
         &mut self,
         reading_from_file: bool,
     ) -> Result<Box<dyn Read>, Box<dyn Error>> {
-        if reading_from_file {
-            // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
-            let mut file = self
-                .in_ctx
-                .file
-                .as_ref()
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::Other,
-                        "Missing input file handle",
-                    )
-                })?
-                .try_clone()?;
-
-            if self.in_ctx.audio_pos > 0 {
-                file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
-                self.verbose(&format!(
-                    "Seeked to audio start position: {}",
-                    file.stream_position()?
-                ));
-            }
-            Ok(Box::new(file))
-        } else {
-            Ok(Box::new(io::stdin().lock()))
+        if !reading_from_file {
+            return Ok(Box::new(io::stdin().lock()));
         }
+        // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
+        let mut file = self
+            .in_ctx
+            .file
+            .as_ref()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    "Missing input file handle",
+                )
+            })?
+            .try_clone()?;
+
+        if self.in_ctx.audio_pos > 0 {
+            file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
+            self.verbose(&format!(
+                "Seeked to audio start position: {}",
+                file.stream_position()?
+            ));
+        }
+        Ok(Box::new(file))
     }
 
     #[inline(always)]
@@ -275,10 +276,10 @@ impl ConversionContext {
             {
                 Ok(s) => s,
                 Err(e) => {
-                    if let Some(io_err) = e.downcast_ref::<io::Error>() {
-                        if io_err.kind() == io::ErrorKind::UnexpectedEof {
-                            break;
-                        }
+                    if let Some(io_err) = e.downcast_ref::<io::Error>()
+                        && io_err.kind() == io::ErrorKind::UnexpectedEof
+                    {
+                        break;
                     }
                     return Err(e);
                 }
@@ -396,7 +397,7 @@ impl ConversionContext {
         // Build contiguous per-channel byte buffer with proper bit endianness.
         let dsd_chan_offset = chan * self.in_ctx.dsd_chan_offset as usize;
         let dsd_stride = self.in_ctx.dsd_stride as isize;
-        let lsb_first = self.in_ctx.lsbit_first != 0;
+        let lsb_first = self.in_ctx.lsbit_first;
         let stride = if dsd_stride >= 0 {
             dsd_stride as usize
         } else {
@@ -609,7 +610,7 @@ impl ConversionContext {
 
             if self.out_ctx.output.to_ascii_lowercase() == 'f' {
                 self.verbose("Preparing Vorbis Comment for FLAC...");
-                self.id3_to_flac_meta(&tag);
+                self.out_ctx.id3_to_flac_meta(&tag);
             }
             self.out_ctx.save_file(&out_path)?;
 
@@ -624,70 +625,6 @@ impl ConversionContext {
         }
 
         Ok(())
-    }
-
-    fn id3_to_flac_meta(&mut self, tag: &id3::Tag) {
-        let unix_datetime = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or_default();
-        let mut vorbis = metadata::VorbisComment {
-            vendor_string: format!(
-                "dsd2dxd v{} Unix datetime {}",
-                env!("CARGO_PKG_VERSION"),
-                unix_datetime
-            ),
-            fields: Vec::new(),
-        };
-
-        if let Some(artist) = tag.artist() {
-            vorbis.insert("ARTIST", artist);
-        }
-        if let Some(album) = tag.album() {
-            vorbis.insert("ALBUM", album);
-        }
-        if let Some(title) = tag.title() {
-            vorbis.insert("TITLE", title);
-        }
-        if let Some(track) = tag.track() {
-            vorbis.insert("TRACKNUMBER", &track.to_string());
-        }
-        if let Some(disc) = tag.disc() {
-            vorbis.insert("DISCNUMBER", &disc.to_string());
-        }
-        if let Some(year) = tag.year() {
-            vorbis.insert("DATE", &year.to_string());
-        }
-        if let Some(comment_frame) = tag.get("COMM") {
-            if let id3::Content::Comment(comm) = comment_frame.content() {
-                vorbis.insert("COMMENT", &comm.text);
-            }
-        }
-
-        self.out_ctx.set_vorbis(vorbis);
-
-        for pic in tag.pictures() {
-            let pic_type: PictureType = if pic.picture_type
-                == id3::frame::PictureType::CoverFront
-            {
-                flac_codec::metadata::PictureType::FrontCover
-            } else if pic.picture_type
-                == id3::frame::PictureType::CoverBack
-            {
-                flac_codec::metadata::PictureType::BackCover
-            } else {
-                continue;
-            };
-            self.verbose(&format!("Adding ID3 Picture: {}", pic));
-            let picture = flac_codec::metadata::Picture::new(
-                pic_type,
-                pic.description.clone(),
-                pic.data.clone(),
-            );
-            if let Ok(my_pic) = picture {
-                self.out_ctx.add_picture(my_pic);
-            }
-        }
     }
 
     fn append_album_suffix(&self, tag: &mut id3::Tag) {

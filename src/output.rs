@@ -16,7 +16,8 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use flac_codec::metadata::{Picture, VorbisComment};
+use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
+use id3::TagLike;
 
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
@@ -25,24 +26,21 @@ use std::path::PathBuf;
 use std::{io, vec};
 
 pub struct OutputContext {
-    // Init'd via input params
     pub bits: i32,
     pub channels_num: u32,
     pub rate: i32,
     pub bytes_per_sample: i32,
     pub output: char,
     pub path: Option<PathBuf>,
-
-    // Set freely
     pub peak_level: i32,
     pub scale_factor: f64,
 
-    // Internal state
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
     stdout_buf: Vec<u8>,
     vorbis: Option<VorbisComment>,
     pictures: Vec<Picture>,
+    verbose_mode: bool,
 }
 
 impl OutputContext {
@@ -52,6 +50,7 @@ impl OutputContext {
         out_vol: f64,
         out_rate: i32,
         out_path: Option<PathBuf>,
+        verbose_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -102,6 +101,7 @@ impl OutputContext {
             vorbis: None,
             pictures: Vec::new(),
             path: out_path,
+            verbose_mode,
         };
 
         ctx.set_scaling(out_vol);
@@ -137,11 +137,11 @@ impl OutputContext {
         Ok(())
     }
 
-    pub fn add_picture(&mut self, pic: Picture) {
+    fn add_picture(&mut self, pic: Picture) {
         self.pictures.push(pic);
     }
 
-    pub fn set_vorbis(&mut self, vorbis: VorbisComment) {
+    fn set_vorbis(&mut self, vorbis: VorbisComment) {
         self.vorbis = Some(vorbis);
     }
 
@@ -293,6 +293,77 @@ impl OutputContext {
             }
         }
     }
+
+    /// Convert ID3 tag to FLAC VorbisComment metadata
+    pub fn id3_to_flac_meta(&mut self, tag: &id3::Tag) {
+        let unix_datetime = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let mut vorbis = metadata::VorbisComment {
+            vendor_string: format!(
+                "dsd2dxd v{} Unix datetime {}",
+                env!("CARGO_PKG_VERSION"),
+                unix_datetime
+            ),
+            fields: Vec::new(),
+        };
+
+        if let Some(artist) = tag.artist() {
+            vorbis.insert("ARTIST", artist);
+        }
+        if let Some(album) = tag.album() {
+            vorbis.insert("ALBUM", album);
+        }
+        if let Some(title) = tag.title() {
+            vorbis.insert("TITLE", title);
+        }
+        if let Some(track) = tag.track() {
+            vorbis.insert("TRACKNUMBER", &track.to_string());
+        }
+        if let Some(disc) = tag.disc() {
+            vorbis.insert("DISCNUMBER", &disc.to_string());
+        }
+        if let Some(year) = tag.year() {
+            vorbis.insert("DATE", &year.to_string());
+        }
+        if let Some(comment_frame) = tag.get("COMM") {
+            if let id3::Content::Comment(comm) = comment_frame.content() {
+                vorbis.insert("COMMENT", &comm.text);
+            }
+        }
+
+        self.set_vorbis(vorbis);
+
+        for pic in tag.pictures() {
+            let pic_type: PictureType = if pic.picture_type
+                == id3::frame::PictureType::CoverFront
+            {
+                flac_codec::metadata::PictureType::FrontCover
+            } else if pic.picture_type
+                == id3::frame::PictureType::CoverBack
+            {
+                flac_codec::metadata::PictureType::BackCover
+            } else {
+                continue;
+            };
+            self.verbose(&format!("Adding ID3 Picture: {}", pic));
+            let picture = flac_codec::metadata::Picture::new(
+                pic_type,
+                pic.description.clone(),
+                pic.data.clone(),
+            );
+            if let Ok(my_pic) = picture {
+                self.add_picture(my_pic);
+            }
+        }
+    }
+
+    fn verbose(&self, message: &str) {
+        if self.verbose_mode {
+            eprintln!("{}", message);
+        }
+    }
 }
 
 impl Clone for OutputContext {
@@ -311,6 +382,7 @@ impl Clone for OutputContext {
             vorbis: self.vorbis.clone(),
             pictures: self.pictures.clone(),
             path: self.path.clone(),
+            verbose_mode: self.verbose_mode,
         }
     }
 }
