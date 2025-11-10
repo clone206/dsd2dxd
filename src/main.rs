@@ -137,15 +137,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         'T'
     });
 
+    let dither = Dither::new(dither_type)?;
     let out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
         cli.level,
         cli.output_rate,
         cli.path,
+        dither,
         cli.verbose,
     )?;
-    let dither = Dither::new(dither_type)?;
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
@@ -173,7 +174,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut conv_ctx = ConversionContext::new(
                 in_ctx,
                 out_ctx.clone(),
-                dither.clone(),
                 cli.filter_type.unwrap().to_ascii_uppercase(),
                 cli.verbose,
                 cli.append_rate,

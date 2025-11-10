@@ -19,6 +19,7 @@
 use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
 use id3::TagLike;
 
+use crate::Dither;
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
@@ -34,7 +35,12 @@ pub struct OutputContext {
     pub path: Option<PathBuf>,
     pub peak_level: i32,
     pub scale_factor: f64,
+    pub clips: i32,
+    pub dither: Dither,
+    pub float_data: Vec<f64>,
 
+    last_samps_clipped_low: i32,
+    last_samps_clipped_high: i32,
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
     stdout_buf: Vec<u8>,
@@ -50,6 +56,7 @@ impl OutputContext {
         out_vol: f64,
         out_rate: i32,
         out_path: Option<PathBuf>,
+        dither: Dither,
         verbose_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
@@ -102,6 +109,11 @@ impl OutputContext {
             pictures: Vec::new(),
             path: out_path,
             verbose_mode,
+            last_samps_clipped_low: 0,
+            last_samps_clipped_high: 0,
+            clips: 0,
+            dither,
+            float_data: Vec::new(),
         };
 
         ctx.set_scaling(out_vol);
@@ -114,6 +126,12 @@ impl OutputContext {
         channels_num: u32,
     ) -> Result<(), Box<dyn Error>> {
         self.channels_num = channels_num;
+        self.float_data = vec![0.0; out_frames_capacity];
+        self.clips = 0;
+        self.last_samps_clipped_low = 0;
+        self.last_samps_clipped_high = 0;
+        self.dither.init();
+
         if self.output == 's' {
             self.stdout_buf = vec![
                 0u8;
@@ -359,9 +377,109 @@ impl OutputContext {
         }
     }
 
+    #[inline(always)]
+    pub fn write_to_buffer(
+        &mut self,
+        samples_used_per_chan: usize,
+        chan: usize,
+    ) {
+        // Output / packing for channel
+        if self.output == 's' {
+            // Interleave into pcm_data (handle float vs integer separately)
+            let bps = self.bytes_per_sample as usize; // 4 for 32-bit float
+            let mut pcm_pos = chan * bps;
+            for s in 0..samples_used_per_chan {
+                let mut out_idx = pcm_pos;
+                if self.bits == 32 {
+                    // 32-bit float path
+                    let mut q = self.float_data[s];
+                    self.scale_and_dither(&mut q);
+                    self.pack_float(&mut out_idx, q);
+                } else {
+                    // Integer path: dither + clamp + write_int
+                    let mut qin: f64 = self.float_data[s];
+                    self.scale_and_dither(&mut qin);
+                    let quantized = self.quantize(&mut qin);
+                    self.pack_int(&mut out_idx, quantized);
+                }
+                pcm_pos += self.channels_num as usize * bps;
+            }
+        } else if self.bits == 32 {
+            for s in 0..samples_used_per_chan {
+                let mut q = self.float_data[s];
+                self.scale_and_dither(&mut q);
+                self.push_samp(q as f32, chan);
+            }
+        } else {
+            for s in 0..samples_used_per_chan {
+                let mut qin: f64 = self.float_data[s];
+                self.scale_and_dither(&mut qin);
+                let quantized = self.quantize(&mut qin);
+                self.push_samp(quantized, chan);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn scale_and_dither(&mut self, sample: &mut f64) {
+        *sample *= self.scale_factor;
+        self.dither.process_samp(sample);
+    }
+
+    // Helper function for clip stats
+    #[inline(always)]
+    fn update_clip_stats(&mut self, low: bool, high: bool) {
+        if low {
+            if self.last_samps_clipped_low == 1 {
+                self.clips += 1;
+            }
+            self.last_samps_clipped_low += 1;
+            return;
+        }
+        self.last_samps_clipped_low = 0;
+        if high {
+            if self.last_samps_clipped_high == 1 {
+                self.clips += 1;
+            }
+            self.last_samps_clipped_high += 1;
+            return;
+        }
+        self.last_samps_clipped_high = 0;
+    }
+
+    #[inline(always)]
+    pub fn quantize(&mut self, qin: &mut f64) -> i32 {
+        let value = Self::my_round(*qin) as i32;
+        let peak = self.peak_level as i32;
+        self.clamp_value(-peak, value, peak - 1)
+    }
+
+    #[inline(always)]
+    fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
+        return if value < min {
+            self.update_clip_stats(true, false);
+            min
+        } else if value > max {
+            self.update_clip_stats(false, true);
+            max
+        } else {
+            self.update_clip_stats(false, false);
+            value
+        };
+    }
+
+    #[inline(always)]
+    fn my_round(x: f64) -> i64 {
+        if x < 0.0 {
+            (x - 0.5).floor() as i64
+        } else {
+            (x + 0.5).floor() as i64
+        }
+    }
+
     fn verbose(&self, message: &str) {
         if self.verbose_mode {
-            eprintln!("{}", message);
+            eprintln!("[Verbose][Output] {}", message);
         }
     }
 }
@@ -383,6 +501,11 @@ impl Clone for OutputContext {
             pictures: self.pictures.clone(),
             path: self.path.clone(),
             verbose_mode: self.verbose_mode,
+            last_samps_clipped_low: self.last_samps_clipped_low,
+            last_samps_clipped_high: self.last_samps_clipped_high,
+            clips: self.clips,
+            dither: self.dither.clone(),
+            float_data: self.float_data.clone(),
         }
     }
 }

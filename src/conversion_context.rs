@@ -28,7 +28,7 @@ use crate::output::OutputContext;
 use id3::TagLike;
 use std::error::Error;
 use std::ffi::OsString;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -36,13 +36,8 @@ use std::time::Instant;
 pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
-    dither: Dither,
     filt_type: char,
     dsd_data: Vec<u8>,
-    float_data: Vec<f64>,
-    clips: i32,
-    last_samps_clipped_low: i32,
-    last_samps_clipped_high: i32,
     verbose_mode: bool,
     append_rate_suffix: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
@@ -53,7 +48,6 @@ pub struct ConversionContext {
     diag_bits_in: u64,
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
-    reader: Box<dyn Read>,
     base_dir: PathBuf,
 }
 
@@ -61,7 +55,6 @@ impl ConversionContext {
     pub fn new(
         in_ctx: InputContext,
         out_ctx: OutputContext,
-        dither: Dither,
         filt_type: char,
         verbose_param: bool,
         append_rate_suffix: bool,
@@ -85,13 +78,8 @@ impl ConversionContext {
         let mut ctx = Self {
             in_ctx,
             out_ctx,
-            dither,
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
-            float_data: vec![0.0; out_frames_capacity],
-            clips: 0,
-            last_samps_clipped_low: 0,
-            last_samps_clipped_high: 0,
             verbose_mode: verbose_param,
             append_rate_suffix,
             precalc_decims: None,
@@ -102,7 +90,6 @@ impl ConversionContext {
             diag_bits_in: 0,
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
-            reader: Box::new(io::empty()), // Placeholder,
             base_dir,
         };
 
@@ -110,7 +97,6 @@ impl ConversionContext {
 
         ctx.out_ctx
             .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
-        ctx.dither.init();
         Ok(ctx)
     }
 
@@ -133,9 +119,11 @@ impl ConversionContext {
                 "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
                 self.upsample_ratio, self.out_ctx.scale_factor
             ));
-        } else if let Some(taps) =
-            select_precalc_taps(self.filt_type, self.in_ctx.dsd_rate, self.decim_ratio)
-        {
+        } else if let Some(taps) = select_precalc_taps(
+            self.filt_type,
+            self.in_ctx.dsd_rate,
+            self.decim_ratio,
+        ) {
             self.precalc_decims = Some(
                 (0..self.in_ctx.channels_num)
                     .map(|_| {
@@ -165,17 +153,16 @@ impl ConversionContext {
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
-        self.reader = self.get_reader(!self.in_ctx.std_in)?;
         eprintln!(
             "Dither type: {}",
-            self.dither.dither_type().to_ascii_uppercase()
+            self.out_ctx.dither.dither_type().to_ascii_uppercase()
         );
         let wall_start = Instant::now();
 
         self.process_blocks()?;
         let dsp_elapsed = wall_start.elapsed();
 
-        eprintln!("Clipped {} times.", self.clips);
+        eprintln!("Clipped {} times.", self.out_ctx.clips);
         eprintln!("");
 
         if self.out_ctx.output != 's'
@@ -196,65 +183,6 @@ impl ConversionContext {
         Ok(())
     }
 
-    fn get_reader(
-        &mut self,
-        reading_from_file: bool,
-    ) -> Result<Box<dyn Read>, Box<dyn Error>> {
-        if !reading_from_file {
-            return Ok(Box::new(io::stdin().lock()));
-        }
-        // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
-        let mut file = self
-            .in_ctx
-            .file
-            .as_ref()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    "Missing input file handle",
-                )
-            })?
-            .try_clone()?;
-
-        if self.in_ctx.audio_pos > 0 {
-            file.seek(SeekFrom::Start(self.in_ctx.audio_pos as u64))?;
-            self.verbose(&format!(
-                "Seeked to audio start position: {}",
-                file.stream_position()?
-            ));
-        }
-        Ok(Box::new(file))
-    }
-
-    #[inline(always)]
-    fn read_frame(
-        &mut self,
-        bytes_remaining: u64,
-        frame_size: usize,
-    ) -> Result<usize, Box<dyn Error>> {
-        // stdin always reads frame_size
-        let to_read: usize = if !self.in_ctx.std_in {
-            if bytes_remaining >= frame_size as u64 {
-                frame_size
-            } else {
-                bytes_remaining as usize
-            }
-        } else {
-            frame_size
-        };
-
-        // Read one frame identically for stdin and file
-        let read_size: usize =
-            match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
-                Ok(()) => to_read,
-                Err(e) => return Err(Box::new(e)),
-            };
-        // Track bytes processed (all channels)
-        self.total_dsd_bytes_processed += read_size as u64;
-
-        Ok(read_size)
-    }
-
     fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize =
@@ -271,9 +199,11 @@ impl ConversionContext {
 
         loop {
             // Read one frame identically for stdin and file
-            let read_size: usize = match self
-                .read_frame(bytes_remaining, frame_size)
-            {
+            let read_size: usize = match self.in_ctx.read_frame(
+                bytes_remaining,
+                frame_size,
+                &mut self.dsd_data,
+            ) {
                 Ok(s) => s,
                 Err(e) => {
                     if let Some(io_err) = e.downcast_ref::<io::Error>()
@@ -284,6 +214,8 @@ impl ConversionContext {
                     return Err(e);
                 }
             };
+
+            self.total_dsd_bytes_processed += read_size as u64;
 
             // Bytes per channel in this read
             let bytes_per_channel: usize = read_size / channels;
@@ -302,7 +234,7 @@ impl ConversionContext {
             for chan in 0..channels {
                 samples_used_per_chan =
                     self.process_channel(chan, bytes_per_channel);
-                self.write_to_buffer(samples_used_per_chan, chan);
+                self.out_ctx.write_to_buffer(samples_used_per_chan, chan);
             }
 
             // Derive actual byte count (may differ from estimate in rational path)
@@ -316,7 +248,7 @@ impl ConversionContext {
 
             if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
-            }
+            } 
 
             // Decrement for file input using actual read size
             if reading_from_file {
@@ -328,62 +260,6 @@ impl ConversionContext {
         } // end loop
 
         Ok(())
-    }
-
-    #[inline(always)]
-    fn write_to_buffer(
-        &mut self,
-        samples_used_per_chan: usize,
-        chan: usize,
-    ) {
-        // Output / packing for channel
-        if self.out_ctx.output == 's' {
-            // Interleave into pcm_data (handle float vs integer separately)
-            let bps = self.out_ctx.bytes_per_sample as usize; // 4 for 32-bit float
-            let mut pcm_pos = chan * bps;
-            for s in 0..samples_used_per_chan {
-                let mut out_idx = pcm_pos;
-                if self.out_ctx.bits == 32 {
-                    // 32-bit float path
-                    let mut q = self.float_data[s];
-                    self.scale_and_dither(&mut q);
-                    self.out_ctx.pack_float(&mut out_idx, q);
-                } else {
-                    // Integer path: dither + clamp + write_int
-                    let mut qin: f64 = self.float_data[s];
-                    self.scale_and_dither(&mut qin);
-                    let quantized = self.quantize(&mut qin);
-                    self.out_ctx.pack_int(&mut out_idx, quantized);
-                }
-                pcm_pos += self.in_ctx.channels_num as usize * bps;
-            }
-        } else if self.out_ctx.bits == 32 {
-            for s in 0..samples_used_per_chan {
-                let mut q = self.float_data[s];
-                self.scale_and_dither(&mut q);
-                self.out_ctx.push_samp(q as f32, chan);
-            }
-        } else {
-            for s in 0..samples_used_per_chan {
-                let mut qin: f64 = self.float_data[s];
-                self.scale_and_dither(&mut qin);
-                let quantized = self.quantize(&mut qin);
-                self.out_ctx.push_samp(quantized, chan);
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn scale_and_dither(&mut self, sample: &mut f64) {
-        *sample *= self.out_ctx.scale_factor;
-        self.dither.process_samp(sample);
-    }
-
-    #[inline(always)]
-    fn quantize(&mut self, qin: &mut f64) -> i32 {
-        let value = Self::my_round(*qin) as i32;
-        let peak = self.out_ctx.peak_level as i32;
-        self.clamp_value(-peak, value, peak - 1)
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
@@ -424,7 +300,7 @@ impl ConversionContext {
             return rs.process_bytes_lm(
                 &chan_bytes,
                 true,
-                &mut self.float_data,
+                &mut self.out_ctx.float_data,
             );
         } else {
             // Integer path: use precalc decimator; conventionally return the estimate
@@ -432,7 +308,7 @@ impl ConversionContext {
                 return 0;
             };
             let dec = &mut v[chan];
-            return dec.process_bytes(&chan_bytes, &mut self.float_data);
+            return dec.process_bytes(&chan_bytes, &mut self.out_ctx.float_data);
         }
     }
 
@@ -639,6 +515,25 @@ impl ConversionContext {
         }
     }
 
+    /// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
+    fn abbrev_rate_pair(
+        &self,
+        rate: u32,
+    ) -> Option<(&'static str, &'static str)> {
+        if !self.append_rate_suffix {
+            return None;
+        }
+        match rate {
+            88_200 => Some(("88_2K", "88.2K")),
+            96_000 => Some(("96K", "96K")),
+            176_400 => Some(("176_4K", "176.4K")),
+            192_000 => Some(("192K", "192K")),
+            352_800 => Some(("352_8K", "352.8K")),
+            384_000 => Some(("384K", "384K")),
+            _ => None,
+        }
+    }
+
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.in_ctx.in_path
             && !path.canonicalize()?.starts_with(&self.base_dir)
@@ -727,72 +622,9 @@ No data is lost due to buffer resizing; resizing only adjusts capacity."
         );
     }
 
-    // Helper function for clip stats
-    #[inline(always)]
-    fn update_clip_stats(&mut self, low: bool, high: bool) {
-        if low {
-            if self.last_samps_clipped_low == 1 {
-                self.clips += 1;
-            }
-            self.last_samps_clipped_low += 1;
-            return;
-        }
-        self.last_samps_clipped_low = 0;
-        if high {
-            if self.last_samps_clipped_high == 1 {
-                self.clips += 1;
-            }
-            self.last_samps_clipped_high += 1;
-            return;
-        }
-        self.last_samps_clipped_high = 0;
-    }
-
-    #[inline(always)]
-    fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
-        return if value < min {
-            self.update_clip_stats(true, false);
-            min
-        } else if value > max {
-            self.update_clip_stats(false, true);
-            max
-        } else {
-            self.update_clip_stats(false, false);
-            value
-        };
-    }
-
-    #[inline(always)]
-    fn my_round(x: f64) -> i64 {
-        if x < 0.0 {
-            (x - 0.5).floor() as i64
-        } else {
-            (x + 0.5).floor() as i64
-        }
-    }
-
     fn verbose(&self, message: &str) {
         if self.verbose_mode {
-            eprintln!("{}", message);
-        }
-    }
-
-    /// Returns both underscore and dot-delimited abbreviated sample rates, e.g. ("88_2K", "88.2K")
-    fn abbrev_rate_pair(
-        &self,
-        rate: u32,
-    ) -> Option<(&'static str, &'static str)> {
-        if !self.append_rate_suffix {
-            return None;
-        }
-        match rate {
-            88_200 => Some(("88_2K", "88.2K")),
-            96_000 => Some(("96K", "96K")),
-            176_400 => Some(("176_4K", "176.4K")),
-            192_000 => Some(("192K", "192K")),
-            352_800 => Some(("352_8K", "352.8K")),
-            384_000 => Some(("384K", "384K")),
-            _ => None,
+            eprintln!("[Verbose][Conversion] {}", message);
         }
     }
 }
