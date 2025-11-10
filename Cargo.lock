@@ -158,9 +158,9 @@ dependencies = [
 
 [[package]]
 name = "dff-meta"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a79fac72af7934a52405fdc9765f634b498c8a919fa9eb3f263ecb69bafd5b5"
+checksum = "7333de3403b6dae625f3f1286bc73d6a44ed15441160ae161fa00ca6ee1091c5"
 dependencies = [
  "id3",
 ]
