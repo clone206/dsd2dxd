@@ -157,8 +157,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "dff"
+name = "dff-meta"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a79fac72af7934a52405fdc9765f634b498c8a919fa9eb3f263ecb69bafd5b5"
 dependencies = [
  "id3",
 ]
@@ -168,7 +170,7 @@ name = "dsd2dxd"
 version = "2.2.1"
 dependencies = [
  "clap",
- "dff",
+ "dff-meta",
  "dsf",
  "flac-codec",
  "id3",

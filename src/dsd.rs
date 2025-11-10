@@ -78,8 +78,8 @@ impl DsdContainer {
             })
         }
         else if container_format == ContainerFormat::Dsdiff {
-            use dff::DffFile;
-            use dff::model::*;
+            use dff_meta::DffFile;
+            use dff_meta::model::*;
             let file_path = Path::new(&path);
             let dff_file = match DffFile::open(file_path) {
                 Ok(dff) => dff,
