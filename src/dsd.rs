@@ -22,6 +22,7 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
+use log::warn;
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,8 +60,8 @@ impl DsdFile {
             let file_path = Path::new(&path);
             let mut dsf_file = DsfFile::open(file_path)?;
             if let Some(e) = dsf_file.tag_read_err() {
-                eprintln!(
-                    "[Warning] Attempted read of ID3 tag failed. Partial read attempted: {}",
+                warn!(
+                    "Attempted read of ID3 tag failed. Partial read attempted: {}",
                     e
                 );
             }
@@ -88,8 +89,8 @@ impl DsdFile {
             let dff_file = match DffFile::open(file_path) {
                 Ok(dff) => dff,
                 Err(Error::Id3Error(e, dff_file)) => {
-                    eprintln!(
-                        "[Warning] Attempted read of ID3 tag failed. Partial read attempted: {}",
+                    warn!(
+                        "Attempted read of ID3 tag failed. Partial read attempted: {}",
                         e
                     );
                     dff_file

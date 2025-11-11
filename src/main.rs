@@ -32,6 +32,7 @@ mod output;
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
+use log::{Level, Metadata, Record, info, warn};
 pub use output::OutputContext;
 
 #[derive(Parser)]
@@ -125,11 +126,7 @@ struct Cli {
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
-    let verbose = |message: &str| {
-        if cli.verbose {
-            eprintln!("{}", message);
-        }
-    };
+    SimpleLogger::init(cli.verbose);
 
     let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
@@ -145,7 +142,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         cli.output_rate,
         cli.path,
         dither,
-        cli.verbose,
     )?;
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -168,14 +164,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 cli.block_size.unwrap_or(4096),
                 cli.channels.unwrap_or(2),
                 path.is_none(),
-                cli.verbose,
             )?;
 
             let mut conv_ctx = ConversionContext::new(
                 in_ctx,
                 out_ctx.clone(),
                 cli.filter_type.unwrap().to_ascii_uppercase(),
-                cli.verbose,
                 cli.append_rate,
                 cwd.clone(),
             )?;
@@ -187,10 +181,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .filter_map(|input| {
             if input.to_string_lossy().contains('*') {
-                verbose(&format!(
-                    "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
+                warn!(
+                    "Unexpanded glob pattern detected in input: \"{}\". Skipping.",
                     input.display()
-                ));
+                );
                 None
             }
             else if input == &PathBuf::from("-") {
@@ -200,7 +194,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 None
             }
             else {
-                verbose(&format!("Input: {}", input.display()));
+                info!("Input: {}", input.display());
                 Some(input)
             }
         })
@@ -212,4 +206,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+struct SimpleLogger;
+
+impl SimpleLogger {
+    fn init(verbose: bool) {
+        let level = if verbose { Level::Trace } else { Level::Info };
+        log::set_boxed_logger(Box::new(SimpleLogger))
+            .map(|()| log::set_max_level(level.to_level_filter()))
+            .expect("Failed to initialize logger");
+    }
+}
+
+impl log::Log for SimpleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
 }

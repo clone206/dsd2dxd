@@ -21,6 +21,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use log::{info, debug};
 
 pub struct InputContext {
     pub lsbit_first: bool,
@@ -38,7 +39,6 @@ pub struct InputContext {
     interleaved: bool,
     audio_pos: u64,
     reader: Box<dyn Read>,
-    verbose_mode: bool,
     file: Option<File>,
 }
 
@@ -51,7 +51,6 @@ impl InputContext {
         block_size: u32,
         channels: u32,
         std_in: bool,
-        verbose: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let lsbit_first = match endian.to_ascii_lowercase() {
             'l' => true,
@@ -96,7 +95,6 @@ impl InputContext {
         }
 
         let mut ctx = Self {
-            verbose_mode: verbose,
             lsbit_first,
             interleaved,
             std_in,
@@ -158,10 +156,10 @@ impl InputContext {
     }
 
     fn set_stdin(&mut self) {
-        eprintln!("Reading from stdin");
+        info!("Reading from stdin");
         self.audio_length = u64::MAX;
         self.audio_pos = 0;
-        eprintln!(
+        info!(
             "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
             self.channels_num,
             if self.lsbit_first == true {
@@ -181,20 +179,19 @@ impl InputContext {
             return Err("No readable input file".into());
         };
 
-        self.verbose(&format!(
+        debug!(
             "Parent path: {}",
             self.parent_path.as_ref().unwrap().display()
-        ));
-        self.verbose(&format!(
+        );
+        debug!(
             "Opening input file: {}",
             self.in_path.clone().unwrap().to_string_lossy()
-        ));
-
+        );
         match DsdFile::new(path, dsd_file_format) {
             Ok(my_dsd) => {
                 // Pull raw fields
                 let file_len = my_dsd.file.metadata()?.len();
-                self.verbose(&format!("File size: {} bytes", file_len));
+                debug!("File size: {} bytes", file_len);
 
                 self.file = Some(my_dsd.file);
                 self.tag = my_dsd.tag;
@@ -246,18 +243,15 @@ impl InputContext {
                         self.dsd_rate = (sample_rate / DSD_64_RATE) as i32;
                     } else {
                         // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
-                        eprintln!(
+                        info!(
                             "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
                             sample_rate, self.dsd_rate
                         );
                     }
                 }
 
-                self.verbose(&format!(
-                    "Audio length in bytes: {}",
-                    self.audio_length
-                ));
-                eprintln!(
+                debug!("Audio length in bytes: {}", self.audio_length);
+                info!(
                     "Container: sr={}Hz channels={} interleaved={}",
                     self.dsd_rate * DSD_64_RATE as i32,
                     self.channels_num,
@@ -265,8 +259,8 @@ impl InputContext {
                 );
             }
             Err(e) if dsd_file_format != DsdFileFormat::Raw => {
-                eprintln!("Container open failed with error: {}", e);
-                eprintln!("Treating input as raw DSD (no container)");
+                info!("Container open failed with error: {}", e);
+                info!("Treating input as raw DSD (no container)");
                 self.update_from_file(DsdFileFormat::Raw)?;
             }
             Err(e) => {
@@ -285,16 +279,10 @@ impl InputContext {
         } else {
             1
         };
-        self.verbose(&format!(
+        debug!(
             "Set block_size={} dsd_chan_offset={} dsd_stride={}",
             self.block_size, self.dsd_chan_offset, self.dsd_stride
-        ));
-    }
-
-    fn verbose(&self, say: &str) {
-        if self.verbose_mode {
-            eprintln!("[Verbose][Input] {}", say);
-        }
+        );
     }
 
     fn set_reader(
@@ -318,10 +306,10 @@ impl InputContext {
 
         if self.audio_pos > 0 {
             file.seek(SeekFrom::Start(self.audio_pos as u64))?;
-            self.verbose(&format!(
+            debug!(
                 "Seeked to audio start position: {}",
                 file.stream_position()?
-            ));
+            );
         }
         self.reader = Box::new(file);
         Ok(())

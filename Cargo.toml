@@ -10,3 +10,4 @@ flac-codec = "1.2.0"
 dsf = { path = "src/dsf/" }
 dff-meta = "0.1.1"
 id3 = "1.16.3"
+log = { version = "0.4.28", features = ["std"] }

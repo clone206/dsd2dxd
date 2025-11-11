@@ -25,6 +25,7 @@ use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
 use crate::output::OutputContext;
 use id3::TagLike;
+use log::{debug, info, trace};
 use std::error::Error;
 use std::ffi::OsString;
 use std::io;
@@ -37,7 +38,6 @@ pub struct ConversionContext {
     out_ctx: OutputContext,
     filt_type: char,
     dsd_data: Vec<u8>,
-    verbose_mode: bool,
     append_rate_suffix: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
     eq_lm_resamplers: Option<Vec<LMResampler>>,
@@ -55,7 +55,6 @@ impl ConversionContext {
         in_ctx: InputContext,
         out_ctx: OutputContext,
         filt_type: char,
-        verbose_param: bool,
         append_rate_suffix: bool,
         base_dir: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
@@ -79,7 +78,6 @@ impl ConversionContext {
             out_ctx,
             filt_type,
             dsd_data: vec![0; dsd_bytes_per_chan * channels],
-            verbose_mode: verbose_param,
             append_rate_suffix,
             precalc_decims: None,
             eq_lm_resamplers: None,
@@ -107,17 +105,16 @@ impl ConversionContext {
                         LMResampler::new(
                             self.upsample_ratio,
                             self.decim_ratio,
-                            self.verbose_mode,
                             self.out_ctx.rate as u32,
                         )
                     })
                     .collect(),
             );
             self.out_ctx.scale_factor *= self.upsample_ratio as f64;
-            self.verbose(&format!(
-                "[DBG] L/M path makeup gain: ×{} (scale_factor now {:.6})",
+            trace!(
+                "L/M path makeup gain: ×{} (scale_factor now {:.6})",
                 self.upsample_ratio, self.out_ctx.scale_factor
-            ));
+            );
         } else if let Some(taps) = select_precalc_taps(
             self.filt_type,
             self.in_ctx.dsd_rate,
@@ -134,11 +131,9 @@ impl ConversionContext {
                     })
                     .collect(),
             );
-            self.verbose(
-                &format!(
-                    "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
-                    self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate
-                )
+            debug!(
+                "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
+                self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate
             );
         } else {
             return Err(format!(
@@ -152,7 +147,7 @@ impl ConversionContext {
 
     pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
-        eprintln!(
+        info!(
             "Dither type: {}",
             self.out_ctx.dither.dither_type().to_ascii_uppercase()
         );
@@ -161,13 +156,13 @@ impl ConversionContext {
         self.process_blocks()?;
         let dsp_elapsed = wall_start.elapsed();
 
-        eprintln!("Clipped {} times.", self.out_ctx.clips);
-        eprintln!("");
+        info!("Clipped {} times.", self.out_ctx.clips);
+        info!("");
 
         if self.out_ctx.output != 's'
             && let Err(e) = self.write_file()
         {
-            eprintln!("Error writing file: {e}");
+            info!("Error writing file: {e}");
         }
         let total_elapsed = wall_start.elapsed();
 
@@ -175,9 +170,7 @@ impl ConversionContext {
             self.report_timing(dsp_elapsed, total_elapsed);
         }
 
-        if self.verbose_mode {
-            self.report_in_out();
-        }
+        self.report_in_out();
 
         Ok(())
     }
@@ -219,12 +212,10 @@ impl ConversionContext {
             // Bytes per channel in this read
             let bytes_per_channel: usize = read_size / channels;
 
-            if self.verbose_mode {
-                self.diag_bits_in += (bytes_per_channel as u64) * 8;
-                self.diag_expected_frames_floor = (self.diag_bits_in
-                    * self.upsample_ratio as u64)
-                    / self.decim_ratio as u64;
-            }
+            self.diag_bits_in += (bytes_per_channel as u64) * 8;
+            self.diag_expected_frames_floor = (self.diag_bits_in
+                * self.upsample_ratio as u64)
+                / self.decim_ratio as u64;
 
             // Track actual frames produced per channel (set by channel 0)
             let mut samples_used_per_chan = 0usize;
@@ -241,13 +232,11 @@ impl ConversionContext {
                 * channels
                 * (self.out_ctx.bytes_per_sample as usize);
 
-            if self.verbose_mode {
-                self.diag_frames_out += samples_used_per_chan as u64;
-            }
+            self.diag_frames_out += samples_used_per_chan as u64;
 
             if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
-            } 
+            }
 
             // Decrement for file input using actual read size
             if reading_from_file {
@@ -307,7 +296,8 @@ impl ConversionContext {
                 return 0;
             };
             let dec = &mut v[chan];
-            return dec.process_bytes(&chan_bytes, &mut self.out_ctx.float_data);
+            return dec
+                .process_bytes(&chan_bytes, &mut self.out_ctx.float_data);
         }
     }
 
@@ -347,10 +337,10 @@ impl ConversionContext {
                 .unwrap_or_else(|| OsString::from("output")),
         );
 
-        self.verbose(&format!(
+        debug!(
             "Derived base filename: {}",
             filename.to_string_lossy()
-        ));
+        );
 
         if !suffix.is_empty() {
             filename.push(suffix);
@@ -440,7 +430,7 @@ impl ConversionContext {
     }
 
     fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
-        eprintln!("Saving to file...");
+        info!("Saving to file...");
 
         let parent = self
             .in_ctx
@@ -454,23 +444,23 @@ impl ConversionContext {
 
         let out_path = out_dir.join(&out_filename);
 
-        self.verbose(&format!(
+        debug!(
             "Derived output path: {}",
             out_path.display()
-        ));
+        );
 
         match self.copy_artwork(parent, &out_dir) {
             Ok((_, total)) if total == 0 => {
-                self.verbose("No artwork files to copy.");
+                debug!("No artwork files to copy.");
             }
             Ok((copied, total)) => {
-                self.verbose(&format!(
+                debug!(
                     "Copied {} artwork file(s) out of {}.",
                     copied, total
-                ));
+                );
             }
             Err(e) => {
-                eprintln!(
+                info!(
                     "[Warning] Failed to copy artwork to output directory: {}",
                     e
                 );
@@ -484,18 +474,18 @@ impl ConversionContext {
             }
 
             if self.out_ctx.output.to_ascii_lowercase() == 'f' {
-                self.verbose("Preparing Vorbis Comment for FLAC...");
+                debug!("Preparing Vorbis Comment for FLAC...");
                 self.out_ctx.id3_to_flac_meta(&tag);
             }
             self.out_ctx.save_file(&out_path)?;
 
             if self.out_ctx.output.to_ascii_lowercase() != 'f' {
                 // Write ID3 tags directly
-                self.verbose("Writing ID3 tags to file.");
+                debug!("Writing ID3 tags to file.");
                 tag.write_to_path(&out_path, tag.version())?;
             }
         } else {
-            self.verbose("Input file has no tag; skipping tag copy.");
+            debug!("Input file has no tag; skipping tag copy.");
             self.out_ctx.save_file(&out_path)?;
         }
 
@@ -574,7 +564,7 @@ impl ConversionContext {
         let h = total_secs / 3600;
         let m = (total_secs % 3600) / 60;
         let s = total_secs % 60;
-        eprintln!(
+        info!(
             "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
             self.total_dsd_bytes_processed,
             h,
@@ -587,7 +577,7 @@ impl ConversionContext {
 
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
     fn report_in_out(&self) {
-        eprintln!("[DBG] Detailed output length diagnostics:");
+        trace!("Detailed output length diagnostics:");
         let ch = self.in_ctx.channels_num.max(1) as u64;
         let bps = self.out_ctx.bytes_per_sample as u64;
         let expected_frames = self.diag_expected_frames_floor;
@@ -602,28 +592,22 @@ impl ConversionContext {
         } else {
             0.0
         };
-        eprintln!("\n[DIAG] Output length accounting:");
-        eprintln!(
-            "[DIAG] DSD bits in per channel: {}  L={}  M={}",
+        trace!("Output length accounting:");
+        trace!(
+            "DSD bits in per channel: {}  L={}  M={}",
             self.diag_bits_in, self.upsample_ratio, self.decim_ratio
         );
-        eprintln!(
-            "[DIAG] Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
+        trace!(
+            "Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",
             expected_frames, actual_frames, diff_frames, pct
         );
-        eprintln!(
-            "[DIAG] Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
+        trace!(
+            "Expected bytes: {}  Actual bytes: {}  Diff bytes: {}",
             expected_bytes, actual_bytes, diff_bytes
         );
-        eprintln!(
-            "[DIAG] Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
+        trace!(
+            "Reason for shortfall: FIR group delay (startup) plus unflushed tail at end. \
 No data is lost due to buffer resizing; resizing only adjusts capacity."
         );
-    }
-
-    fn verbose(&self, message: &str) {
-        if self.verbose_mode {
-            eprintln!("[Verbose][Conversion] {}", message);
-        }
     }
 }
