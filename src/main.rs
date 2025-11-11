@@ -29,12 +29,12 @@ mod input;
 mod lm_resampler;
 mod output;
 
+use colored::Colorize;
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
 use log::{Level, Metadata, Record, info, warn};
 pub use output::OutputContext;
-use colored::Colorize;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -228,8 +228,16 @@ impl log::Log for SimpleLogger {
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
             match record.level() {
-                Level::Error => eprintln!("{} {}", "[ERROR]".red().bold(), format!("{}", record.args()).red().bold()),
-                Level::Warn => eprintln!("{} {}", "[WARN]".yellow().bold(), format!("{}", record.args()).yellow().bold()),
+                Level::Error => eprintln!(
+                    "{} {}",
+                    "[ERROR]".red().bold(),
+                    format!("{}", record.args()).red().bold()
+                ),
+                Level::Warn => eprintln!(
+                    "{} {}",
+                    "[WARN]".yellow().bold(),
+                    format!("{}", record.args()).yellow().bold()
+                ),
                 _ => eprintln!("[{}] {}", record.level(), record.args()),
             }
         }
