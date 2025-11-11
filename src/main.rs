@@ -17,7 +17,10 @@
 */
 
 use clap::Parser;
-use std::{error::Error, path::PathBuf};
+use core::fmt;
+use std::{
+    error::Error, fmt::Debug, path::PathBuf, process::{ExitCode, Termination}
+};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -33,7 +36,7 @@ use colored::Colorize;
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
-use log::{Level, Metadata, Record, info, warn};
+use log::{Level, Metadata, Record, error, info, warn};
 pub use output::OutputContext;
 
 #[derive(Parser)]
@@ -124,7 +127,7 @@ struct Cli {
     files: Vec<PathBuf>,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> TermResult {
     let cli = Cli::parse();
 
     SimpleLogger::init(cli.verbose);
@@ -135,15 +138,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         'T'
     });
 
-    let dither = Dither::new(dither_type)?;
-    let out_ctx = OutputContext::new(
+    let dither = match Dither::new(dither_type) {
+        Ok(d) => d,
+        Err(e) => {
+            return TermResult(Err(MyError::Message(format!(
+                "Couldn't initialize dither type '{}': {}",
+                dither_type, e
+            ))));
+        }
+    };
+    let out_ctx = match OutputContext::new(
         cli.bit_depth,
         cli.output,
         cli.level,
         cli.output_rate,
         cli.path,
         dither,
-    )?;
+    ) {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            return TermResult(Err(MyError::Message(format!(
+                "Couldn't initialize output context: {}",
+                e
+            ))));
+        }
+    };
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
@@ -190,7 +209,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             else if input == &PathBuf::from("-") {
                 if let Err(e) = do_conversion(None) {
-                    panic!("Error processing stdin: {}", e);
+                    panic!("{} {}", 
+                        "Error processing stdin:".red().bold(),
+                        e.to_string().red().bold()
+                    );
                 }
                 None
             }
@@ -202,11 +224,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         .cloned()
         .collect::<Vec<_>>();
 
-    for path in dsd::find_dsd_files(&paths, cli.recurse)? {
-        do_conversion(Some(path))?;
+    let paths_to_process = match dsd::find_dsd_files(&paths, cli.recurse) {
+        Ok(p) => p,
+        Err(e) => {
+            return TermResult(Err(MyError::Message(format!(
+                "Couldn't find DSD files: {}",
+                e
+            ))));
+        }
+    };
+    for path in paths_to_process {
+        if let Err(e) = do_conversion(Some(path)) {
+            return TermResult(Err(MyError::Message(format!(
+                "Couldn't process file: {}",
+                e
+            ))));
+        }
     }
 
-    Ok(())
+    TermResult(Ok(()))
 }
 
 struct SimpleLogger;
@@ -244,4 +280,35 @@ impl log::Log for SimpleLogger {
     }
 
     fn flush(&self) {}
+}
+
+#[derive(Debug)]
+pub enum MyError {
+    Message(String),
+}
+
+impl std::fmt::Display for MyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MyError::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for MyError {}
+
+type MyResult<T> = std::result::Result<T, MyError>;
+
+pub struct TermResult(pub MyResult<()>);
+
+impl Termination for TermResult {
+    fn report(self) -> ExitCode {
+        match self.0 {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(err) => {
+                error!("{}", err);
+                ExitCode::FAILURE
+            }
+        }
+    }
 }
