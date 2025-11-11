@@ -229,7 +229,7 @@ impl log::Log for SimpleLogger {
         if self.enabled(record.metadata()) {
             match record.level() {
                 Level::Error => eprintln!("{} {}", "[ERROR]".red().bold(), format!("{}", record.args()).red().bold()),
-                Level::Warn => eprintln!("{} {}", "[WARN ]".yellow().bold(), format!("{}", record.args()).yellow().bold()),
+                Level::Warn => eprintln!("{} {}", "[WARN]".yellow().bold(), format!("{}", record.args()).yellow().bold()),
                 _ => eprintln!("[{}] {}", record.level(), record.args()),
             }
         }
