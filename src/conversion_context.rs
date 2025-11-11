@@ -25,6 +25,7 @@ use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
 use crate::output::OutputContext;
 use id3::TagLike;
+use log::warn;
 use log::{debug, info, trace};
 use std::error::Error;
 use std::ffi::OsString;
@@ -460,8 +461,8 @@ impl ConversionContext {
                 );
             }
             Err(e) => {
-                info!(
-                    "[Warning] Failed to copy artwork to output directory: {}",
+                warn!(
+                    "Failed to copy artwork to output directory: {}",
                     e
                 );
             }
