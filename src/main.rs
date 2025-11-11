@@ -19,7 +19,8 @@
 use clap::Parser;
 use core::fmt;
 use std::{
-    error::Error, fmt::Debug, path::PathBuf, process::{ExitCode, Termination}
+    path::PathBuf,
+    process::{ExitCode, Termination},
 };
 mod audio_file;
 mod byte_precalc_decimator;
@@ -128,8 +129,14 @@ struct Cli {
 }
 
 fn main() -> TermResult {
-    let cli = Cli::parse();
+    match run() {
+        Ok(()) => TermResult(Ok(())),
+        Err(e) => TermResult(Err(e)),
+    }
+}
 
+fn run() -> Result<(), MyError> {
+    let cli = Cli::parse();
     SimpleLogger::init(cli.verbose);
 
     let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
@@ -138,31 +145,17 @@ fn main() -> TermResult {
         'T'
     });
 
-    let dither = match Dither::new(dither_type) {
-        Ok(d) => d,
-        Err(e) => {
-            return TermResult(Err(MyError::Message(format!(
-                "Couldn't initialize dither type '{}': {}",
-                dither_type, e
-            ))));
-        }
-    };
-    let out_ctx = match OutputContext::new(
+    let dither = Dither::new(dither_type)?;
+
+    let out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
         cli.level,
         cli.output_rate,
         cli.path,
         dither,
-    ) {
-        Ok(ctx) => ctx,
-        Err(e) => {
-            return TermResult(Err(MyError::Message(format!(
-                "Couldn't initialize output context: {}",
-                e
-            ))));
-        }
-    };
+    )?;
+
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
@@ -174,27 +167,33 @@ fn main() -> TermResult {
     inputs.sort();
     inputs.dedup();
 
-    let do_conversion =
-        |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
-            let in_ctx = InputContext::new(
-                path.clone(),
-                cli.format,
-                cli.endianness,
-                cli.input_rate,
-                cli.block_size.unwrap_or(4096),
-                cli.channels.unwrap_or(2),
-                path.is_none(),
-            )?;
+    let do_conversion = |path: Option<PathBuf>| -> Result<(), MyError> {
+        let in_ctx = InputContext::new(
+            path.clone(),
+            cli.format,
+            cli.endianness,
+            cli.input_rate,
+            cli.block_size.unwrap_or(4096),
+            cli.channels.unwrap_or(2),
+            path.is_none(),
+    )?;
 
-            let mut conv_ctx = ConversionContext::new(
-                in_ctx,
-                out_ctx.clone(),
-                cli.filter_type.unwrap().to_ascii_uppercase(),
-                cli.append_rate,
-                cwd.clone(),
-            )?;
-            conv_ctx.do_conversion()
-        };
+        let mut conv_ctx = ConversionContext::new(
+            in_ctx,
+            out_ctx.clone(),
+            cli.filter_type.unwrap().to_ascii_uppercase(),
+            cli.append_rate,
+            cwd.clone(),
+        )?;
+        conv_ctx.do_conversion()?;
+        Ok(())
+    };
+
+    // Handle stdin conversion once, then remove it so we don't treat it as a file path.
+    if inputs.contains(&PathBuf::from("-")) {
+        do_conversion(None)?;
+        inputs.retain(|p| p != &PathBuf::from("-"));
+    }
 
     // Filter to remove any glob patterns and handle stdin, yielding all inputted paths
     let paths = inputs
@@ -206,17 +205,7 @@ fn main() -> TermResult {
                     input.display()
                 );
                 None
-            }
-            else if input == &PathBuf::from("-") {
-                if let Err(e) = do_conversion(None) {
-                    panic!("{} {}", 
-                        "Error processing stdin:".red().bold(),
-                        e.to_string().red().bold()
-                    );
-                }
-                None
-            }
-            else {
+            } else {
                 info!("Input: {}", input.display());
                 Some(input)
             }
@@ -224,25 +213,11 @@ fn main() -> TermResult {
         .cloned()
         .collect::<Vec<_>>();
 
-    let paths_to_process = match dsd::find_dsd_files(&paths, cli.recurse) {
-        Ok(p) => p,
-        Err(e) => {
-            return TermResult(Err(MyError::Message(format!(
-                "Couldn't find DSD files: {}",
-                e
-            ))));
-        }
-    };
-    for path in paths_to_process {
-        if let Err(e) = do_conversion(Some(path)) {
-            return TermResult(Err(MyError::Message(format!(
-                "Couldn't process file: {}",
-                e
-            ))));
-        }
+    for path in dsd::find_dsd_files(&paths, cli.recurse)? {
+        do_conversion(Some(path))?;
     }
 
-    TermResult(Ok(()))
+    Ok(())
 }
 
 struct SimpleLogger;
@@ -301,6 +276,9 @@ type MyResult<T> = std::result::Result<T, MyError>;
 
 pub struct TermResult(pub MyResult<()>);
 
+// Removed custom FromResidual impl: using a separate run() -> Result<(), MyError>
+// function keeps error handling ergonomic on stable Rust without nightly features.
+
 impl Termination for TermResult {
     fn report(self) -> ExitCode {
         match self.0 {
@@ -310,5 +288,33 @@ impl Termination for TermResult {
                 ExitCode::FAILURE
             }
         }
+    }
+}
+
+// Convert &'static str errors (e.g., from Dither::new)
+impl From<&'static str> for MyError {
+    fn from(err: &'static str) -> Self {
+        MyError::Message(err.to_string())
+    }
+}
+
+// Convert String errors to MyError
+impl From<String> for MyError {
+    fn from(err: String) -> Self {
+        MyError::Message(err)
+    }
+}
+
+// Convert std::io::Error to MyError
+impl From<std::io::Error> for MyError {
+    fn from(err: std::io::Error) -> Self {
+        MyError::Message(err.to_string())
+    }
+}
+
+// Convert boxed dynamic errors into MyError
+impl From<Box<dyn std::error::Error>> for MyError {
+    fn from(err: Box<dyn std::error::Error>) -> Self {
+        MyError::Message(err.to_string())
     }
 }
