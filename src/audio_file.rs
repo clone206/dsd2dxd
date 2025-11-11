@@ -108,8 +108,7 @@ where
         let channels = self.num_channels as u16;
         let bytes_per_sample = if self.bit_depth == 20 {
             3
-        }
-        else {
+        } else {
             (self.bit_depth / 8) as u16
         };
         let block_align = channels * bytes_per_sample;
@@ -214,8 +213,7 @@ where
         let channels = self.num_channels as u16;
         let bytes_per_sample = if self.bit_depth == 20 {
             3
-        }
-        else {
+        } else {
             (self.bit_depth / 8) as u16
         };
         let block_align = channels * bytes_per_sample;
@@ -340,8 +338,7 @@ where
         let bps = bits_per_sample as u32;
         let bytes_per_sample = (if bits_per_sample == 20 {
             3
-        }
-        else {
+        } else {
             bits_per_sample / 8
         }) as usize;
         let total_pcm_bytes =
@@ -391,8 +388,7 @@ where
                 }
                 flac.write_all(&buf)?;
             }
-        }
-        else {
+        } else {
             // 24-bit
             for base in (0..frames).step_by(FRAME_BLOCK) {
                 buf.clear();
@@ -470,11 +466,11 @@ where
     }
 
     pub fn print_summary(&self) {
-        println!("Audio File Summary:");
-        println!("Bit Depth: {}", self.bit_depth);
-        println!("Sample Rate: {}", self.sample_rate);
-        println!("Num Channels: {}", self.num_channels);
-        println!(
+        eprintln!("Audio File Summary:");
+        eprintln!("Bit Depth: {}", self.bit_depth);
+        eprintln!("Sample Rate: {}", self.sample_rate);
+        eprintln!("Num Channels: {}", self.num_channels);
+        eprintln!(
             "Num Samples Per Channel: {}",
             self.get_num_samples_per_channel()
         );

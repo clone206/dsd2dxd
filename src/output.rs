@@ -16,8 +16,10 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use flac_codec::metadata::{Picture, VorbisComment};
+use flac_codec::metadata::{self, Picture, PictureType, VorbisComment};
+use id3::TagLike;
 
+use crate::Dither;
 use crate::audio_file::{AudioFile, AudioFileFormat, AudioSample};
 use std::error::Error;
 use std::io::Write;
@@ -25,24 +27,26 @@ use std::path::PathBuf;
 use std::{io, vec};
 
 pub struct OutputContext {
-    // Init'd via input params
     pub bits: i32,
     pub channels_num: u32,
     pub rate: i32,
     pub bytes_per_sample: i32,
     pub output: char,
     pub path: Option<PathBuf>,
-
-    // Set freely
     pub peak_level: i32,
     pub scale_factor: f64,
+    pub clips: i32,
+    pub dither: Dither,
+    pub float_data: Vec<f64>,
 
-    // Internal state
+    last_samps_clipped_low: i32,
+    last_samps_clipped_high: i32,
     float_file: Option<AudioFile<f32>>,
     int_file: Option<AudioFile<i32>>,
     stdout_buf: Vec<u8>,
     vorbis: Option<VorbisComment>,
     pictures: Vec<Picture>,
+    verbose_mode: bool,
 }
 
 impl OutputContext {
@@ -52,6 +56,8 @@ impl OutputContext {
         out_vol: f64,
         out_rate: i32,
         out_path: Option<PathBuf>,
+        dither: Dither,
+        verbose_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -102,6 +108,12 @@ impl OutputContext {
             vorbis: None,
             pictures: Vec::new(),
             path: out_path,
+            verbose_mode,
+            last_samps_clipped_low: 0,
+            last_samps_clipped_high: 0,
+            clips: 0,
+            dither,
+            float_data: Vec::new(),
         };
 
         ctx.set_scaling(out_vol);
@@ -114,6 +126,12 @@ impl OutputContext {
         channels_num: u32,
     ) -> Result<(), Box<dyn Error>> {
         self.channels_num = channels_num;
+        self.float_data = vec![0.0; out_frames_capacity];
+        self.clips = 0;
+        self.last_samps_clipped_low = 0;
+        self.last_samps_clipped_high = 0;
+        self.dither.init();
+
         if self.output == 's' {
             self.stdout_buf = vec![
                 0u8;
@@ -137,11 +155,11 @@ impl OutputContext {
         Ok(())
     }
 
-    pub fn add_picture(&mut self, pic: Picture) {
+    fn add_picture(&mut self, pic: Picture) {
         self.pictures.push(pic);
     }
 
-    pub fn set_vorbis(&mut self, vorbis: VorbisComment) {
+    fn set_vorbis(&mut self, vorbis: VorbisComment) {
         self.vorbis = Some(vorbis);
     }
 
@@ -293,6 +311,177 @@ impl OutputContext {
             }
         }
     }
+
+    /// Convert ID3 tag to FLAC VorbisComment metadata
+    pub fn id3_to_flac_meta(&mut self, tag: &id3::Tag) {
+        let unix_datetime = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default();
+        let mut vorbis = metadata::VorbisComment {
+            vendor_string: format!(
+                "dsd2dxd v{} Unix datetime {}",
+                env!("CARGO_PKG_VERSION"),
+                unix_datetime
+            ),
+            fields: Vec::new(),
+        };
+
+        if let Some(artist) = tag.artist() {
+            vorbis.insert("ARTIST", artist);
+        }
+        if let Some(album) = tag.album() {
+            vorbis.insert("ALBUM", album);
+        }
+        if let Some(title) = tag.title() {
+            vorbis.insert("TITLE", title);
+        }
+        if let Some(track) = tag.track() {
+            vorbis.insert("TRACKNUMBER", &track.to_string());
+        }
+        if let Some(disc) = tag.disc() {
+            vorbis.insert("DISCNUMBER", &disc.to_string());
+        }
+        if let Some(year) = tag.year() {
+            vorbis.insert("DATE", &year.to_string());
+        }
+        if let Some(comment_frame) = tag.get("COMM") {
+            if let id3::Content::Comment(comm) = comment_frame.content() {
+                vorbis.insert("COMMENT", &comm.text);
+            }
+        }
+
+        self.set_vorbis(vorbis);
+
+        for pic in tag.pictures() {
+            let pic_type: PictureType = if pic.picture_type
+                == id3::frame::PictureType::CoverFront
+            {
+                flac_codec::metadata::PictureType::FrontCover
+            } else if pic.picture_type
+                == id3::frame::PictureType::CoverBack
+            {
+                flac_codec::metadata::PictureType::BackCover
+            } else {
+                continue;
+            };
+            self.verbose(&format!("Adding ID3 Picture: {}", pic));
+            let picture = flac_codec::metadata::Picture::new(
+                pic_type,
+                pic.description.clone(),
+                pic.data.clone(),
+            );
+            if let Ok(my_pic) = picture {
+                self.add_picture(my_pic);
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn write_to_buffer(
+        &mut self,
+        samples_used_per_chan: usize,
+        chan: usize,
+    ) {
+        // Output / packing for channel
+        if self.output == 's' {
+            // Interleave into pcm_data (handle float vs integer separately)
+            let bps = self.bytes_per_sample as usize; // 4 for 32-bit float
+            let mut pcm_pos = chan * bps;
+            for s in 0..samples_used_per_chan {
+                let mut out_idx = pcm_pos;
+                if self.bits == 32 {
+                    // 32-bit float path
+                    let mut q = self.float_data[s];
+                    self.scale_and_dither(&mut q);
+                    self.pack_float(&mut out_idx, q);
+                } else {
+                    // Integer path: dither + clamp + write_int
+                    let mut qin: f64 = self.float_data[s];
+                    self.scale_and_dither(&mut qin);
+                    let quantized = self.quantize(&mut qin);
+                    self.pack_int(&mut out_idx, quantized);
+                }
+                pcm_pos += self.channels_num as usize * bps;
+            }
+        } else if self.bits == 32 {
+            for s in 0..samples_used_per_chan {
+                let mut q = self.float_data[s];
+                self.scale_and_dither(&mut q);
+                self.push_samp(q as f32, chan);
+            }
+        } else {
+            for s in 0..samples_used_per_chan {
+                let mut qin: f64 = self.float_data[s];
+                self.scale_and_dither(&mut qin);
+                let quantized = self.quantize(&mut qin);
+                self.push_samp(quantized, chan);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn scale_and_dither(&mut self, sample: &mut f64) {
+        *sample *= self.scale_factor;
+        self.dither.process_samp(sample);
+    }
+
+    // Helper function for clip stats
+    #[inline(always)]
+    fn update_clip_stats(&mut self, low: bool, high: bool) {
+        if low {
+            if self.last_samps_clipped_low == 1 {
+                self.clips += 1;
+            }
+            self.last_samps_clipped_low += 1;
+            return;
+        }
+        self.last_samps_clipped_low = 0;
+        if high {
+            if self.last_samps_clipped_high == 1 {
+                self.clips += 1;
+            }
+            self.last_samps_clipped_high += 1;
+            return;
+        }
+        self.last_samps_clipped_high = 0;
+    }
+
+    #[inline(always)]
+    pub fn quantize(&mut self, qin: &mut f64) -> i32 {
+        let value = Self::my_round(*qin) as i32;
+        let peak = self.peak_level as i32;
+        self.clamp_value(-peak, value, peak - 1)
+    }
+
+    #[inline(always)]
+    fn clamp_value(&mut self, min: i32, value: i32, max: i32) -> i32 {
+        return if value < min {
+            self.update_clip_stats(true, false);
+            min
+        } else if value > max {
+            self.update_clip_stats(false, true);
+            max
+        } else {
+            self.update_clip_stats(false, false);
+            value
+        };
+    }
+
+    #[inline(always)]
+    fn my_round(x: f64) -> i64 {
+        if x < 0.0 {
+            (x - 0.5).floor() as i64
+        } else {
+            (x + 0.5).floor() as i64
+        }
+    }
+
+    fn verbose(&self, message: &str) {
+        if self.verbose_mode {
+            eprintln!("[Verbose][Output] {}", message);
+        }
+    }
 }
 
 impl Clone for OutputContext {
@@ -311,6 +500,12 @@ impl Clone for OutputContext {
             vorbis: self.vorbis.clone(),
             pictures: self.pictures.clone(),
             path: self.path.clone(),
+            verbose_mode: self.verbose_mode,
+            last_samps_clipped_low: self.last_samps_clipped_low,
+            last_samps_clipped_high: self.last_samps_clipped_high,
+            clips: self.clips,
+            dither: self.dither.clone(),
+            float_data: self.float_data.clone(),
         }
     }
 }

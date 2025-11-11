@@ -653,7 +653,7 @@ impl Stage1Poly {
     }
 }
 
-// Lightweight decimator structure direct symmetric convolution only
+/// Lightweight decimator structure direct symmetric convolution only
 #[derive(Debug)]
 struct DecimFIRSym {
     full: Vec<f64>, // full symmetric taps
@@ -696,8 +696,8 @@ impl DecimFIRSym {
         };
     }
 
-    // Block processing: feed a slice of inputs and write produced outputs into `out`.
-    // Returns number of output samples written.
+    /// Block processing: feed a slice of inputs and write produced outputs into `out`.
+    /// Returns number of output samples written.
     #[inline(always)]
     fn process_block(&mut self, input: &[f64], out: &mut [f64]) -> usize {
         let mut produced = 0usize;
@@ -724,8 +724,8 @@ impl DecimFIRSym {
         produced
     }
 
-    // Direct full-rate symmetric FIR convolution
-    // Evaluates y[t] = sum_{k=0..len-1} h[k] * x[t - k] when push() determines an output is due.
+    /// Direct full-rate symmetric FIR convolution
+    /// Evaluates y[t] = sum_{k=0..len-1} h[k] * x[t - k] when push() determines an output is due.
     #[inline(always)]
     fn convolve_direct(&self) -> f64 {
         let cap = self.ring.len();

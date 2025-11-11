@@ -25,9 +25,10 @@ use std::{
 
 // Strongly typed container format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContainerFormat {
+pub enum DsdFileFormat {
     Dsdiff,
     Dsf,
+    Raw,
 }
 
 pub const DSD_64_RATE: u32 = 2822400;
@@ -36,24 +37,24 @@ pub const DSF_BLOCK_SIZE: u32 = 4096;
 
 pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
 
-pub struct DsdContainer {
+pub struct DsdFile {
     pub audio_length: u64,
     pub audio_pos: u64,
-    pub channel_count: u32,
-    pub is_lsb: bool,
-    pub block_size: u32,
-    pub sample_rate: u32,
-    pub container_format: ContainerFormat,
+    pub channel_count: Option<u32>,
+    pub is_lsb: Option<bool>,
+    pub block_size: Option<u32>,
+    pub sample_rate: Option<u32>,
+    pub container_format: DsdFileFormat,
     pub file: File,
     pub tag: Option<Tag>,
 }
 
-impl DsdContainer {
+impl DsdFile {
     pub fn new(
         path: &PathBuf,
-        container_format: ContainerFormat,
+        file_format: DsdFileFormat,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        if container_format == ContainerFormat::Dsf {
+        if file_format == DsdFileFormat::Dsf {
             use dsf::DsfFile;
             let file_path = Path::new(&path);
             let mut dsf_file = DsfFile::open(file_path)?;
@@ -65,21 +66,24 @@ impl DsdContainer {
             }
             let file = dsf_file.file().try_clone()?;
             Ok(Self {
-                sample_rate: dsf_file.fmt_chunk().sampling_frequency(),
-                container_format: ContainerFormat::Dsf,
-                channel_count: dsf_file.fmt_chunk().channel_num() as u32,
-                is_lsb: dsf_file.fmt_chunk().bits_per_sample() == 1,
-                block_size: DSF_BLOCK_SIZE, // Should always be this value for DSF
+                sample_rate: Some(
+                    dsf_file.fmt_chunk().sampling_frequency(),
+                ),
+                container_format: DsdFileFormat::Dsf,
+                channel_count: Some(
+                    dsf_file.fmt_chunk().channel_num() as u32
+                ),
+                is_lsb: Some(dsf_file.fmt_chunk().bits_per_sample() == 1),
+                block_size: Some(DSF_BLOCK_SIZE), // Should always be this value for DSF
                 audio_length: dsf_file.fmt_chunk().sample_count() / 8
                     * dsf_file.fmt_chunk().channel_num() as u64,
                 audio_pos: dsf_file.frames()?.offset(0)?,
                 file,
                 tag: dsf_file.id3_tag().clone(),
             })
-        }
-        else if container_format == ContainerFormat::Dsdiff {
-            use dff::DffFile;
-            use dff::model::*;
+        } else if file_format == DsdFileFormat::Dsdiff {
+            use dff_meta::DffFile;
+            use dff_meta::model::*;
             let file_path = Path::new(&path);
             let dff_file = match DffFile::open(file_path) {
                 Ok(dff) => dff,
@@ -96,19 +100,33 @@ impl DsdContainer {
             };
             let file = dff_file.file().try_clone()?;
             Ok(Self {
-                sample_rate: dff_file.get_sample_rate()?,
-                container_format: ContainerFormat::Dsdiff,
-                channel_count: dff_file.get_num_channels()? as u32,
-                is_lsb: false,
-                block_size: DFF_BLOCK_SIZE, // Should always be 1 for DFF
+                sample_rate: Some(dff_file.get_sample_rate()?),
+                container_format: DsdFileFormat::Dsdiff,
+                channel_count: Some(dff_file.get_num_channels()? as u32),
+                is_lsb: Some(false),
+                block_size: Some(DFF_BLOCK_SIZE), // Should always be 1 for DFF
                 audio_length: dff_file.get_audio_length(),
                 audio_pos: dff_file.get_dsd_data_offset(),
                 file,
                 tag: dff_file.id3_tag().clone(),
             })
-        }
-        else {
-            Err("Unsupported file extension; only .dsf and .dff are supported"
+        } else if file_format == DsdFileFormat::Raw {
+            let Ok(meta) = std::fs::metadata(path) else {
+                return Err("Failed to read input file metadata".into());
+            };
+            Ok(Self {
+                sample_rate: None,
+                container_format: DsdFileFormat::Raw,
+                channel_count: None,
+                is_lsb: None,
+                block_size: None,
+                audio_length: meta.len(),
+                audio_pos: 0,
+                file: File::open(path)?,
+                tag: None,
+            })
+        } else {
+            Err("Unsupported file extension; only .dsf, .dff, and .dsd are supported"
                 .into())
         }
     }
@@ -128,8 +146,7 @@ pub fn find_dsd_files(
                     .filter_map(|e| e.ok().map(|d| d.path()))
                     .collect();
                 file_paths.extend(find_dsd_files(&entries, recurse)?);
-            }
-            else {
+            } else {
                 // Non-recursive: include only top-level files that are DSD
                 for entry in fs::read_dir(path)? {
                     let entry_path = entry?.path();
@@ -139,8 +156,7 @@ pub fn find_dsd_files(
                     }
                 }
             }
-        }
-        else if path.is_file() && is_dsd_file(path) {
+        } else if path.is_file() && is_dsd_file(path) {
             // Single push site for matching files
             file_paths.push(path.canonicalize()?.clone());
         }
