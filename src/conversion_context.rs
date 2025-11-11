@@ -19,7 +19,6 @@
 use crate::byte_precalc_decimator::BytePrecalcDecimator;
 use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::byte_precalc_decimator::select_precalc_taps;
-use crate::dither::Dither;
 use crate::dsd::DSD_64_RATE;
 use crate::input::InputContext;
 use crate::lm_resampler::LMResampler;
