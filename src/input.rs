@@ -17,11 +17,11 @@
 */
 
 use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
+use log::{debug, info};
 use std::error::Error;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use log::{info, debug};
 
 pub struct InputContext {
     pub lsbit_first: bool,
@@ -38,7 +38,7 @@ pub struct InputContext {
 
     interleaved: bool,
     audio_pos: u64,
-    reader: Box<dyn Read>,
+    reader: Box<dyn Read + Send>,
     file: Option<File>,
 }
 
@@ -210,7 +210,7 @@ impl InputContext {
                 // Channels from container (fallback to CLI on nonsense)
                 if let Some(chans_num) = my_dsd.channel_count {
                     self.channels_num = chans_num;
-                } 
+                }
 
                 // Bit order from container
                 if let Some(lsb) = my_dsd.is_lsb {
@@ -285,11 +285,10 @@ impl InputContext {
         );
     }
 
-    fn set_reader(
-        &mut self,
-    ) -> Result<(), Box<dyn Error>> {
+    fn set_reader(&mut self) -> Result<(), Box<dyn Error>> {
         if self.std_in {
-            self.reader = Box::new(io::stdin().lock());
+            // Use Stdin (not StdinLock) so the reader is 'static + Send for threaded use
+            self.reader = Box::new(io::stdin());
             return Ok(());
         }
         // Obtain an owned File by cloning the handle from InputContext, then seek if needed.

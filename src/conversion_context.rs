@@ -32,6 +32,9 @@ use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 
 pub struct ConversionContext {
@@ -92,9 +95,13 @@ impl ConversionContext {
         };
 
         ctx.setup_resamplers()?;
-
         ctx.out_ctx
             .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
+
+        info!(
+            "Dither type: {}",
+            ctx.out_ctx.dither.dither_type().to_ascii_uppercase()
+        );
         Ok(ctx)
     }
 
@@ -146,19 +153,19 @@ impl ConversionContext {
         Ok(())
     }
 
-    pub fn do_conversion(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn do_conversion(
+        &mut self,
+        sender: mpsc::Sender<f32>,
+    ) -> Result<(), Box<dyn Error>> {
         self.check_conv()?;
-        info!(
-            "Dither type: {}",
-            self.out_ctx.dither.dither_type().to_ascii_uppercase()
-        );
         let wall_start = Instant::now();
 
-        self.process_blocks()?;
+        self.process_blocks(&sender)?;
         let dsp_elapsed = wall_start.elapsed();
 
+        thread::sleep(Duration::from_millis(100)); // Allow stdout to flush
+
         info!("Clipped {} times.", self.out_ctx.clips);
-        info!("");
 
         if self.out_ctx.output != 's'
             && let Err(e) = self.write_file()
@@ -176,7 +183,10 @@ impl ConversionContext {
         Ok(())
     }
 
-    fn process_blocks(&mut self) -> Result<(), Box<dyn Error>> {
+    fn process_blocks(
+        &mut self,
+        sender: &mpsc::Sender<f32>,
+    ) -> Result<(), Box<dyn Error>> {
         let channels = self.in_ctx.channels_num as usize;
         let frame_size: usize =
             (self.in_ctx.block_size as usize) * channels;
@@ -238,6 +248,12 @@ impl ConversionContext {
             if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
+
+            sender.send(
+                (self.total_dsd_bytes_processed as f32
+                    / self.in_ctx.audio_length as f32)
+                    * 100.0,
+            )?;
 
             // Decrement for file input using actual read size
             if reading_from_file {
@@ -338,10 +354,7 @@ impl ConversionContext {
                 .unwrap_or_else(|| OsString::from("output")),
         );
 
-        debug!(
-            "Derived base filename: {}",
-            filename.to_string_lossy()
-        );
+        debug!("Derived base filename: {}", filename.to_string_lossy());
 
         if !suffix.is_empty() {
             filename.push(suffix);
@@ -445,10 +458,7 @@ impl ConversionContext {
 
         let out_path = out_dir.join(&out_filename);
 
-        debug!(
-            "Derived output path: {}",
-            out_path.display()
-        );
+        debug!("Derived output path: {}", out_path.display());
 
         match self.copy_artwork(parent, &out_dir) {
             Ok((_, total)) if total == 0 => {
@@ -461,10 +471,7 @@ impl ConversionContext {
                 );
             }
             Err(e) => {
-                warn!(
-                    "Failed to copy artwork to output directory: {}",
-                    e
-                );
+                warn!("Failed to copy artwork to output directory: {}", e);
             }
         }
 

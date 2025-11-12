@@ -19,8 +19,11 @@
 use clap::Parser;
 use core::fmt;
 use std::{
+    io::{self, Write},
     path::PathBuf,
     process::{ExitCode, Termination},
+    sync::mpsc,
+    thread,
 };
 mod audio_file;
 mod byte_precalc_decimator;
@@ -168,6 +171,7 @@ fn run() -> Result<(), MyError> {
     inputs.dedup();
 
     let do_conversion = |path: Option<PathBuf>| -> Result<(), MyError> {
+        let (sender, receiver) = mpsc::channel::<f32>();
         let in_ctx = InputContext::new(
             path.clone(),
             cli.format,
@@ -176,7 +180,7 @@ fn run() -> Result<(), MyError> {
             cli.block_size.unwrap_or(4096),
             cli.channels.unwrap_or(2),
             path.is_none(),
-    )?;
+        )?;
 
         let mut conv_ctx = ConversionContext::new(
             in_ctx,
@@ -185,7 +189,26 @@ fn run() -> Result<(), MyError> {
             cli.append_rate,
             cwd.clone(),
         )?;
-        conv_ctx.do_conversion()?;
+
+        // Spawn thread for conversion; join after progress loop.
+        let handle = thread::spawn(move || {
+            // Map Box<dyn Error> into String so JoinHandle carries a Send payload
+            conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
+        });
+        eprintln!("Conversion progress:");
+        for progress in receiver {
+            eprint!("\r{}%", progress.floor() as usize);
+            if progress == 100.0 {
+                eprint!("\n");
+            }
+            io::stderr().flush()?;
+        }
+        // Propagate conversion errors
+        let conv_res: Result<(), String> =
+            handle.join().map_err(|_| {
+                MyError::Message("Conversion thread panicked".into())
+            })?;
+        conv_res.map_err(MyError::from)?;
         Ok(())
     };
 
@@ -249,12 +272,19 @@ impl log::Log for SimpleLogger {
                     "[WARN]".yellow().bold(),
                     format!("{}", record.args()).yellow().bold()
                 ),
-                _ => eprintln!("[{}] {}", record.level(), record.args()),
+                _ => eprintln!(
+                    "[{}] {}",
+                    record.level().to_string().blue(),
+                    record.args()
+                ),
             }
         }
+        self.flush();
     }
 
-    fn flush(&self) {}
+    fn flush(&self) {
+        io::stderr().flush().unwrap();
+    }
 }
 
 #[derive(Debug)]
