@@ -163,7 +163,7 @@ impl ConversionContext {
         self.process_blocks(&sender)?;
         let dsp_elapsed = wall_start.elapsed();
 
-        thread::sleep(Duration::from_millis(100)); // Allow stdout to flush
+        thread::sleep(Duration::from_millis(100)); // Allow sender to complete
 
         info!("Clipped {} times.", self.out_ctx.clips);
 

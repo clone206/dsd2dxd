@@ -179,13 +179,13 @@ impl InputContext {
             return Err("No readable input file".into());
         };
 
+        info!(
+            "Opening input file: {}",
+            self.in_path.clone().unwrap().to_string_lossy()
+        );
         debug!(
             "Parent path: {}",
             self.parent_path.as_ref().unwrap().display()
-        );
-        debug!(
-            "Opening input file: {}",
-            self.in_path.clone().unwrap().to_string_lossy()
         );
         match DsdFile::new(path, dsd_file_format) {
             Ok(my_dsd) => {

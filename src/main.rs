@@ -195,9 +195,11 @@ fn run() -> Result<(), MyError> {
             // Map Box<dyn Error> into String so JoinHandle carries a Send payload
             conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
         });
-        eprintln!("Conversion progress:");
         for progress in receiver {
-            eprint!("\r{}%", progress.floor() as usize);
+            eprint!(
+                "\rConversion progress:{:>4}%",
+                progress.floor() as usize,
+            );
             if progress == 100.0 {
                 eprint!("\n");
             }
