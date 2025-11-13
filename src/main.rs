@@ -22,7 +22,7 @@ use std::{
     io::{self, Write},
     path::PathBuf,
     process::{ExitCode, Termination},
-    sync::mpsc,
+    sync::mpsc, time::Instant,
 };
 mod audio_file;
 mod byte_precalc_decimator;
@@ -195,6 +195,8 @@ async fn run() -> Result<(), MyError> {
                 cwd.clone(),
             )?;
 
+            let file_name = conv_ctx.file_name();
+
             // Spawn task for conversion; join after progress loop.
             let handle = tokio::spawn(async move {
                 // Map Box<dyn Error> into String so JoinHandle carries a Send payload
@@ -202,7 +204,9 @@ async fn run() -> Result<(), MyError> {
             });
             for progress in &receiver {
                 eprint!(
-                    "\rConversion progress:{:>4}%",
+                    "\r{}{}:{:>4}%",
+                    "[Converting] ".bold(),
+                    file_name.bold(),
                     progress.floor() as usize,
                 );
                 if progress == conversion_context::ONE_HUNDRED_PERCENT {
@@ -222,9 +226,11 @@ async fn run() -> Result<(), MyError> {
             Ok(())
         };
 
+    let mut total_inputs = 0;
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
         do_conversion(None).await?;
+        total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
 
@@ -239,16 +245,27 @@ async fn run() -> Result<(), MyError> {
                 );
                 None
             } else {
-                info!("Input: {}", input.display());
                 Some(input)
             }
         })
         .cloned()
         .collect::<Vec<_>>();
 
-    for path in dsd::find_dsd_files(&paths, cli.recurse)? {
+    let expanded_paths = dsd::find_dsd_files(&paths, cli.recurse)?;
+    total_inputs += expanded_paths.len();
+
+    let wall_start = Instant::now();
+
+    for path in expanded_paths {
         do_conversion(Some(path)).await?;
     }
+
+    let total_elapsed = wall_start.elapsed();
+    let total_secs = total_elapsed.as_secs();
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    info!("Processed {} inputs in {:02}:{:02}:{:02}", total_inputs, h, m, s);
 
     Ok(())
 }

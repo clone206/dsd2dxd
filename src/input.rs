@@ -156,10 +156,10 @@ impl InputContext {
     }
 
     fn set_stdin(&mut self) {
-        info!("Reading from stdin");
+        debug!("Reading from stdin");
         self.audio_length = u64::MAX;
         self.audio_pos = 0;
-        info!(
+        debug!(
             "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
             self.channels_num,
             if self.lsbit_first == true {
@@ -179,7 +179,7 @@ impl InputContext {
             return Err("No readable input file".into());
         };
 
-        info!(
+        debug!(
             "Opening input file: {}",
             self.in_path.clone().unwrap().to_string_lossy()
         );
@@ -251,7 +251,7 @@ impl InputContext {
                 }
 
                 debug!("Audio length in bytes: {}", self.audio_length);
-                info!(
+                debug!(
                     "Container: sr={}Hz channels={} interleaved={}",
                     self.dsd_rate * DSD_64_RATE as i32,
                     self.channels_num,

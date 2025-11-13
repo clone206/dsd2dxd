@@ -25,6 +25,7 @@ use crate::lm_resampler::LMResampler;
 use crate::lm_resampler::compute_decim_and_upsample;
 use crate::output::OutputContext;
 use id3::TagLike;
+use log::error;
 use log::warn;
 use log::{debug, info, trace};
 use std::error::Error;
@@ -53,6 +54,7 @@ pub struct ConversionContext {
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
     base_dir: PathBuf,
+    file_name: OsString,
 }
 
 impl ConversionContext {
@@ -78,6 +80,14 @@ impl ConversionContext {
         let lm_slack = if upsample_ratio > 1 { 16 } else { 0 };
         let out_frames_capacity = frames_max + lm_slack;
 
+        let file_name: OsString = if let Some(path) = &in_ctx.in_path {
+                path.file_name()
+                    .unwrap_or_else(|| "stdin".as_ref())
+                    .to_os_string()
+            } else {
+                OsString::from("stdin")
+            };
+
         let mut ctx = Self {
             in_ctx,
             out_ctx,
@@ -93,17 +103,22 @@ impl ConversionContext {
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
             base_dir,
+            file_name
         };
 
         ctx.setup_resamplers()?;
         ctx.out_ctx
             .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
 
-        info!(
+        debug!(
             "Dither type: {}",
             ctx.out_ctx.dither.dither_type().to_ascii_uppercase()
         );
         Ok(ctx)
+    }
+
+    pub fn file_name(&self) -> String {
+        self.file_name.to_string_lossy().into_owned()
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
@@ -169,12 +184,12 @@ impl ConversionContext {
         }
         let dsp_elapsed = wall_start.elapsed();
 
-        info!("Clipped {} times.", self.out_ctx.clips);
+        debug!("Clipped {} times.", self.out_ctx.clips);
 
         if self.out_ctx.output != 's'
             && let Err(e) = self.write_file()
         {
-            info!("Error writing file: {e}");
+            error!("Error writing file: {e}");
         }
         let total_elapsed = wall_start.elapsed();
 
@@ -466,7 +481,7 @@ impl ConversionContext {
     }
 
     fn write_file(&mut self) -> Result<(), Box<dyn Error>> {
-        info!("Saving to file...");
+        debug!("Saving to file...");
 
         let parent = self
             .in_ctx
@@ -594,12 +609,15 @@ impl ConversionContext {
         let h = total_secs / 3600;
         let m = (total_secs % 3600) / 60;
         let s = total_secs % 60;
-        info!(
-            "{} bytes processed in {:02}:{:02}:{:02}  (DSP speed: {:.2}x, End-to-end: {:.2}x)",
+        debug!(
+            "{} bytes processed in {:02}:{:02}:{:02}",
             self.total_dsd_bytes_processed,
             h,
             m,
             s,
+        );
+        info!(
+            "DSP speed: {:.2}x, End-to-end: {:.2}x",
             speed_dsp,
             speed_total
         );
