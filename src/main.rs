@@ -23,7 +23,6 @@ use std::{
     path::PathBuf,
     process::{ExitCode, Termination},
     sync::mpsc,
-    thread,
 };
 mod audio_file;
 mod byte_precalc_decimator;
@@ -131,16 +130,17 @@ struct Cli {
     files: Vec<PathBuf>,
 }
 
-fn main() -> TermResult {
-    match run() {
+#[tokio::main]
+async fn main() -> TermResult {
+    match run().await {
         Ok(()) => TermResult(Ok(())),
         Err(e) => TermResult(Err(e)),
     }
 }
 
-fn run() -> Result<(), MyError> {
+async fn run() -> Result<(), MyError> {
     let cli = Cli::parse();
-    SimpleLogger::init(cli.verbose);
+    ColorLogger::init(cli.verbose);
 
     let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
@@ -170,16 +170,14 @@ fn run() -> Result<(), MyError> {
     inputs.sort();
     inputs.dedup();
 
-    let do_conversion = |path: Option<PathBuf>| -> Result<(), MyError> {
-        let block_size = cli.block_size.unwrap_or(4096);
-        let (sender, receiver) =
-            mpsc::channel::<f32>();
+    let do_conversion = async |path: Option<PathBuf>| -> Result<(), MyError> {
+        let (sender, receiver) = mpsc::channel::<f32>();
         let in_ctx = InputContext::new(
             path.clone(),
             cli.format,
             cli.endianness,
             cli.input_rate,
-            block_size,
+            cli.block_size.unwrap_or(4096),
             cli.channels.unwrap_or(2),
             path.is_none(),
         )?;
@@ -192,8 +190,8 @@ fn run() -> Result<(), MyError> {
             cwd.clone(),
         )?;
 
-        // Spawn thread for conversion; join after progress loop.
-        let handle = thread::spawn(move || {
+        // Spawn task for conversion; join after progress loop.
+        let handle = tokio::spawn(async move {
             // Map Box<dyn Error> into String so JoinHandle carries a Send payload
             conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
         });
@@ -212,7 +210,7 @@ fn run() -> Result<(), MyError> {
 
         // Propagate conversion errors
         let conv_res: Result<(), String> =
-            handle.join().map_err(|_| {
+            handle.await.map_err(|_| {
                 MyError::Message("Conversion thread panicked".into())
             })?;
         conv_res.map_err(MyError::from)?;
@@ -221,7 +219,7 @@ fn run() -> Result<(), MyError> {
 
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
-        do_conversion(None)?;
+        do_conversion(None).await?;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
 
@@ -244,24 +242,24 @@ fn run() -> Result<(), MyError> {
         .collect::<Vec<_>>();
 
     for path in dsd::find_dsd_files(&paths, cli.recurse)? {
-        do_conversion(Some(path))?;
+        do_conversion(Some(path)).await?;
     }
 
     Ok(())
 }
 
-struct SimpleLogger;
+struct ColorLogger;
 
-impl SimpleLogger {
+impl ColorLogger {
     fn init(verbose: bool) {
         let level = if verbose { Level::Trace } else { Level::Info };
-        log::set_boxed_logger(Box::new(SimpleLogger))
+        log::set_boxed_logger(Box::new(ColorLogger))
             .map(|()| log::set_max_level(level.to_level_filter()))
             .expect("Failed to initialize logger");
     }
 }
 
-impl log::Log for SimpleLogger {
+impl log::Log for ColorLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
         metadata.level() <= log::max_level()
     }
@@ -309,7 +307,7 @@ impl std::fmt::Display for MyError {
 
 impl std::error::Error for MyError {}
 
-type MyResult<T> = std::result::Result<T, MyError>;
+type MyResult<T> = Result<T, MyError>;
 
 pub struct TermResult(pub MyResult<()>);
 
