@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 
-const RETRIES: usize = 10; // Max retries for progress send
+const RETRIES: usize = 1; // Max retries for progress send
 pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
 
 pub struct ConversionContext {
@@ -268,7 +268,7 @@ impl ConversionContext {
     }
 
     fn send_progress(&self, sender: &mpsc::Sender<f32>) {
-        for i in 1..=RETRIES {
+        for i in 0..=RETRIES {
             match sender.send(
                 (self.total_dsd_bytes_processed as f32
                     / self.in_ctx.audio_length as f32)
