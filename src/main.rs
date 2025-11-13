@@ -170,52 +170,53 @@ async fn run() -> Result<(), MyError> {
     inputs.sort();
     inputs.dedup();
 
-    let do_conversion = async |path: Option<PathBuf>| -> Result<(), MyError> {
-        let (sender, receiver) = mpsc::channel::<f32>();
-        let in_ctx = InputContext::new(
-            path.clone(),
-            cli.format,
-            cli.endianness,
-            cli.input_rate,
-            cli.block_size.unwrap_or(4096),
-            cli.channels.unwrap_or(2),
-            path.is_none(),
-        )?;
+    let do_conversion =
+        async |path: Option<PathBuf>| -> Result<(), MyError> {
+            let (sender, receiver) = mpsc::channel::<f32>();
+            let in_ctx = InputContext::new(
+                path.clone(),
+                cli.format,
+                cli.endianness,
+                cli.input_rate,
+                cli.block_size.unwrap_or(4096),
+                cli.channels.unwrap_or(2),
+                path.is_none(),
+            )?;
 
-        let mut conv_ctx = ConversionContext::new(
-            in_ctx,
-            out_ctx.clone(),
-            cli.filter_type.unwrap().to_ascii_uppercase(),
-            cli.append_rate,
-            cwd.clone(),
-        )?;
+            let mut conv_ctx = ConversionContext::new(
+                in_ctx,
+                out_ctx.clone(),
+                cli.filter_type.unwrap().to_ascii_uppercase(),
+                cli.append_rate,
+                cwd.clone(),
+            )?;
 
-        // Spawn task for conversion; join after progress loop.
-        let handle = tokio::spawn(async move {
-            // Map Box<dyn Error> into String so JoinHandle carries a Send payload
-            conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
-        });
-        for progress in &receiver {
-            eprint!(
-                "\rConversion progress:{:>4}%",
-                progress.floor() as usize,
-            );
-            if progress == conversion_context::ONE_HUNDRED_PERCENT {
-                eprint!("\n");
-                break;
+            // Spawn task for conversion; join after progress loop.
+            let handle = tokio::spawn(async move {
+                // Map Box<dyn Error> into String so JoinHandle carries a Send payload
+                conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
+            });
+            for progress in &receiver {
+                eprint!(
+                    "\rConversion progress:{:>4}%",
+                    progress.floor() as usize,
+                );
+                if progress == conversion_context::ONE_HUNDRED_PERCENT {
+                    eprint!("\n");
+                    break;
+                }
+                io::stderr().flush()?;
             }
-            io::stderr().flush()?;
-        }
-        drop(receiver); // Close the receiver
+            drop(receiver); // Close the receiver
 
-        // Propagate conversion errors
-        let conv_res: Result<(), String> =
-            handle.await.map_err(|_| {
-                MyError::Message("Conversion thread panicked".into())
-            })?;
-        conv_res.map_err(MyError::from)?;
-        Ok(())
-    };
+            // Propagate conversion errors
+            let conv_res: Result<(), String> =
+                handle.await.map_err(|_| {
+                    MyError::Message("Conversion thread panicked".into())
+                })?;
+            conv_res.map_err(MyError::from)?;
+            Ok(())
+        };
 
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
