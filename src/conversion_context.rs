@@ -33,9 +33,10 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
 use std::time::Instant;
+
+const RETRIES: usize = 10; // Max retries for progress send
+pub const ONE_HUNDRED_PERCENT: f32 = 100.0;
 
 pub struct ConversionContext {
     in_ctx: InputContext,
@@ -161,9 +162,12 @@ impl ConversionContext {
         let wall_start = Instant::now();
 
         self.process_blocks(&sender)?;
-        let dsp_elapsed = wall_start.elapsed();
 
-        thread::sleep(Duration::from_millis(100)); // Allow sender to complete
+        // Wait for receiver to drop before continuing
+        while sender.send(ONE_HUNDRED_PERCENT).is_ok() {
+            continue;
+        }
+        let dsp_elapsed = wall_start.elapsed();
 
         info!("Clipped {} times.", self.out_ctx.clips);
 
@@ -249,11 +253,7 @@ impl ConversionContext {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
 
-            sender.send(
-                (self.total_dsd_bytes_processed as f32
-                    / self.in_ctx.audio_length as f32)
-                    * 100.0,
-            )?;
+            self.send_progress(&sender);
 
             // Decrement for file input using actual read size
             if reading_from_file {
@@ -265,6 +265,28 @@ impl ConversionContext {
         } // end loop
 
         Ok(())
+    }
+
+    fn send_progress(&self, sender: &mpsc::Sender<f32>) {
+        for i in 1..=RETRIES {
+            match sender.send(
+                (self.total_dsd_bytes_processed as f32
+                    / self.in_ctx.audio_length as f32)
+                    * ONE_HUNDRED_PERCENT,
+            ) {
+                Ok(_) => break,
+                Err(_) => {
+                    if i == RETRIES {
+                        trace!(
+                            "Progress channel blocked after {} retries.",
+                            RETRIES
+                        );
+                    } else {
+                        continue;
+                    }
+                }
+            }
+        }
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.

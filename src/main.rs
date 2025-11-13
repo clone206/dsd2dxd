@@ -171,13 +171,15 @@ fn run() -> Result<(), MyError> {
     inputs.dedup();
 
     let do_conversion = |path: Option<PathBuf>| -> Result<(), MyError> {
-        let (sender, receiver) = mpsc::channel::<f32>();
+        let block_size = cli.block_size.unwrap_or(4096);
+        let (sender, receiver) =
+            mpsc::channel::<f32>();
         let in_ctx = InputContext::new(
             path.clone(),
             cli.format,
             cli.endianness,
             cli.input_rate,
-            cli.block_size.unwrap_or(4096),
+            block_size,
             cli.channels.unwrap_or(2),
             path.is_none(),
         )?;
@@ -195,16 +197,19 @@ fn run() -> Result<(), MyError> {
             // Map Box<dyn Error> into String so JoinHandle carries a Send payload
             conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
         });
-        for progress in receiver {
+        for progress in &receiver {
             eprint!(
                 "\rConversion progress:{:>4}%",
                 progress.floor() as usize,
             );
-            if progress == 100.0 {
+            if progress == conversion_context::ONE_HUNDRED_PERCENT {
                 eprint!("\n");
+                break;
             }
             io::stderr().flush()?;
         }
+        drop(receiver); // Close the receiver
+
         // Propagate conversion errors
         let conv_res: Result<(), String> =
             handle.join().map_err(|_| {
