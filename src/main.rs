@@ -115,6 +115,10 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
+    /// Quiet mode: suppress all log output
+    #[arg(short = 'q', long = "quiet")]
+    quiet: bool,
+
     /// Append abbreviated output rate to filename
     /// (e.g., _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to the
     /// album tag of the output file if present.
@@ -140,7 +144,7 @@ async fn main() -> TermResult {
 
 async fn run() -> Result<(), MyError> {
     let cli = Cli::parse();
-    ColorLogger::init(cli.verbose);
+    ColorLogger::init(cli.verbose, cli.quiet);
 
     let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
@@ -249,12 +253,12 @@ async fn run() -> Result<(), MyError> {
     Ok(())
 }
 
-struct ColorLogger;
+struct ColorLogger { quiet: bool }
 
 impl ColorLogger {
-    fn init(verbose: bool) {
+    fn init(verbose: bool, quiet: bool) {
         let level = if verbose { Level::Trace } else { Level::Info };
-        log::set_boxed_logger(Box::new(ColorLogger))
+        log::set_boxed_logger(Box::new(ColorLogger { quiet }))
             .map(|()| log::set_max_level(level.to_level_filter()))
             .expect("Failed to initialize logger");
     }
@@ -266,6 +270,7 @@ impl log::Log for ColorLogger {
     }
 
     fn log(&self, record: &Record) {
+        if self.quiet { return; }
         if self.enabled(record.metadata()) {
             match record.level() {
                 Level::Error => eprintln!(
