@@ -16,6 +16,7 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
 use log::{debug, info};
 use std::error::Error;
@@ -42,6 +43,7 @@ pub struct InputContext {
     audio_pos: u64,
     reader: Box<dyn Read + Send>,
     file: Option<File>,
+    bytes_remaining: u64,
 }
 
 impl InputContext {
@@ -75,14 +77,6 @@ impl InputContext {
             None
         };
 
-        let file_name: OsString = if let Some(path) = &in_path {
-                path.file_name()
-                    .unwrap_or_else(|| "stdin".as_ref())
-                    .to_os_string()
-            } else {
-                OsString::from("stdin")
-            };
-
         let dsd_file_format = if std_in {
             None
         } else if let Some(path) = &in_path
@@ -104,6 +98,14 @@ impl InputContext {
             return Err("Unsupported DSD input rate.".into());
         }
 
+        let file_name: OsString = if let Some(path) = &in_path {
+            path.file_name()
+                .unwrap_or_else(|| "stdin".as_ref())
+                .to_os_string()
+        } else {
+            OsString::from("stdin")
+        };
+
         let mut ctx = Self {
             lsbit_first,
             interleaved,
@@ -121,6 +123,7 @@ impl InputContext {
             tag: None,
             reader: Box::new(io::empty()),
             file_name,
+            bytes_remaining: 0,
         };
 
         ctx.set_block_size(block_size);
@@ -138,19 +141,21 @@ impl InputContext {
         Ok(ctx)
     }
 
+    /// Read one frame of DSD data into the provided buffer.
+    /// Returns the number of bytes read and the number of bytes remaining.
     #[inline(always)]
     pub fn read_frame(
         &mut self,
-        bytes_remaining: u64,
-        frame_size: usize,
         buff: &mut Vec<u8>,
-    ) -> Result<usize, Box<dyn Error>> {
+    ) -> Result<(usize, u64), Box<dyn Error>> {
+        let frame_size =
+            self.block_size as usize * self.channels_num as usize;
         // stdin always reads frame_size
         let to_read: usize = if !self.std_in {
-            if bytes_remaining >= frame_size as u64 {
+            if self.bytes_remaining >= frame_size as u64 {
                 frame_size
             } else {
-                bytes_remaining as usize
+                self.bytes_remaining as usize
             }
         } else {
             frame_size
@@ -163,12 +168,46 @@ impl InputContext {
                 Err(e) => return Err(Box::new(e)),
             };
 
-        Ok(read_size)
+        if !self.std_in {
+            self.bytes_remaining -= read_size as u64;
+        }
+
+        Ok((read_size, self.bytes_remaining))
+    }
+
+    /// Take frame of DSD bytes and return one channel with the endianness
+    /// we need.
+    pub fn get_chan_bytes(
+        &self,
+        dsd_data: &[u8],
+        chan: usize,
+        read_size: usize,
+    ) -> Vec<u8> {
+        let mut chan_bytes: Vec<u8> =
+            Vec::with_capacity(self.block_size as usize);
+        let dsd_chan_offset = chan * self.dsd_chan_offset as usize;
+        let chan_size = read_size / self.channels_num as usize;
+        for i in 0..chan_size {
+            let byte_index =
+                dsd_chan_offset + i * self.dsd_stride as usize;
+            if byte_index >= dsd_data.len() {
+                break;
+            }
+            let b = dsd_data[byte_index];
+            chan_bytes.push(if self.lsbit_first {
+                b
+            } else {
+                bit_reverse_u8(b)
+            });
+        }
+        chan_bytes
     }
 
     fn set_stdin(&mut self) {
         debug!("Reading from stdin");
         self.audio_length = u64::MAX;
+        self.bytes_remaining =
+            self.block_size as u64 * self.channels_num as u64;
         self.audio_pos = 0;
         debug!(
             "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
@@ -217,6 +256,7 @@ impl InputContext {
                 } else {
                     max_len
                 };
+                self.bytes_remaining = self.audio_length;
 
                 // Channels from container (fallback to CLI on nonsense)
                 if let Some(chans_num) = my_dsd.channel_count {
