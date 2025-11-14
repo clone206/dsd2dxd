@@ -149,15 +149,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
         'T'
     });
 
-    let dither = Dither::new(dither_type)?;
-
     let out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
         cli.level,
         cli.output_rate,
         cli.path,
-        dither,
+        Dither::new(dither_type)?,
     )?;
 
     let cwd = std::env::current_dir()
@@ -231,7 +229,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
 
-    // Filter to remove any glob patterns and handle stdin, yielding all inputted paths
+    // Filter to remove any glob patterns, yielding all inputted paths
     let paths = inputs
         .iter()
         .filter_map(|input| {
