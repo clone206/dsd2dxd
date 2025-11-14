@@ -19,10 +19,7 @@
 use clap::Parser;
 use core::fmt;
 use std::{
-    io::{self, Write},
-    path::PathBuf,
-    process::{ExitCode, Termination},
-    sync::mpsc, time::Instant,
+    error::Error, io::{self, Write}, path::PathBuf, process::{ExitCode, Termination}, sync::mpsc, time::Instant
 };
 mod audio_file;
 mod byte_precalc_decimator;
@@ -138,11 +135,11 @@ struct Cli {
 async fn main() -> TermResult {
     match run().await {
         Ok(()) => TermResult(Ok(())),
-        Err(e) => TermResult(Err(e)),
+        Err(e) => TermResult(Err(e.into())),
     }
 }
 
-async fn run() -> Result<(), MyError> {
+async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     ColorLogger::init(cli.verbose, cli.quiet);
 
