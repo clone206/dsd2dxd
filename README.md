@@ -144,6 +144,8 @@ Options:
           the long form, e.g. --level=-3 [default: 0.0]
   -v, --verbose
           Print diagnostic messages
+  -q, --quiet
+          Quiet mode: suppress all log output
   -a, --append
           Append abbreviated output rate to filename (e.g.,
           _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to
