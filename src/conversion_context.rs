@@ -54,7 +54,6 @@ pub struct ConversionContext {
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
     base_dir: PathBuf,
-    file_name: OsString,
 }
 
 impl ConversionContext {
@@ -80,14 +79,6 @@ impl ConversionContext {
         let lm_slack = if upsample_ratio > 1 { 16 } else { 0 };
         let out_frames_capacity = frames_max + lm_slack;
 
-        let file_name: OsString = if let Some(path) = &in_ctx.in_path {
-                path.file_name()
-                    .unwrap_or_else(|| "stdin".as_ref())
-                    .to_os_string()
-            } else {
-                OsString::from("stdin")
-            };
-
         let mut ctx = Self {
             in_ctx,
             out_ctx,
@@ -103,7 +94,6 @@ impl ConversionContext {
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
             base_dir,
-            file_name
         };
 
         ctx.setup_resamplers()?;
@@ -117,8 +107,8 @@ impl ConversionContext {
         Ok(ctx)
     }
 
-    pub fn file_name(&self) -> String {
-        self.file_name.to_string_lossy().into_owned()
+    pub fn input_file_name(&self) -> String {
+        self.in_ctx.file_name.to_string_lossy().into_owned()
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {

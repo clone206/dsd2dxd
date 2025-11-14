@@ -195,7 +195,7 @@ async fn run() -> Result<(), MyError> {
                 cwd.clone(),
             )?;
 
-            let file_name = conv_ctx.file_name();
+            let file_name = conv_ctx.input_file_name();
 
             // Spawn task for conversion; join after progress loop.
             let handle = tokio::spawn(async move {

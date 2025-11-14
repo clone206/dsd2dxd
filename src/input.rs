@@ -19,6 +19,7 @@
 use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
 use log::{debug, info};
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -35,6 +36,7 @@ pub struct InputContext {
     pub block_size: u32,
     pub audio_length: u64,
     pub tag: Option<id3::Tag>,
+    pub file_name: OsString,
 
     interleaved: bool,
     audio_pos: u64,
@@ -73,6 +75,14 @@ impl InputContext {
             None
         };
 
+        let file_name: OsString = if let Some(path) = &in_path {
+                path.file_name()
+                    .unwrap_or_else(|| "stdin".as_ref())
+                    .to_os_string()
+            } else {
+                OsString::from("stdin")
+            };
+
         let dsd_file_format = if std_in {
             None
         } else if let Some(path) = &in_path
@@ -110,6 +120,7 @@ impl InputContext {
             file: None,
             tag: None,
             reader: Box::new(io::empty()),
+            file_name,
         };
 
         ctx.set_block_size(block_size);
