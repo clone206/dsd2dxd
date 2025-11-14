@@ -26,19 +26,19 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub struct InputContext {
-    pub lsbit_first: bool,
     pub std_in: bool,
     pub dsd_rate: i32,
     pub in_path: Option<PathBuf>,
     pub parent_path: Option<PathBuf>,
-    pub dsd_stride: u32,
-    pub dsd_chan_offset: u32,
     pub channels_num: u32,
     pub block_size: u32,
     pub audio_length: u64,
     pub tag: Option<id3::Tag>,
     pub file_name: OsString,
 
+    lsbit_first: bool,
+    dsd_stride: u32,
+    dsd_chan_offset: u32,
     interleaved: bool,
     audio_pos: u64,
     reader: Box<dyn Read + Send>,
