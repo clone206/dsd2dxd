@@ -30,6 +30,7 @@
 use std::fs::File;
 use std::io::{self, BufWriter, Write}; // add BufWriter
 use std::path::Path;
+use log::{debug};
 
 use flac_codec::metadata::{Picture, VorbisComment};
 
@@ -466,11 +467,11 @@ where
     }
 
     pub fn print_summary(&self) {
-        eprintln!("Audio File Summary:");
-        eprintln!("Bit Depth: {}", self.bit_depth);
-        eprintln!("Sample Rate: {}", self.sample_rate);
-        eprintln!("Num Channels: {}", self.num_channels);
-        eprintln!(
+        debug!("Audio File Summary:");
+        debug!("Bit Depth: {}", self.bit_depth);
+        debug!("Sample Rate: {}", self.sample_rate);
+        debug!("Num Channels: {}", self.num_channels);
+        debug!(
             "Num Samples Per Channel: {}",
             self.get_num_samples_per_channel()
         );

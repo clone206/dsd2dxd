@@ -25,6 +25,7 @@ use std::error::Error;
 use std::io::Write;
 use std::path::PathBuf;
 use std::{io, vec};
+use log::{info, debug};
 
 pub struct OutputContext {
     pub bits: i32,
@@ -46,7 +47,6 @@ pub struct OutputContext {
     stdout_buf: Vec<u8>,
     vorbis: Option<VorbisComment>,
     pictures: Vec<Picture>,
-    verbose_mode: bool,
 }
 
 impl OutputContext {
@@ -57,7 +57,6 @@ impl OutputContext {
         out_rate: i32,
         out_path: Option<PathBuf>,
         dither: Dither,
-        verbose_mode: bool,
     ) -> Result<Self, Box<dyn Error>> {
         if ![16, 20, 24, 32].contains(&out_bits) {
             return Err("Unsupported bit depth".into());
@@ -108,7 +107,6 @@ impl OutputContext {
             vorbis: None,
             pictures: Vec::new(),
             path: out_path,
-            verbose_mode,
             last_samps_clipped_low: 0,
             last_samps_clipped_high: 0,
             clips: 0,
@@ -249,7 +247,7 @@ impl OutputContext {
             _ => return Err("No file initialized".to_string()),
         }
 
-        eprintln!("Wrote to file: {}", out_path.to_string_lossy());
+        info!("Wrote to file: {}", out_path.to_string_lossy());
         Ok(())
     }
 
@@ -365,7 +363,7 @@ impl OutputContext {
             } else {
                 continue;
             };
-            self.verbose(&format!("Adding ID3 Picture: {}", pic));
+            debug!("Adding ID3 Picture: {}", pic);
             let picture = flac_codec::metadata::Picture::new(
                 pic_type,
                 pic.description.clone(),
@@ -476,12 +474,6 @@ impl OutputContext {
             (x + 0.5).floor() as i64
         }
     }
-
-    fn verbose(&self, message: &str) {
-        if self.verbose_mode {
-            eprintln!("[Verbose][Output] {}", message);
-        }
-    }
 }
 
 impl Clone for OutputContext {
@@ -500,7 +492,6 @@ impl Clone for OutputContext {
             vorbis: self.vorbis.clone(),
             pictures: self.pictures.clone(),
             path: self.path.clone(),
-            verbose_mode: self.verbose_mode,
             last_samps_clipped_low: self.last_samps_clipped_low,
             last_samps_clipped_high: self.last_samps_clipped_high,
             clips: self.clips,

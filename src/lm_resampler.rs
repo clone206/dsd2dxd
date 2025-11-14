@@ -30,8 +30,10 @@ use crate::filters_lm::HTAPS_DDRX5_14TO1_EQ; // ADD first-stage half taps (5× u
 use crate::filters_lm::HTAPS_DDRX10_21TO1_EQ;
 use crate::filters_lm::HTAPS_DSDX5_7TO1_EQ;
 use crate::filters_lm::HTAPS_DSDX10_21TO1_EQ;
+use log::debug;
 use std::collections::HashMap;
 use std::env;
+use std::error::Error;
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,18 +84,20 @@ pub struct LMResampler {
     s2_scratch: Vec<f64>,
 }
 impl LMResampler {
-    pub fn new(l: u32, m: i32, verbose: bool, out_rate: u32) -> Self {
+    pub fn new(
+        l: u32,
+        m: i32,
+        out_rate: u32,
+    ) -> Result<Self, Box<dyn Error>> {
         match m {
             588 => {
                 // DSD256 -> 96k two‑stage path: (×5 -> /21) => ~10.752 MHz -> /28 => 96k
                 if out_rate == 96_000 && l == 5 {
-                    if verbose {
-                        eprintln!(
-                            "[DBG] Two-stage DSD256->96k: (×{} -> /21) -> /28 [DDRX10_21TO1 + 2.68MHz 28:1]",
-                            l
-                        );
-                    }
-                    return Self {
+                    debug!(
+                        "Two-stage DSD256->96k: (×{} -> /21) -> /28 [DDRX10_21TO1 + 2.68MHz 28:1]",
+                        l
+                    );
+                    return Ok(Self {
                         stage1_poly: Some(Stage1Poly::new(
                             &HTAPS_DDRX10_21TO1_EQ[..],
                             l,
@@ -106,20 +110,20 @@ impl LMResampler {
                         stage3_decim: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
-                    };
+                    });
                 }
-                panic!("Unsupported 588: must be out_rate=96k and L=5");
+                return Err(
+                    "Unsupported 588: must be out_rate=96k and L=5".into(),
+                );
             }
             294 => {
                 // DSD256 -> 192k two‑stage path: (×5 -> /21) => 2.688 MHz -> /14 => 192k
                 if out_rate == 192_000 && l == 5 {
-                    if verbose {
-                        eprintln!(
-                            "[DBG] Two-stage DSD256->192k: (×{} -> /21) -> /14 [DDRX10_21TO1 + 2.68MHz 14:1]",
-                            l
-                        );
-                    }
-                    return Self {
+                    debug!(
+                        "Two-stage DSD256->192k: (×{} -> /21) -> /14 [DDRX10_21TO1 + 2.68MHz 14:1]",
+                        l
+                    );
+                    return Ok(Self {
                         stage1_poly: Some(Stage1Poly::new(
                             &HTAPS_DDRX10_21TO1_EQ[..],
                             l,
@@ -132,16 +136,14 @@ impl LMResampler {
                         stage3_decim: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
-                    };
+                    });
                 }
                 // Original cascade Stage1 definitions
-                if verbose {
-                    eprintln!(
-                        "[DBG] Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
-                        l
-                    );
-                }
-                return Self {
+                debug!(
+                    "Equiripple L/M path: L={} M=294 — (×L -> /14 -> /7 -> /3) [Stage2/3 direct].",
+                    l
+                );
+                return Ok(Self {
                     // Stage 2 (decimator by 7)
                     stage2_decim: Some(DecimFIRSym::new_from_half(
                         &HTAPS_2MHZ_7TO1_EQ,
@@ -159,18 +161,16 @@ impl LMResampler {
                     )),
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
-                };
+                });
             }
             147 => {
                 // DSD128 -> 384k two‑stage path (×L -> /21) -> /7
                 if out_rate == 384_000 {
-                    if verbose {
-                        eprintln!(
-                            "[DBG] Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k",
-                            l
-                        );
-                    }
-                    return Self {
+                    debug!(
+                        "Two-stage L={}/M=147 path enabled: (×L -> /21 (poly) -> /7) => 384k",
+                        l
+                    );
+                    return Ok(Self {
                         stage1_poly: Some(Stage1Poly::new(
                             &HTAPS_DDRX10_21TO1_EQ[..],
                             l,
@@ -183,18 +183,16 @@ impl LMResampler {
                         stage3_decim: None,
                         s2_scratch: Vec::new(),
                         s1_scratch: Vec::new(),
-                    };
+                    });
                 }
 
                 if out_rate == 192_000 {
                     if l == 5 {
                         // DSD128 -> 192k three-stage path
-                        if verbose {
-                            eprintln!(
-                                "[DBG] Three-stage L=5/M=147 path enabled: (×5 -> /7 (poly) -> /7 -> /3) => 192k"
-                            );
-                        }
-                        return Self {
+                        debug!(
+                            "Three-stage L=5/M=147 path enabled: (×5 -> /7 (poly) -> /7 -> /3) => 192k"
+                        );
+                        return Ok(Self {
                             stage1_poly: Some(Stage1Poly::new(
                                 &HTAPS_DDRX5_7TO_1_EQ[..],
                                 l,
@@ -214,15 +212,13 @@ impl LMResampler {
                             ),
                             s2_scratch: Vec::new(),
                             s1_scratch: Vec::new(),
-                        };
+                        });
                     } else if l == 10 {
                         // DSD64 -> 192k two-stage path (existing)
-                        if verbose {
-                            eprintln!(
-                                "[DBG] Two-stage L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 192k"
-                            );
-                        }
-                        return Self {
+                        debug!(
+                            "Two-stage L=10/M=147 path enabled: (×10 -> /21 (poly) -> /7) => 192k"
+                        );
+                        return Ok(Self {
                             stage1_poly: Some(Stage1Poly::new(
                                 &HTAPS_DSDX10_21TO1_EQ[..],
                                 l,
@@ -237,17 +233,15 @@ impl LMResampler {
                             stage3_decim: None,
                             s2_scratch: Vec::new(),
                             s1_scratch: Vec::new(),
-                        };
+                        });
                     }
                 }
 
-                if verbose {
-                    eprintln!(
-                        "[DBG] Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) [Stage2/3 direct] => 96K",
-                        l
-                    );
-                }
-                return Self {
+                debug!(
+                    "Equiripple L/M path: L={} M=147 — (×L -> /7 -> /7 -> /3) [Stage2/3 direct] => 96K",
+                    l
+                );
+                return Ok(Self {
                     stage1_poly: Some(Stage1Poly::new(
                         &HTAPS_DSDX5_7TO1_EQ[..],
                         l,
@@ -265,9 +259,9 @@ impl LMResampler {
                     )),
                     s2_scratch: Vec::new(),
                     s1_scratch: Vec::new(),
-                };
+                });
             }
-            _ => panic!("Unsupported L/M combination: L={} M={}", l, m),
+            _ => return Err("Unsupported L/M combination".into()),
         }
     }
 
@@ -276,7 +270,6 @@ impl LMResampler {
     pub fn process_bytes_lm(
         &mut self,
         bytes: &[u8],
-        lsb_first: bool,
         out: &mut [f64],
     ) -> usize {
         let s1 = match self.stage1_poly.as_mut() {
@@ -299,15 +292,9 @@ impl LMResampler {
 
         // Helper to emit stage1 outputs for a byte into s1_scratch
         let push_byte =
-            |b: u8, s1: &mut Stage1Poly, lsb: bool, dst: &mut Vec<f64>| {
-                if lsb {
-                    for bit in 0..8 {
-                        s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
-                    }
-                } else {
-                    for bit in (0..8).rev() {
-                        s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
-                    }
+            |b: u8, s1: &mut Stage1Poly, dst: &mut Vec<f64>| {
+                for bit in 0..8 {
+                    s1.push_all((b >> bit) & 1, |y1| dst.push(y1));
                 }
             };
 
@@ -346,7 +333,7 @@ impl LMResampler {
             }
             let mut consumed_bytes = 0usize;
             for &byte in &bytes[i..i + take_bytes] {
-                push_byte(byte, s1, lsb_first, &mut self.s1_scratch);
+                push_byte(byte, s1, &mut self.s1_scratch);
                 consumed_bytes += 1;
                 if self.s1_scratch.len() >= need_s1_out {
                     break;
@@ -499,7 +486,7 @@ impl Stage1Poly {
             } else {
                 0
             };
-            eprintln!(
+            debug!(
                 "[CFG] Stage1 L={} M={}: groups/phase={}..{}, chunk_eff={} mode=lut(f64) (params: MULT={}, TARGET={}, ALIGN={} [0=>M])",
                 l,
                 m,

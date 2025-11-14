@@ -17,7 +17,10 @@
 */
 
 use clap::Parser;
-use std::{error::Error, path::PathBuf};
+use core::fmt;
+use std::{
+    error::Error, io::{self, Write}, path::PathBuf, process::{ExitCode, Termination}, sync::mpsc, time::Instant
+};
 mod audio_file;
 mod byte_precalc_decimator;
 mod conversion_context;
@@ -29,9 +32,11 @@ mod input;
 mod lm_resampler;
 mod output;
 
+use colored::Colorize;
 pub use conversion_context::ConversionContext;
 pub use dither::Dither;
 pub use input::InputContext;
+use log::{Level, Metadata, Record, error, info, warn};
 pub use output::OutputContext;
 
 #[derive(Parser)]
@@ -107,6 +112,10 @@ struct Cli {
     #[arg(short = 'v', long = "verbose")]
     verbose: bool,
 
+    /// Quiet mode: suppress all log output
+    #[arg(short = 'q', long = "quiet")]
+    quiet: bool,
+
     /// Append abbreviated output rate to filename
     /// (e.g., _96K, _88_2K). Also appends " [<OUTPUT_RATE>]" to the
     /// album tag of the output file if present.
@@ -122,14 +131,17 @@ struct Cli {
     files: Vec<PathBuf>,
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
+#[tokio::main]
+async fn main() -> TermResult {
+    match run().await {
+        Ok(()) => TermResult(Ok(())),
+        Err(e) => TermResult(Err(e.into())),
+    }
+}
 
-    let verbose = |message: &str| {
-        if cli.verbose {
-            eprintln!("{}", message);
-        }
-    };
+async fn run() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+    ColorLogger::init(cli.verbose, cli.quiet);
 
     let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
@@ -137,16 +149,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         'T'
     });
 
-    let dither = Dither::new(dither_type)?;
     let out_ctx = OutputContext::new(
         cli.bit_depth,
         cli.output,
         cli.level,
         cli.output_rate,
         cli.path,
-        dither,
-        cli.verbose,
+        Dither::new(dither_type)?,
     )?;
+
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
 
@@ -159,7 +170,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     inputs.dedup();
 
     let do_conversion =
-        |path: Option<PathBuf>| -> Result<(), Box<dyn Error>> {
+        async |path: Option<PathBuf>| -> Result<(), MyError> {
+            let (sender, receiver) = mpsc::channel::<f32>();
             let in_ctx = InputContext::new(
                 path.clone(),
                 cli.format,
@@ -168,48 +180,194 @@ fn main() -> Result<(), Box<dyn Error>> {
                 cli.block_size.unwrap_or(4096),
                 cli.channels.unwrap_or(2),
                 path.is_none(),
-                cli.verbose,
             )?;
 
             let mut conv_ctx = ConversionContext::new(
                 in_ctx,
                 out_ctx.clone(),
                 cli.filter_type.unwrap().to_ascii_uppercase(),
-                cli.verbose,
                 cli.append_rate,
                 cwd.clone(),
             )?;
-            conv_ctx.do_conversion()
+
+            let file_name = conv_ctx.input_file_name();
+
+            // Spawn task for conversion; join after progress loop.
+            let handle = tokio::spawn(async move {
+                // Map Box<dyn Error> into String so JoinHandle carries a Send payload
+                conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
+            });
+            for progress in &receiver {
+                eprint!(
+                    "\r{}{}:{:>4}%",
+                    "[Converting] ".bold(),
+                    file_name.bold(),
+                    progress.floor() as usize,
+                );
+                if progress == conversion_context::ONE_HUNDRED_PERCENT {
+                    eprint!("\n");
+                    break;
+                }
+                io::stderr().flush()?;
+            }
+            drop(receiver); // Close the receiver
+
+            // Propagate conversion errors
+            let conv_res: Result<(), String> =
+                handle.await.map_err(|_| {
+                    MyError::Message("Conversion thread panicked".into())
+                })?;
+            conv_res.map_err(MyError::from)?;
+            Ok(())
         };
 
-    // Filter to remove any glob patterns and handle stdin, yielding all inputted paths
+    let mut total_inputs = 0;
+    // Handle stdin conversion once, then remove it so we don't treat it as a file path.
+    if inputs.contains(&PathBuf::from("-")) {
+        do_conversion(None).await?;
+        total_inputs += 1;
+        inputs.retain(|p| p != &PathBuf::from("-"));
+    }
+
+    // Filter to remove any glob patterns, yielding all inputted paths
     let paths = inputs
         .iter()
         .filter_map(|input| {
             if input.to_string_lossy().contains('*') {
-                verbose(&format!(
-                    "Warning: Unexpanded glob pattern detected in input: \"{}\". Skipping.",
+                warn!(
+                    "Unexpanded glob pattern detected in input: \"{}\". Skipping.",
                     input.display()
-                ));
+                );
                 None
-            }
-            else if input == &PathBuf::from("-") {
-                if let Err(e) = do_conversion(None) {
-                    panic!("Error processing stdin: {}", e);
-                }
-                None
-            }
-            else {
-                verbose(&format!("Input: {}", input.display()));
+            } else {
                 Some(input)
             }
         })
         .cloned()
         .collect::<Vec<_>>();
 
-    for path in dsd::find_dsd_files(&paths, cli.recurse)? {
-        do_conversion(Some(path))?;
+    let expanded_paths = dsd::find_dsd_files(&paths, cli.recurse)?;
+    total_inputs += expanded_paths.len();
+
+    let wall_start = Instant::now();
+
+    for path in expanded_paths {
+        do_conversion(Some(path)).await?;
     }
 
+    let total_elapsed = wall_start.elapsed();
+    let total_secs = total_elapsed.as_secs();
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    info!("Processed {} inputs in {:02}:{:02}:{:02}", total_inputs, h, m, s);
+
     Ok(())
+}
+
+struct ColorLogger { quiet: bool }
+
+impl ColorLogger {
+    fn init(verbose: bool, quiet: bool) {
+        let level = if verbose { Level::Trace } else { Level::Info };
+        log::set_boxed_logger(Box::new(ColorLogger { quiet }))
+            .map(|()| log::set_max_level(level.to_level_filter()))
+            .expect("Failed to initialize logger");
+    }
+}
+
+impl log::Log for ColorLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= log::max_level()
+    }
+
+    fn log(&self, record: &Record) {
+        if self.quiet { return; }
+        if self.enabled(record.metadata()) {
+            match record.level() {
+                Level::Error => eprintln!(
+                    "{} {}",
+                    "[ERROR]".red().bold(),
+                    format!("{}", record.args()).red().bold()
+                ),
+                Level::Warn => eprintln!(
+                    "{} {}",
+                    "[WARN]".yellow().bold(),
+                    format!("{}", record.args()).yellow().bold()
+                ),
+                _ => eprintln!(
+                    "[{}] {}",
+                    record.level().to_string().blue(),
+                    record.args()
+                ),
+            }
+        }
+        self.flush();
+    }
+
+    fn flush(&self) {
+        io::stderr().flush().unwrap();
+    }
+}
+
+#[derive(Debug)]
+pub enum MyError {
+    Message(String),
+}
+
+impl std::fmt::Display for MyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MyError::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for MyError {}
+
+type MyResult<T> = Result<T, MyError>;
+
+pub struct TermResult(pub MyResult<()>);
+
+// Removed custom FromResidual impl: using a separate run() -> Result<(), MyError>
+// function keeps error handling ergonomic on stable Rust without nightly features.
+
+impl Termination for TermResult {
+    fn report(self) -> ExitCode {
+        match self.0 {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(err) => {
+                error!("{}", err);
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+// Convert &'static str errors (e.g., from Dither::new)
+impl From<&'static str> for MyError {
+    fn from(err: &'static str) -> Self {
+        MyError::Message(err.to_string())
+    }
+}
+
+// Convert String errors to MyError
+impl From<String> for MyError {
+    fn from(err: String) -> Self {
+        MyError::Message(err)
+    }
+}
+
+// Convert std::io::Error to MyError
+impl From<std::io::Error> for MyError {
+    fn from(err: std::io::Error) -> Self {
+        MyError::Message(err.to_string())
+    }
+}
+
+// Convert boxed dynamic errors into MyError
+impl From<Box<dyn std::error::Error>> for MyError {
+    fn from(err: Box<dyn std::error::Error>) -> Self {
+        MyError::Message(err.to_string())
+    }
 }

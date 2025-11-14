@@ -16,30 +16,35 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+use crate::byte_precalc_decimator::bit_reverse_u8;
 use crate::dsd::{DFF_BLOCK_SIZE, DSD_64_RATE, DsdFile, DsdFileFormat};
+use log::{debug, info};
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub struct InputContext {
-    pub lsbit_first: bool,
     pub std_in: bool,
     pub dsd_rate: i32,
     pub in_path: Option<PathBuf>,
     pub parent_path: Option<PathBuf>,
-    pub dsd_stride: u32,
-    pub dsd_chan_offset: u32,
     pub channels_num: u32,
     pub block_size: u32,
     pub audio_length: u64,
     pub tag: Option<id3::Tag>,
+    pub file_name: OsString,
 
+    lsbit_first: bool,
+    dsd_stride: u32,
+    dsd_chan_offset: u32,
     interleaved: bool,
     audio_pos: u64,
-    reader: Box<dyn Read>,
-    verbose_mode: bool,
+    reader: Box<dyn Read + Send>,
     file: Option<File>,
+    bytes_remaining: u64,
+    dsd_data: Vec<u8>,
 }
 
 impl InputContext {
@@ -51,7 +56,6 @@ impl InputContext {
         block_size: u32,
         channels: u32,
         std_in: bool,
-        verbose: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let lsbit_first = match endian.to_ascii_lowercase() {
             'l' => true,
@@ -95,8 +99,15 @@ impl InputContext {
             return Err("Unsupported DSD input rate.".into());
         }
 
+        let file_name: OsString = if let Some(path) = &in_path {
+            path.file_name()
+                .unwrap_or_else(|| "stdin".as_ref())
+                .to_os_string()
+        } else {
+            OsString::from("stdin")
+        };
+
         let mut ctx = Self {
-            verbose_mode: verbose,
             lsbit_first,
             interleaved,
             std_in,
@@ -112,6 +123,9 @@ impl InputContext {
             file: None,
             tag: None,
             reader: Box::new(io::empty()),
+            file_name,
+            bytes_remaining: 0,
+            dsd_data: vec![0; block_size as usize * channels as usize],
         };
 
         ctx.set_block_size(block_size);
@@ -129,19 +143,20 @@ impl InputContext {
         Ok(ctx)
     }
 
+    /// Read one frame of DSD data into the provided buffer.
+    /// Returns the number of bytes read and the number of bytes remaining.
     #[inline(always)]
     pub fn read_frame(
         &mut self,
-        bytes_remaining: u64,
-        frame_size: usize,
-        buff: &mut Vec<u8>,
-    ) -> Result<usize, Box<dyn Error>> {
+    ) -> Result<(usize, u64), Box<dyn Error>> {
+        let frame_size =
+            self.block_size as usize * self.channels_num as usize;
         // stdin always reads frame_size
         let to_read: usize = if !self.std_in {
-            if bytes_remaining >= frame_size as u64 {
+            if self.bytes_remaining >= frame_size as u64 {
                 frame_size
             } else {
-                bytes_remaining as usize
+                self.bytes_remaining as usize
             }
         } else {
             frame_size
@@ -149,19 +164,53 @@ impl InputContext {
 
         // Read one frame identically for stdin and file
         let read_size: usize =
-            match self.reader.read_exact(&mut buff[..to_read]) {
+            match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
                 Ok(()) => to_read,
                 Err(e) => return Err(Box::new(e)),
             };
 
-        Ok(read_size)
+        if !self.std_in {
+            self.bytes_remaining -= read_size as u64;
+        }
+
+        Ok((read_size, self.bytes_remaining))
+    }
+
+    /// Take frame of DSD bytes from internal buffer and return one 
+    /// channel with the endianness we need.
+    pub fn get_chan_bytes(
+        &self,
+        chan: usize,
+        read_size: usize,
+    ) -> Vec<u8> {
+        let chan_size = read_size / self.channels_num as usize;
+        let mut chan_bytes: Vec<u8> =
+            Vec::with_capacity(chan_size);
+        let dsd_chan_offset = chan * self.dsd_chan_offset as usize;
+
+        for i in 0..chan_size {
+            let byte_index =
+                dsd_chan_offset + i * self.dsd_stride as usize;
+            if byte_index >= self.dsd_data.len() {
+                break;
+            }
+            let b = self.dsd_data[byte_index];
+            chan_bytes.push(if self.lsbit_first {
+                b
+            } else {
+                bit_reverse_u8(b)
+            });
+        }
+        chan_bytes
     }
 
     fn set_stdin(&mut self) {
-        eprintln!("Reading from stdin");
+        debug!("Reading from stdin");
         self.audio_length = u64::MAX;
+        self.bytes_remaining =
+            self.block_size as u64 * self.channels_num as u64;
         self.audio_pos = 0;
-        eprintln!(
+        debug!(
             "Using CLI parameters: {} channels, LSB first: {}, Interleaved: {}",
             self.channels_num,
             if self.lsbit_first == true {
@@ -181,20 +230,19 @@ impl InputContext {
             return Err("No readable input file".into());
         };
 
-        self.verbose(&format!(
-            "Parent path: {}",
-            self.parent_path.as_ref().unwrap().display()
-        ));
-        self.verbose(&format!(
+        debug!(
             "Opening input file: {}",
             self.in_path.clone().unwrap().to_string_lossy()
-        ));
-
+        );
+        debug!(
+            "Parent path: {}",
+            self.parent_path.as_ref().unwrap().display()
+        );
         match DsdFile::new(path, dsd_file_format) {
             Ok(my_dsd) => {
                 // Pull raw fields
                 let file_len = my_dsd.file.metadata()?.len();
-                self.verbose(&format!("File size: {} bytes", file_len));
+                debug!("File size: {} bytes", file_len);
 
                 self.file = Some(my_dsd.file);
                 self.tag = my_dsd.tag;
@@ -209,11 +257,12 @@ impl InputContext {
                 } else {
                     max_len
                 };
+                self.bytes_remaining = self.audio_length;
 
                 // Channels from container (fallback to CLI on nonsense)
                 if let Some(chans_num) = my_dsd.channel_count {
                     self.channels_num = chans_num;
-                } 
+                }
 
                 // Bit order from container
                 if let Some(lsb) = my_dsd.is_lsb {
@@ -246,18 +295,15 @@ impl InputContext {
                         self.dsd_rate = (sample_rate / DSD_64_RATE) as i32;
                     } else {
                         // Fallback: keep CLI value (avoid triggering “Invalid DSD rate”)
-                        eprintln!(
+                        info!(
                             "Container sample_rate {} not standard; keeping CLI dsd_rate={}",
                             sample_rate, self.dsd_rate
                         );
                     }
                 }
 
-                self.verbose(&format!(
-                    "Audio length in bytes: {}",
-                    self.audio_length
-                ));
-                eprintln!(
+                debug!("Audio length in bytes: {}", self.audio_length);
+                debug!(
                     "Container: sr={}Hz channels={} interleaved={}",
                     self.dsd_rate * DSD_64_RATE as i32,
                     self.channels_num,
@@ -265,8 +311,8 @@ impl InputContext {
                 );
             }
             Err(e) if dsd_file_format != DsdFileFormat::Raw => {
-                eprintln!("Container open failed with error: {}", e);
-                eprintln!("Treating input as raw DSD (no container)");
+                info!("Container open failed with error: {}", e);
+                info!("Treating input as raw DSD (no container)");
                 self.update_from_file(DsdFileFormat::Raw)?;
             }
             Err(e) => {
@@ -285,23 +331,16 @@ impl InputContext {
         } else {
             1
         };
-        self.verbose(&format!(
+        debug!(
             "Set block_size={} dsd_chan_offset={} dsd_stride={}",
             self.block_size, self.dsd_chan_offset, self.dsd_stride
-        ));
+        );
     }
 
-    fn verbose(&self, say: &str) {
-        if self.verbose_mode {
-            eprintln!("[Verbose][Input] {}", say);
-        }
-    }
-
-    fn set_reader(
-        &mut self,
-    ) -> Result<(), Box<dyn Error>> {
+    fn set_reader(&mut self) -> Result<(), Box<dyn Error>> {
         if self.std_in {
-            self.reader = Box::new(io::stdin().lock());
+            // Use Stdin (not StdinLock) so the reader is 'static + Send for threaded use
+            self.reader = Box::new(io::stdin());
             return Ok(());
         }
         // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
@@ -318,10 +357,10 @@ impl InputContext {
 
         if self.audio_pos > 0 {
             file.seek(SeekFrom::Start(self.audio_pos as u64))?;
-            self.verbose(&format!(
+            debug!(
                 "Seeked to audio start position: {}",
                 file.stream_position()?
-            ));
+            );
         }
         self.reader = Box::new(file);
         Ok(())

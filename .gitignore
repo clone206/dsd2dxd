@@ -24,3 +24,5 @@ lib/*
 *.dump
 .cargo/config.toml
 release/*
+make_release.sh
+log.txt
