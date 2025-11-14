@@ -44,6 +44,7 @@ pub struct InputContext {
     reader: Box<dyn Read + Send>,
     file: Option<File>,
     bytes_remaining: u64,
+    dsd_data: Vec<u8>,
 }
 
 impl InputContext {
@@ -124,6 +125,7 @@ impl InputContext {
             reader: Box::new(io::empty()),
             file_name,
             bytes_remaining: 0,
+            dsd_data: vec![0; block_size as usize * channels as usize],
         };
 
         ctx.set_block_size(block_size);
@@ -146,7 +148,6 @@ impl InputContext {
     #[inline(always)]
     pub fn read_frame(
         &mut self,
-        buff: &mut Vec<u8>,
     ) -> Result<(usize, u64), Box<dyn Error>> {
         let frame_size =
             self.block_size as usize * self.channels_num as usize;
@@ -163,7 +164,7 @@ impl InputContext {
 
         // Read one frame identically for stdin and file
         let read_size: usize =
-            match self.reader.read_exact(&mut buff[..to_read]) {
+            match self.reader.read_exact(&mut self.dsd_data[..to_read]) {
                 Ok(()) => to_read,
                 Err(e) => return Err(Box::new(e)),
             };
@@ -175,25 +176,25 @@ impl InputContext {
         Ok((read_size, self.bytes_remaining))
     }
 
-    /// Take frame of DSD bytes and return one channel with the endianness
-    /// we need.
+    /// Take frame of DSD bytes from internal buffer and return one 
+    /// channel with the endianness we need.
     pub fn get_chan_bytes(
         &self,
-        dsd_data: &[u8],
         chan: usize,
         read_size: usize,
     ) -> Vec<u8> {
-        let mut chan_bytes: Vec<u8> =
-            Vec::with_capacity(self.block_size as usize);
-        let dsd_chan_offset = chan * self.dsd_chan_offset as usize;
         let chan_size = read_size / self.channels_num as usize;
+        let mut chan_bytes: Vec<u8> =
+            Vec::with_capacity(chan_size);
+        let dsd_chan_offset = chan * self.dsd_chan_offset as usize;
+
         for i in 0..chan_size {
             let byte_index =
                 dsd_chan_offset + i * self.dsd_stride as usize;
-            if byte_index >= dsd_data.len() {
+            if byte_index >= self.dsd_data.len() {
                 break;
             }
-            let b = dsd_data[byte_index];
+            let b = self.dsd_data[byte_index];
             chan_bytes.push(if self.lsbit_first {
                 b
             } else {

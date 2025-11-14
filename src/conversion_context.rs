@@ -42,7 +42,6 @@ pub struct ConversionContext {
     in_ctx: InputContext,
     out_ctx: OutputContext,
     filt_type: char,
-    dsd_data: Vec<u8>,
     append_rate_suffix: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
     eq_lm_resamplers: Option<Vec<LMResampler>>,
@@ -64,7 +63,6 @@ impl ConversionContext {
         base_dir: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size as usize;
-        let channels = in_ctx.channels_num as usize;
 
         let (decim_ratio, upsample_ratio) =
             compute_decim_and_upsample(in_ctx.dsd_rate, out_ctx.rate);
@@ -82,7 +80,6 @@ impl ConversionContext {
             in_ctx,
             out_ctx,
             filt_type,
-            dsd_data: vec![0; dsd_bytes_per_chan * channels],
             append_rate_suffix,
             precalc_decims: None,
             eq_lm_resamplers: None,
@@ -113,17 +110,15 @@ impl ConversionContext {
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
         if self.upsample_ratio > 1 {
-            self.eq_lm_resamplers = Some(
-                (0..self.in_ctx.channels_num)
-                    .map(|_i| {
-                        LMResampler::new(
-                            self.upsample_ratio,
-                            self.decim_ratio,
-                            self.out_ctx.rate as u32,
-                        )
-                    })
-                    .collect(),
-            );
+            let mut resamplers = Vec::with_capacity(self.in_ctx.channels_num as usize);
+            for _ in 0..self.in_ctx.channels_num {
+                resamplers.push(LMResampler::new(
+                    self.upsample_ratio,
+                    self.decim_ratio,
+                    self.out_ctx.rate as u32,
+                )?);
+            }
+            self.eq_lm_resamplers = Some(resamplers);
             self.out_ctx.scale_factor *= self.upsample_ratio as f64;
             trace!(
                 "L/M path makeup gain: ×{} (scale_factor now {:.6})",
@@ -201,7 +196,7 @@ impl ConversionContext {
         loop {
             // Read one frame identically for stdin and file
             let (read_size, bytes_remaining) =
-                match self.in_ctx.read_frame(&mut self.dsd_data) {
+                match self.in_ctx.read_frame() {
                     Ok((s, r)) => (s, r),
                     Err(e) => {
                         if let Some(io_err) = e.downcast_ref::<io::Error>()
@@ -220,7 +215,6 @@ impl ConversionContext {
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
                 let chan_bytes = self.in_ctx.get_chan_bytes(
-                    &self.dsd_data,
                     chan,
                     read_size,
                 );
@@ -298,7 +292,6 @@ impl ConversionContext {
             let rs = &mut resamps[chan];
             return rs.process_bytes_lm(
                 &chan_bytes,
-                true,
                 &mut self.out_ctx.float_data,
             );
         } else if let Some(ref mut v) = self.precalc_decims {
