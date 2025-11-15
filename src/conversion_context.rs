@@ -187,13 +187,11 @@ impl ConversionContext {
         &mut self,
         sender: &mpsc::Sender<f32>,
     ) -> Result<(), Box<dyn Error>> {
-        let channels = self.in_ctx.channels_num() as usize;
-
         loop {
             // Read one frame identically for stdin and file
-            let chan_buffs =
+            let chan_bufs =
                 match self.in_ctx.read_frame() {
-                    Ok(buffs) => buffs,
+                    Ok(bufs) => bufs,
                     Err(e) => {
                         if let Some(io_err) = e.downcast_ref::<io::Error>()
                             && io_err.kind()
@@ -209,11 +207,11 @@ impl ConversionContext {
             let mut samples_used_per_chan = 0usize;
 
             // Per-channel processing loop (handles both LM and integer paths)
-            for chan in 0..channels {
+            for chan in 0..self.in_ctx.channels_num() as usize {
                 // Scope the immutable borrow so it ends before we mutably borrow `self`.
-                let chan_bytes: Vec<u8> = chan_buffs[chan].to_vec();
+                let chan_bytes: Vec<u8> = chan_bufs[chan].to_vec();
                 samples_used_per_chan =
-                    self.process_channel(chan, chan_bytes);
+                    self.process_channel(chan, chan_bytes)?;
                 self.out_ctx.write_to_buffer(samples_used_per_chan, chan);
             }
 
@@ -224,7 +222,7 @@ impl ConversionContext {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
 
-            if !self.in_ctx.std_in() && self.in_ctx.bytes_remaining() <= 0 {
+            if self.in_ctx.is_eof() {
                 break;
             }
         } // end loop
@@ -262,7 +260,6 @@ impl ConversionContext {
                 }
             }
         }
-
         return samples_used_per_chan
             * self.out_ctx.channels_num() as usize
             * self.out_ctx.bytes_per_sample() as usize;
@@ -275,21 +272,21 @@ impl ConversionContext {
         &mut self,
         chan: usize,
         chan_bytes: Vec<u8>,
-    ) -> usize {
+    ) -> Result<usize, Box<dyn Error>> {
         if let Some(resamps) = self.eq_lm_resamplers.as_mut() {
             // LM path: use rational resampler, honor actual produced count
             let rs = &mut resamps[chan];
-            return rs.process_bytes_lm(
+            return Ok(rs.process_bytes_lm(
                 &chan_bytes,
                 self.out_ctx.float_data_mut(),
-            );
+            ));
         } else if let Some(ref mut v) = self.precalc_decims {
             // Integer path: use precalc decimator; conventionally return the estimate
             let dec = &mut v[chan];
-            return dec
-                .process_bytes(&chan_bytes, self.out_ctx.float_data_mut());
+            return Ok(dec
+                .process_bytes(&chan_bytes, self.out_ctx.float_data_mut()));
         } else {
-            return 0;
+            return Err("No resampler or decimator initialized.".into());
         }
     }
 
@@ -570,7 +567,7 @@ impl ConversionContext {
         let diff_frames = expected_frames as i64 - actual_frames as i64;
         let diff_bytes = expected_bytes as i64 - actual_bytes as i64;
         let pct = if expected_frames > 0 {
-            (diff_frames as f64) * 100.0 / (expected_frames as f64)
+            (diff_frames as f32) * ONE_HUNDRED_PERCENT / (expected_frames as f32)
         } else {
             0.0
         };
