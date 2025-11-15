@@ -45,7 +45,6 @@ pub struct ConversionContext {
     append_rate_suffix: bool,
     precalc_decims: Option<Vec<BytePrecalcDecimator>>,
     eq_lm_resamplers: Option<Vec<LMResampler>>,
-    total_dsd_bytes_processed: u64,
     upsample_ratio: u32,
     decim_ratio: i32,
     diag_bits_in: u64,
@@ -83,7 +82,6 @@ impl<'a> ConversionContext {
             append_rate_suffix,
             precalc_decims: None,
             eq_lm_resamplers: None,
-            total_dsd_bytes_processed: 0,
             upsample_ratio,
             decim_ratio,
             diag_bits_in: 0,
@@ -110,7 +108,8 @@ impl<'a> ConversionContext {
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
         if self.upsample_ratio > 1 {
-            let mut resamplers = Vec::with_capacity(self.in_ctx.channels_num as usize);
+            let mut resamplers =
+                Vec::with_capacity(self.in_ctx.channels_num as usize);
             for _ in 0..self.in_ctx.channels_num {
                 resamplers.push(LMResampler::new(
                     self.upsample_ratio,
@@ -178,7 +177,7 @@ impl<'a> ConversionContext {
         }
         let total_elapsed = wall_start.elapsed();
 
-        if self.total_dsd_bytes_processed > 0 {
+        if self.in_ctx.bytes_processed > 0 {
             self.report_timing(dsp_elapsed, total_elapsed);
         }
 
@@ -195,9 +194,9 @@ impl<'a> ConversionContext {
 
         loop {
             // Read one frame identically for stdin and file
-            let (read_size, bytes_remaining) =
+            let chan_buffs =
                 match self.in_ctx.read_frame() {
-                    Ok((s, r)) => (s, r),
+                    Ok(buffs) => buffs,
                     Err(e) => {
                         if let Some(io_err) = e.downcast_ref::<io::Error>()
                             && io_err.kind()
@@ -215,23 +214,20 @@ impl<'a> ConversionContext {
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
                 // Scope the immutable borrow so it ends before we mutably borrow `self`.
-                let chan_bytes: Vec<u8> = {
-                    let chan_buffs = self.in_ctx.channel_buffers();
-                    chan_buffs[chan].to_vec()
-                };
+                let chan_bytes: Vec<u8> = chan_buffs[chan].to_vec();
                 samples_used_per_chan =
                     self.process_channel(chan, chan_bytes);
                 self.out_ctx.write_to_buffer(samples_used_per_chan, chan);
             }
 
             let pcm_frame_bytes =
-                self.track_io(read_size, samples_used_per_chan, &sender);
+                self.track_io(samples_used_per_chan, &sender);
 
             if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
 
-            if !self.in_ctx.std_in && bytes_remaining <= 0 {
+            if !self.in_ctx.std_in && self.in_ctx.bytes_remaining() <= 0 {
                 break;
             }
         } // end loop
@@ -242,22 +238,17 @@ impl<'a> ConversionContext {
     /// Collect and send diagnostic info about input/output progress
     fn track_io(
         &mut self,
-        read_size: usize,
         samples_used_per_chan: usize,
         sender: &mpsc::Sender<f32>,
     ) -> usize {
-        let bytes_per_channel =
-            read_size / self.in_ctx.channels_num as usize;
-        self.total_dsd_bytes_processed += read_size as u64;
-        self.diag_bits_in += (bytes_per_channel as u64) * 8;
-        self.diag_expected_frames_floor = (self.diag_bits_in
+        self.diag_expected_frames_floor = (self.in_ctx.diag_bits_in
             * self.upsample_ratio as u64)
             / self.decim_ratio as u64;
         self.diag_frames_out += samples_used_per_chan as u64;
 
         for i in 0..=RETRIES {
             match sender.send(
-                (self.total_dsd_bytes_processed as f32
+                (self.in_ctx.bytes_processed as f32
                     / self.in_ctx.audio_length as f32)
                     * ONE_HUNDRED_PERCENT,
             ) {
@@ -541,7 +532,7 @@ impl<'a> ConversionContext {
     ) {
         let channels = self.in_ctx.channels_num as u64;
         // Bytes per channel
-        let bytes_per_chan = self.total_dsd_bytes_processed / channels;
+        let bytes_per_chan = self.in_ctx.bytes_processed / channels;
         let bits_per_chan = bytes_per_chan * 8;
         let dsd_base_rate =
             (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
@@ -561,7 +552,7 @@ impl<'a> ConversionContext {
         let s = total_secs % 60;
         debug!(
             "{} bytes processed in {:02}:{:02}:{:02}",
-            self.total_dsd_bytes_processed, h, m, s,
+            self.in_ctx.bytes_processed, h, m, s,
         );
         info!(
             "DSP speed: {:.2}x, End-to-end: {:.2}x",
@@ -589,7 +580,9 @@ impl<'a> ConversionContext {
         trace!("Output length accounting:");
         trace!(
             "DSD bits in per channel: {}  L={}  M={}",
-            self.diag_bits_in, self.upsample_ratio, self.decim_ratio
+            self.in_ctx.diag_bits_in,
+            self.upsample_ratio,
+            self.decim_ratio
         );
         trace!(
             "Expected frames (floor): {}  Actual frames: {}  Diff: {} ({:.5}%)",

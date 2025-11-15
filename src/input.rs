@@ -32,9 +32,12 @@ pub struct InputContext {
     pub parent_path: Option<PathBuf>,
     pub channels_num: u32,
     pub block_size: u32,
+    pub frame_size: u32,
     pub audio_length: u64,
     pub tag: Option<id3::Tag>,
     pub file_name: OsString,
+    pub bytes_processed: u64,
+    pub diag_bits_in: u64,
 
     lsbit_first: bool,
     dsd_stride: u32,
@@ -49,10 +52,6 @@ pub struct InputContext {
 }
 
 impl InputContext {
-    pub fn channel_buffers(&self) -> &Vec<Box<[u8]>> {
-        &self.channel_buffers
-    }
-
     pub fn new(
         in_path: Option<PathBuf>,
         format: char,
@@ -122,6 +121,7 @@ impl InputContext {
             dsd_chan_offset: 0,
             channels_num: channels,
             block_size: block_size,
+            frame_size: block_size * channels,
             audio_length: 0,
             audio_pos: 0,
             file: None,
@@ -129,11 +129,13 @@ impl InputContext {
             reader: Box::new(io::empty()),
             file_name,
             bytes_remaining: 0,
+            bytes_processed: 0,
+            diag_bits_in: 0,
             dsd_data: vec![0; block_size as usize * channels as usize],
             channel_buffers: Vec::new(),
         };
 
-        ctx.set_block_size(block_size);
+        ctx.set_block_size(block_size, false);
 
         if ctx.std_in {
             ctx.set_stdin();
@@ -148,74 +150,67 @@ impl InputContext {
         Ok(ctx)
     }
 
+    pub fn bytes_remaining(&self) -> u64 {
+        self.bytes_remaining
+    }
+
     /// Read one frame of DSD data into the provided buffer.
     /// Returns the number of bytes read and the number of bytes remaining.
     #[inline(always)]
-    pub fn read_frame(&mut self) -> Result<(usize, u64), Box<dyn Error>> {
-        let frame_size =
-            self.block_size as usize * self.channels_num as usize;
+    pub fn read_frame(
+        &mut self,
+    ) -> Result<Vec<Box<[u8]>>, Box<dyn Error>> {
         // stdin always reads frame_size
-        let to_read: usize = if !self.std_in {
-            if self.bytes_remaining >= frame_size as u64 {
-                frame_size
-            } else {
-                self.init_buffers(
-                    self.bytes_remaining as u32 / self.channels_num,
-                );
-                self.bytes_remaining as usize
-            }
-        } else {
-            frame_size
-        };
+        if self.bytes_remaining < self.frame_size as u64 && !self.std_in {
+            self.set_block_size(
+                self.bytes_remaining as u32 / self.channels_num,
+                true,
+            );
+        }
 
-        let mut channel_buffs_vec: Vec<IoSliceMut> = self
-            .channel_buffers
-            .iter_mut()
-            .map(|b| IoSliceMut::new(b))
-            .collect();
-        let channel_buffs: &mut [IoSliceMut] =
-            channel_buffs_vec.as_mut_slice();
+        let mut read_size = self.frame_size as usize;
 
         // Read one frame identically for stdin and file
-        let read_size: usize = if !self.interleaved
-        {
+        if !self.interleaved {
             // Read planar data into channel buffers
-            let this_read = self.reader.read_vectored(channel_buffs)?;
+            let mut channel_buffs_vec: Vec<IoSliceMut> = self
+                .channel_buffers
+                .iter_mut()
+                .map(|b| IoSliceMut::new(b))
+                .collect();
+            let channel_buffs: &mut [IoSliceMut] =
+                channel_buffs_vec.as_mut_slice();
+
+            read_size = self.reader.read_vectored(channel_buffs)?;
             self.channel_buffers = channel_buffs
                 .iter()
                 .map(|b| b.to_vec().into_boxed_slice())
                 .collect();
-            this_read
         } else {
-            let this_read = match self
-                .reader
-                .read_exact(&mut self.dsd_data[..to_read])
-            {
-                Ok(()) => to_read,
-                Err(e) => return Err(Box::new(e)),
-            };
+            self.reader.read_exact(
+                &mut self.dsd_data[..self.frame_size as usize],
+            )?;
             // Copy interleaved data into channel buffers
             for chan in 0..self.channels_num as usize {
-                let chan_bytes = self.get_chan_bytes(chan, this_read);
+                let chan_bytes =
+                    self.get_chan_bytes(chan, self.frame_size as usize);
                 self.channel_buffers[chan].copy_from_slice(&chan_bytes);
             }
-            this_read
         };
 
         if !self.std_in {
             self.bytes_remaining -= read_size as u64;
         }
+        self.bytes_processed += read_size as u64;
+        self.diag_bits_in +=
+            (read_size / self.channels_num as usize) as u64 * 8;
 
-        Ok((read_size, self.bytes_remaining))
+        Ok(self.channel_buffers.clone())
     }
 
     /// Take frame of DSD bytes from internal buffer and return one
     /// channel with the endianness we need.
-    pub fn get_chan_bytes(
-        &self,
-        chan: usize,
-        read_size: usize,
-    ) -> Vec<u8> {
+    fn get_chan_bytes(&self, chan: usize, read_size: usize) -> Vec<u8> {
         let chan_size = read_size / self.channels_num as usize;
         let mut chan_bytes: Vec<u8> = Vec::with_capacity(chan_size);
         let dsd_chan_offset = chan * self.dsd_chan_offset as usize;
@@ -319,7 +314,7 @@ impl InputContext {
                 {
                     self.block_size = block_size;
                 }
-                self.set_block_size(self.block_size);
+                self.set_block_size(self.block_size, false);
 
                 // DSD rate from container sample_rate if valid (2.8224MHz → 1, 5.6448MHz → 2)
                 if let Some(sample_rate) = my_dsd.sample_rate {
@@ -354,8 +349,9 @@ impl InputContext {
         Ok(())
     }
 
-    fn set_block_size(&mut self, block_size: u32) {
+    fn set_block_size(&mut self, block_size: u32, silent: bool) {
         self.block_size = block_size;
+        self.frame_size = block_size * self.channels_num;
         self.dsd_chan_offset =
             if self.interleaved { 1 } else { block_size };
         self.dsd_stride = if self.interleaved {
@@ -364,21 +360,19 @@ impl InputContext {
             1
         };
 
-        debug!(
-            "Set block_size={} dsd_chan_offset={} dsd_stride={}",
-            self.block_size, self.dsd_chan_offset, self.dsd_stride
-        );
-    }
-
-    fn init_buffers(&mut self, read_size: u32) {
         self.channel_buffers = (0..self.channels_num as usize)
-            .map(|_| vec![0u8; read_size as usize].into_boxed_slice())
+            .map(|_| vec![0u8; block_size as usize].into_boxed_slice())
             .collect();
+
+        if !silent {
+            debug!(
+                "Set block_size={} dsd_chan_offset={} dsd_stride={}",
+                self.block_size, self.dsd_chan_offset, self.dsd_stride
+            );
+        }
     }
 
     fn set_reader(&mut self) -> Result<(), Box<dyn Error>> {
-        self.init_buffers(self.block_size);
-
         if self.std_in {
             // Use Stdin (not StdinLock) so the reader is 'static + Send for threaded use
             self.reader = Box::new(BufReader::new(io::stdin()));
