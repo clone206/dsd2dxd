@@ -332,11 +332,11 @@ impl OutputContext {
     pub fn push_samp<T: AudioSample>(&mut self, samp: T, channel: usize) {
         if self.bits == 32 {
             if let Some(file) = &mut self.float_file {
-                file.samples[channel].push(samp.to_f32());
+                file.samples_mut()[channel].push(samp.to_f32());
             }
         } else {
             if let Some(file) = &mut self.int_file {
-                file.samples[channel].push(samp.to_i32());
+                file.samples_mut()[channel].push(samp.to_i32());
             }
         }
     }
