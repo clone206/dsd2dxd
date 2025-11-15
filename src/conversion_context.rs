@@ -54,7 +54,7 @@ pub struct ConversionContext {
     base_dir: PathBuf,
 }
 
-impl ConversionContext {
+impl<'a> ConversionContext {
     pub fn new(
         in_ctx: InputContext,
         out_ctx: OutputContext,
@@ -214,10 +214,11 @@ impl ConversionContext {
 
             // Per-channel processing loop (handles both LM and integer paths)
             for chan in 0..channels {
-                let chan_bytes = self.in_ctx.get_chan_bytes(
-                    chan,
-                    read_size,
-                );
+                // Scope the immutable borrow so it ends before we mutably borrow `self`.
+                let chan_bytes: Vec<u8> = {
+                    let chan_buffs = self.in_ctx.channel_buffers();
+                    chan_buffs[chan].to_vec()
+                };
                 samples_used_per_chan =
                     self.process_channel(chan, chan_bytes);
                 self.out_ctx.write_to_buffer(samples_used_per_chan, chan);
