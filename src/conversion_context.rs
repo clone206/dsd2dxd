@@ -47,13 +47,12 @@ pub struct ConversionContext {
     eq_lm_resamplers: Option<Vec<LMResampler>>,
     upsample_ratio: u32,
     decim_ratio: i32,
-    diag_bits_in: u64,
     diag_expected_frames_floor: u64,
     diag_frames_out: u64,
     base_dir: PathBuf,
 }
 
-impl<'a> ConversionContext {
+impl ConversionContext {
     pub fn new(
         in_ctx: InputContext,
         out_ctx: OutputContext,
@@ -61,10 +60,9 @@ impl<'a> ConversionContext {
         append_rate_suffix: bool,
         base_dir: PathBuf,
     ) -> Result<Self, Box<dyn Error>> {
-        let dsd_bytes_per_chan = in_ctx.block_size as usize;
-
+        let dsd_bytes_per_chan = in_ctx.block_size() as usize;
         let (decim_ratio, upsample_ratio) =
-            compute_decim_and_upsample(in_ctx.dsd_rate, out_ctx.rate);
+            compute_decim_and_upsample(in_ctx.dsd_rate(), out_ctx.rate);
 
         // Worst-case frames per channel per input block:
         // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
@@ -84,7 +82,6 @@ impl<'a> ConversionContext {
             eq_lm_resamplers: None,
             upsample_ratio,
             decim_ratio,
-            diag_bits_in: 0,
             diag_expected_frames_floor: 0,
             diag_frames_out: 0,
             base_dir,
@@ -92,7 +89,7 @@ impl<'a> ConversionContext {
 
         ctx.setup_resamplers()?;
         ctx.out_ctx
-            .init(out_frames_capacity, ctx.in_ctx.channels_num)?;
+            .init(out_frames_capacity, ctx.in_ctx.channels_num())?;
 
         debug!(
             "Dither type: {}",
@@ -103,14 +100,14 @@ impl<'a> ConversionContext {
 
     /// Get the input file name without the parent path
     pub fn input_file_name(&self) -> String {
-        self.in_ctx.file_name.to_string_lossy().into_owned()
+        self.in_ctx.file_name().to_string_lossy().into_owned()
     }
 
     fn setup_resamplers(&mut self) -> Result<(), Box<dyn Error>> {
         if self.upsample_ratio > 1 {
             let mut resamplers =
-                Vec::with_capacity(self.in_ctx.channels_num as usize);
-            for _ in 0..self.in_ctx.channels_num {
+                Vec::with_capacity(self.in_ctx.channels_num() as usize);
+            for _ in 0..self.in_ctx.channels_num() {
                 resamplers.push(LMResampler::new(
                     self.upsample_ratio,
                     self.decim_ratio,
@@ -125,11 +122,11 @@ impl<'a> ConversionContext {
             );
         } else if let Some(taps) = select_precalc_taps(
             self.filt_type,
-            self.in_ctx.dsd_rate,
+            self.in_ctx.dsd_rate(),
             self.decim_ratio,
         ) {
             self.precalc_decims = Some(
-                (0..self.in_ctx.channels_num)
+                (0..self.in_ctx.channels_num())
                     .map(|_| {
                         BytePrecalcDecimator::new(
                             taps,
@@ -141,12 +138,12 @@ impl<'a> ConversionContext {
             );
             debug!(
                 "Precalc decimator enabled (ratio {}:1, filter '{}', dsd_rate {}).",
-                self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate
+                self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate()
             );
         } else {
             return Err(format!(
                 "Taps not found for ratio {} / filter '{}' (dsd_rate {}). ",
-                self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate
+                self.decim_ratio, self.filt_type, self.in_ctx.dsd_rate()
             )
             .into());
         }
@@ -177,7 +174,7 @@ impl<'a> ConversionContext {
         }
         let total_elapsed = wall_start.elapsed();
 
-        if self.in_ctx.bytes_processed > 0 {
+        if self.in_ctx.bytes_processed() > 0 {
             self.report_timing(dsp_elapsed, total_elapsed);
         }
 
@@ -190,7 +187,7 @@ impl<'a> ConversionContext {
         &mut self,
         sender: &mpsc::Sender<f32>,
     ) -> Result<(), Box<dyn Error>> {
-        let channels = self.in_ctx.channels_num as usize;
+        let channels = self.in_ctx.channels_num() as usize;
 
         loop {
             // Read one frame identically for stdin and file
@@ -227,7 +224,7 @@ impl<'a> ConversionContext {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
 
-            if !self.in_ctx.std_in && self.in_ctx.bytes_remaining() <= 0 {
+            if !self.in_ctx.std_in() && self.in_ctx.bytes_remaining() <= 0 {
                 break;
             }
         } // end loop
@@ -241,15 +238,15 @@ impl<'a> ConversionContext {
         samples_used_per_chan: usize,
         sender: &mpsc::Sender<f32>,
     ) -> usize {
-        self.diag_expected_frames_floor = (self.in_ctx.diag_bits_in
+        self.diag_expected_frames_floor = (self.in_ctx.chan_bits_processed()
             * self.upsample_ratio as u64)
             / self.decim_ratio as u64;
         self.diag_frames_out += samples_used_per_chan as u64;
 
         for i in 0..=RETRIES {
             match sender.send(
-                (self.in_ctx.bytes_processed as f32
-                    / self.in_ctx.audio_length as f32)
+                (self.in_ctx.bytes_processed() as f32
+                    / self.in_ctx.audio_length() as f32)
                     * ONE_HUNDRED_PERCENT,
             ) {
                 Ok(_) => break,
@@ -313,7 +310,7 @@ impl<'a> ConversionContext {
 
         let mut filename: OsString = OsString::new();
 
-        if self.in_ctx.std_in {
+        if self.in_ctx.std_in() {
             filename.push("output");
             if !suffix.is_empty() {
                 filename.push(suffix);
@@ -324,7 +321,7 @@ impl<'a> ConversionContext {
 
         filename.push(
             self.in_ctx
-                .in_path
+                .in_path()
                 .clone()
                 .and_then(|p| {
                     p.file_stem().map(|stem| stem.to_os_string())
@@ -347,7 +344,7 @@ impl<'a> ConversionContext {
         parent: &Path,
     ) -> Result<PathBuf, Box<dyn Error>> {
         if let Some(ref out_dir) = self.out_ctx.path {
-            if self.in_ctx.std_in {
+            if self.in_ctx.std_in() {
                 return Ok(out_dir.clone());
             }
             let rel =
@@ -358,7 +355,7 @@ impl<'a> ConversionContext {
                 std::fs::create_dir_all(&full_dir)?;
             }
             Ok(full_dir)
-        } else if self.in_ctx.std_in {
+        } else if self.in_ctx.std_in() {
             Ok(PathBuf::from(""))
         } else {
             Ok(parent.to_path_buf())
@@ -370,7 +367,7 @@ impl<'a> ConversionContext {
         source_dir: &Path,
         destination_dir: &Path,
     ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-        if self.out_ctx.path.is_none() || self.in_ctx.std_in {
+        if self.out_ctx.path.is_none() || self.in_ctx.std_in() {
             return Ok((0, 0));
         }
         let mut copied: u32 = 0;
@@ -426,7 +423,7 @@ impl<'a> ConversionContext {
 
         let parent = self
             .in_ctx
-            .parent_path
+            .parent_path()
             .as_ref()
             .map(|p| p.as_path())
             .unwrap_or(Path::new(""));
@@ -453,7 +450,7 @@ impl<'a> ConversionContext {
             }
         }
 
-        if let Some(mut tag) = self.in_ctx.tag.as_ref().cloned() {
+        if let Some(mut tag) = self.in_ctx.tag().as_ref().cloned() {
             // If -a/--append was requested and an album tag exists, append " [<Sample Rate>]" (dot-delimited) to album
             if self.append_rate_suffix {
                 self.append_album_suffix(&mut tag);
@@ -510,7 +507,7 @@ impl<'a> ConversionContext {
     }
 
     fn check_conv(&self) -> Result<(), Box<dyn Error>> {
-        if let Some(path) = &self.in_ctx.in_path
+        if let Some(path) = &self.in_ctx.in_path()
             && !path.canonicalize()?.starts_with(&self.base_dir)
         {
             return Err(format!(
@@ -530,12 +527,12 @@ impl<'a> ConversionContext {
         dsp_elapsed: std::time::Duration,
         total_elapsed: std::time::Duration,
     ) {
-        let channels = self.in_ctx.channels_num as u64;
+        let channels = self.in_ctx.channels_num() as u64;
         // Bytes per channel
-        let bytes_per_chan = self.in_ctx.bytes_processed / channels;
+        let bytes_per_chan = self.in_ctx.bytes_processed() / channels;
         let bits_per_chan = bytes_per_chan * 8;
         let dsd_base_rate =
-            (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate as u64); // samples/sec per channel
+            (DSD_64_RATE as u64) * (self.in_ctx.dsd_rate() as u64); // samples/sec per channel
         let audio_seconds = if dsd_base_rate > 0 {
             (bits_per_chan as f64) / (dsd_base_rate as f64)
         } else {
@@ -552,7 +549,7 @@ impl<'a> ConversionContext {
         let s = total_secs % 60;
         debug!(
             "{} bytes processed in {:02}:{:02}:{:02}",
-            self.in_ctx.bytes_processed, h, m, s,
+            self.in_ctx.bytes_processed(), h, m, s,
         );
         info!(
             "DSP speed: {:.2}x, End-to-end: {:.2}x",
@@ -563,7 +560,7 @@ impl<'a> ConversionContext {
     // ---- Diagnostics: expected vs actual output length (verbose only) ----
     fn report_in_out(&self) {
         trace!("Detailed output length diagnostics:");
-        let ch = self.in_ctx.channels_num.max(1) as u64;
+        let ch = self.in_ctx.channels_num().max(1) as u64;
         let bps = self.out_ctx.bytes_per_sample as u64;
         let expected_frames = self.diag_expected_frames_floor;
         let actual_frames = self.diag_frames_out;
@@ -580,7 +577,7 @@ impl<'a> ConversionContext {
         trace!("Output length accounting:");
         trace!(
             "DSD bits in per channel: {}  L={}  M={}",
-            self.in_ctx.diag_bits_in,
+            self.in_ctx.chan_bits_processed(),
             self.upsample_ratio,
             self.decim_ratio
         );

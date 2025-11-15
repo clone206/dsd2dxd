@@ -26,19 +26,17 @@ use std::io::{self, BufReader, IoSliceMut, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub struct InputContext {
-    pub std_in: bool,
-    pub dsd_rate: i32,
-    pub in_path: Option<PathBuf>,
-    pub parent_path: Option<PathBuf>,
-    pub channels_num: u32,
-    pub block_size: u32,
-    pub frame_size: u32,
-    pub audio_length: u64,
-    pub tag: Option<id3::Tag>,
-    pub file_name: OsString,
-    pub bytes_processed: u64,
-    pub diag_bits_in: u64,
-
+    dsd_rate: i32,
+    channels_num: u32,
+    std_in: bool,
+    bytes_processed: u64,
+    tag: Option<id3::Tag>,
+    file_name: OsString,
+    audio_length: u64,
+    frame_size: u32,
+    block_size: u32,
+    parent_path: Option<PathBuf>,
+    in_path: Option<PathBuf>,
     lsbit_first: bool,
     dsd_stride: u32,
     dsd_chan_offset: u32,
@@ -47,11 +45,49 @@ pub struct InputContext {
     reader: Box<dyn Read + Send>,
     file: Option<File>,
     bytes_remaining: u64,
+    chan_bits_processed: u64,
     dsd_data: Vec<u8>,
     channel_buffers: Vec<Box<[u8]>>,
 }
 
 impl InputContext {
+    pub fn dsd_rate(&self) -> i32 {
+        self.dsd_rate
+    }
+    pub fn channels_num(&self) -> u32 {
+        self.channels_num
+    }
+    pub fn std_in(&self) -> bool {
+        self.std_in
+    }
+    pub fn bytes_processed(&self) -> u64 {
+        self.bytes_processed
+    }
+    pub fn tag(&self) -> &Option<id3::Tag> {
+        &self.tag
+    }
+    pub fn file_name(&self) -> &OsString {
+        &self.file_name
+    }
+    pub fn audio_length(&self) -> u64 {
+        self.audio_length
+    }
+    pub fn block_size(&self) -> u32 {
+        self.block_size
+    }
+    pub fn parent_path(&self) -> &Option<PathBuf> {
+        &self.parent_path
+    }
+    pub fn in_path(&self) -> &Option<PathBuf> {
+        &self.in_path
+    }
+    pub fn chan_bits_processed(&self) -> u64 {
+        self.chan_bits_processed
+    }
+    pub fn bytes_remaining(&self) -> u64 {
+        self.bytes_remaining
+    }
+
     pub fn new(
         in_path: Option<PathBuf>,
         format: char,
@@ -130,7 +166,7 @@ impl InputContext {
             file_name,
             bytes_remaining: 0,
             bytes_processed: 0,
-            diag_bits_in: 0,
+            chan_bits_processed: 0,
             dsd_data: vec![0; block_size as usize * channels as usize],
             channel_buffers: Vec::new(),
         };
@@ -148,10 +184,6 @@ impl InputContext {
         ctx.set_reader()?;
 
         Ok(ctx)
-    }
-
-    pub fn bytes_remaining(&self) -> u64 {
-        self.bytes_remaining
     }
 
     /// Read one frame of DSD data into the provided buffer.
@@ -202,7 +234,7 @@ impl InputContext {
             self.bytes_remaining -= read_size as u64;
         }
         self.bytes_processed += read_size as u64;
-        self.diag_bits_in +=
+        self.chan_bits_processed +=
             (read_size / self.channels_num as usize) as u64 * 8;
 
         Ok(self.channel_buffers.clone())
