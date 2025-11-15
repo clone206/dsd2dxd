@@ -300,36 +300,36 @@ impl InputContext {
         match DsdFile::new(path, dsd_file_format) {
             Ok(my_dsd) => {
                 // Pull raw fields
-                let file_len = my_dsd.file.metadata()?.len();
+                let file_len = my_dsd.file().metadata()?.len();
                 debug!("File size: {} bytes", file_len);
 
-                self.file = Some(my_dsd.file);
-                self.tag = my_dsd.tag;
+                self.file = Some(my_dsd.file().try_clone()?);
+                self.tag = my_dsd.tag().cloned();
 
-                self.audio_pos = my_dsd.audio_pos;
+                self.audio_pos = my_dsd.audio_pos();
                 // Clamp audio_length to what the file can actually contain
                 let max_len: u64 = (file_len - self.audio_pos).max(0);
-                self.audio_length = if my_dsd.audio_length > 0
-                    && my_dsd.audio_length <= max_len
+                self.audio_length = if my_dsd.audio_length() > 0
+                    && my_dsd.audio_length() <= max_len
                 {
-                    my_dsd.audio_length
+                    my_dsd.audio_length()
                 } else {
                     max_len
                 };
                 self.bytes_remaining = self.audio_length;
 
                 // Channels from container (fallback to CLI on nonsense)
-                if let Some(chans_num) = my_dsd.channel_count {
+                if let Some(chans_num) = my_dsd.channel_count() {
                     self.channels_num = chans_num;
                 }
 
                 // Bit order from container
-                if let Some(lsb) = my_dsd.is_lsb {
+                if let Some(lsb) = my_dsd.is_lsb() {
                     self.lsbit_first = lsb;
                 }
 
                 // Interleaving from container (DSF = block-interleaved → treat as planar per frame)
-                match my_dsd.container_format {
+                match my_dsd.container_format() {
                     DsdFileFormat::Dsdiff => self.interleaved = true,
                     DsdFileFormat::Dsf => self.interleaved = false,
                     DsdFileFormat::Raw => {}
@@ -341,7 +341,7 @@ impl InputContext {
                 // the stride accordingly. For DSF, we treat the block size as
                 // representing the block size per channel and override any user
                 // supplied or default values for block size.
-                if let Some(block_size) = my_dsd.block_size
+                if let Some(block_size) = my_dsd.block_size()
                     && block_size > DFF_BLOCK_SIZE
                 {
                     self.block_size = block_size;
@@ -349,7 +349,7 @@ impl InputContext {
                 self.set_block_size(self.block_size, false);
 
                 // DSD rate from container sample_rate if valid (2.8224MHz → 1, 5.6448MHz → 2)
-                if let Some(sample_rate) = my_dsd.sample_rate {
+                if let Some(sample_rate) = my_dsd.sample_rate() {
                     if sample_rate % DSD_64_RATE == 0 {
                         self.dsd_rate = (sample_rate / DSD_64_RATE) as i32;
                     } else {

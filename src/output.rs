@@ -28,7 +28,7 @@ use std::{io, vec};
 use log::{info, debug};
 
 pub struct OutputContext {
-    pub bits: i32,
+    bits: i32,
     pub channels_num: u32,
     pub rate: i32,
     pub bytes_per_sample: i32,
