@@ -62,7 +62,7 @@ impl ConversionContext {
     ) -> Result<Self, Box<dyn Error>> {
         let dsd_bytes_per_chan = in_ctx.block_size() as usize;
         let (decim_ratio, upsample_ratio) =
-            compute_decim_and_upsample(in_ctx.dsd_rate(), out_ctx.rate);
+            compute_decim_and_upsample(in_ctx.dsd_rate(), out_ctx.rate());
 
         // Worst-case frames per channel per input block:
         // ceil((bits_in * L) / M). Add small slack for LM paths to avoid edge truncation.
@@ -93,7 +93,7 @@ impl ConversionContext {
 
         debug!(
             "Dither type: {}",
-            ctx.out_ctx.dither.dither_type().to_ascii_uppercase()
+            ctx.out_ctx.dither().dither_type().to_ascii_uppercase()
         );
         Ok(ctx)
     }
@@ -111,14 +111,14 @@ impl ConversionContext {
                 resamplers.push(LMResampler::new(
                     self.upsample_ratio,
                     self.decim_ratio,
-                    self.out_ctx.rate as u32,
+                    self.out_ctx.rate() as u32,
                 )?);
             }
             self.eq_lm_resamplers = Some(resamplers);
-            self.out_ctx.scale_factor *= self.upsample_ratio as f64;
+            self.out_ctx.update_scaling_lm(self.upsample_ratio);
             trace!(
                 "L/M path makeup gain: ×{} (scale_factor now {:.6})",
-                self.upsample_ratio, self.out_ctx.scale_factor
+                self.upsample_ratio, self.out_ctx.scale_factor()
             );
         } else if let Some(taps) = select_precalc_taps(
             self.filt_type,
@@ -165,9 +165,9 @@ impl ConversionContext {
         }
         let dsp_elapsed = wall_start.elapsed();
 
-        debug!("Clipped {} times.", self.out_ctx.clips);
+        debug!("Clipped {} times.", self.out_ctx.clips());
 
-        if self.out_ctx.output != 's'
+        if self.out_ctx.output() != 's'
             && let Err(e) = self.write_file()
         {
             error!("Error writing file: {e}");
@@ -220,7 +220,7 @@ impl ConversionContext {
             let pcm_frame_bytes =
                 self.track_io(samples_used_per_chan, &sender);
 
-            if self.out_ctx.output == 's' && pcm_frame_bytes > 0 {
+            if self.out_ctx.output() == 's' && pcm_frame_bytes > 0 {
                 self.out_ctx.write_stdout(pcm_frame_bytes)?;
             }
 
@@ -264,8 +264,8 @@ impl ConversionContext {
         }
 
         return samples_used_per_chan
-            * self.out_ctx.channels_num as usize
-            * self.out_ctx.bytes_per_sample as usize;
+            * self.out_ctx.channels_num() as usize
+            * self.out_ctx.bytes_per_sample() as usize;
     }
 
     // Unified per-channel processing: handles both LM (rational) and integer paths.
@@ -294,14 +294,14 @@ impl ConversionContext {
     }
 
     fn get_out_filename_path(&self) -> PathBuf {
-        let ext = match self.out_ctx.output.to_ascii_lowercase() {
+        let ext = match self.out_ctx.output().to_ascii_lowercase() {
             'w' => "wav",
             'a' => "aif",
             'f' => "flac",
             _ => "out",
         };
         let suffix = if let Some((uscore, _dot)) =
-            self.abbrev_rate_pair(self.out_ctx.rate as u32)
+            self.abbrev_rate_pair(self.out_ctx.rate() as u32)
         {
             format!("_{}", uscore)
         } else {
@@ -343,7 +343,7 @@ impl ConversionContext {
         &self,
         parent: &Path,
     ) -> Result<PathBuf, Box<dyn Error>> {
-        if let Some(ref out_dir) = self.out_ctx.path {
+        if let Some(out_dir) = self.out_ctx.path() {
             if self.in_ctx.std_in() {
                 return Ok(out_dir.clone());
             }
@@ -367,7 +367,7 @@ impl ConversionContext {
         source_dir: &Path,
         destination_dir: &Path,
     ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
-        if self.out_ctx.path.is_none() || self.in_ctx.std_in() {
+        if self.out_ctx.path().is_none() || self.in_ctx.std_in() {
             return Ok((0, 0));
         }
         let mut copied: u32 = 0;
@@ -456,13 +456,13 @@ impl ConversionContext {
                 self.append_album_suffix(&mut tag);
             }
 
-            if self.out_ctx.output.to_ascii_lowercase() == 'f' {
+            if self.out_ctx.output().to_ascii_lowercase() == 'f' {
                 debug!("Preparing Vorbis Comment for FLAC...");
                 self.out_ctx.id3_to_flac_meta(&tag);
             }
             self.out_ctx.save_file(&out_path)?;
 
-            if self.out_ctx.output.to_ascii_lowercase() != 'f' {
+            if self.out_ctx.output().to_ascii_lowercase() != 'f' {
                 // Write ID3 tags directly
                 debug!("Writing ID3 tags to file.");
                 tag.write_to_path(&out_path, tag.version())?;
@@ -478,7 +478,7 @@ impl ConversionContext {
     fn append_album_suffix(&self, tag: &mut id3::Tag) {
         if let Some(album) = tag.album() {
             if let Some((_uscore, dot)) =
-                self.abbrev_rate_pair(self.out_ctx.rate as u32)
+                self.abbrev_rate_pair(self.out_ctx.rate() as u32)
             {
                 let mut new_album = String::from(album);
                 new_album.push_str(&format!(" [{}]", dot));
@@ -561,7 +561,7 @@ impl ConversionContext {
     fn report_in_out(&self) {
         trace!("Detailed output length diagnostics:");
         let ch = self.in_ctx.channels_num().max(1) as u64;
-        let bps = self.out_ctx.bytes_per_sample as u64;
+        let bps = self.out_ctx.bytes_per_sample() as u64;
         let expected_frames = self.diag_expected_frames_floor;
         let actual_frames = self.diag_frames_out;
         // Estimate latency (frames not emitted at start) for rational path
