@@ -281,13 +281,13 @@ impl ConversionContext {
             let rs = &mut resamps[chan];
             return rs.process_bytes_lm(
                 &chan_bytes,
-                &mut self.out_ctx.float_data,
+                self.out_ctx.float_data_mut(),
             );
         } else if let Some(ref mut v) = self.precalc_decims {
             // Integer path: use precalc decimator; conventionally return the estimate
             let dec = &mut v[chan];
             return dec
-                .process_bytes(&chan_bytes, &mut self.out_ctx.float_data);
+                .process_bytes(&chan_bytes, self.out_ctx.float_data_mut());
         } else {
             return 0;
         }

@@ -28,8 +28,7 @@ use std::{io, vec};
 use log::{info, debug};
 
 pub struct OutputContext {
-    pub float_data: Vec<f64>,
-
+    float_data: Vec<f64>,
     scale_factor: f64,
     bits: i32,
     channels_num: u32,
@@ -73,6 +72,9 @@ impl OutputContext {
     }
     pub fn scale_factor(&self) -> f64 {
         self.scale_factor
+    }
+    pub fn float_data_mut(&mut self) -> &mut Vec<f64> {
+        &mut self.float_data
     }
 
     pub fn new(
