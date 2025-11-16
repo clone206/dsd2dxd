@@ -222,6 +222,9 @@ impl InputContext {
             // Read planar data into channel buffers
             let this_read =
                 self.reader.read_vectored(local_channel_buffs)?;
+            if this_read == 0 {
+                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected end of file").into());
+            }
             self.channel_buffers = local_channel_buffs
                 .iter()
                 .map(|b| b.to_vec().into_boxed_slice())
