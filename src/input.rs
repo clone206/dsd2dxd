@@ -38,8 +38,6 @@ pub struct InputContext {
     parent_path: Option<PathBuf>,
     in_path: Option<PathBuf>,
     lsbit_first: bool,
-    dsd_stride: u32,
-    dsd_chan_offset: u32,
     interleaved: bool,
     audio_pos: u64,
     reader: Box<dyn Read + Send>,
@@ -48,7 +46,6 @@ pub struct InputContext {
     chan_bits_processed: u64,
     dsd_data: Vec<u8>,
     channel_buffers: Vec<Box<[u8]>>,
-    interleaved_buffers: Vec<Box<[u8]>>,
 }
 
 impl InputContext {
@@ -152,8 +149,6 @@ impl InputContext {
             dsd_rate,
             in_path,
             parent_path,
-            dsd_stride: 0,
-            dsd_chan_offset: 0,
             channels_num: channels,
             block_size: block_size,
             frame_size: block_size * channels,
@@ -168,7 +163,6 @@ impl InputContext {
             chan_bits_processed: 0,
             dsd_data: vec![0; block_size as usize * channels as usize],
             channel_buffers: Vec::new(),
-            interleaved_buffers: Vec::new(),
         };
 
         ctx.set_block_size(block_size, false);
@@ -192,8 +186,7 @@ impl InputContext {
         !self.std_in && self.bytes_remaining <= 0
     }
 
-    /// Read one frame of DSD data into the provided buffer.
-    /// Returns the number of bytes read and the number of bytes remaining.
+    /// Read one frame of DSD data into the channel buffers and return.
     #[inline(always)]
     pub fn read_frame(
         &mut self,
@@ -206,39 +199,35 @@ impl InputContext {
             );
         }
 
-        let mut local_buffs_vec: Vec<IoSliceMut> = if self.interleaved {
-            // Allocate buffers first, then create IoSliceMut from them
-            self.interleaved_buffers
-                .iter_mut()
-                .map(|buf| IoSliceMut::new(buf))
-                .collect()
-        } else {
-            self.channel_buffers
-                .iter_mut()
-                .map(|b| IoSliceMut::new(b))
-                .collect()
-        };
-        let channel_buffs: &mut [IoSliceMut] =
-            local_buffs_vec.as_mut_slice();
-
-        // Read one frame identically for stdin and file
-        let read_size = self.reader.read_vectored(channel_buffs)?;
-
-        if self.interleaved {
+        let read_size = if self.interleaved {
+            self.reader.read_exact(
+                &mut self.dsd_data[..self.frame_size as usize],
+            )?;
             // Copy interleaved data into channel buffers
             for chan in 0..self.channels_num as usize {
-                for byte in 0..self.block_size as usize {
-                    self.channel_buffers[chan][byte] =
-                        self.interleaved_buffers[byte][chan];
-                }
+                let chan_bytes = self
+                    .get_chan_bytes_interl(chan, self.frame_size as usize);
+                self.channel_buffers[chan].copy_from_slice(&chan_bytes);
             }
+            self.frame_size as usize
         } else {
+            let mut local_buffs_vec: Vec<IoSliceMut> = self
+                .channel_buffers
+                .iter_mut()
+                .map(|b| IoSliceMut::new(b))
+                .collect();
+            let local_channel_buffs: &mut [IoSliceMut] =
+                local_buffs_vec.as_mut_slice();
+
             // Read planar data into channel buffers
-            self.channel_buffers = channel_buffs
+            let this_read =
+                self.reader.read_vectored(local_channel_buffs)?;
+            self.channel_buffers = local_channel_buffs
                 .iter()
                 .map(|b| b.to_vec().into_boxed_slice())
                 .collect();
-        }
+            this_read
+        };
 
         if !self.std_in {
             self.bytes_remaining -= read_size as u64;
@@ -250,17 +239,19 @@ impl InputContext {
         Ok(self.channel_buffers.clone())
     }
 
-    /// Take frame of DSD bytes from internal buffer and return one
+    /// Take frame of interleaved DSD bytes from internal buffer and return one
     /// channel with the endianness we need.
     #[inline(always)]
-    fn get_chan_bytes(&self, chan: usize, read_size: usize) -> Vec<u8> {
+    fn get_chan_bytes_interl(
+        &self,
+        chan: usize,
+        read_size: usize,
+    ) -> Vec<u8> {
         let chan_size = read_size / self.channels_num as usize;
         let mut chan_bytes: Vec<u8> = Vec::with_capacity(chan_size);
-        let dsd_chan_offset = chan * self.dsd_chan_offset as usize;
 
         for i in 0..chan_size {
-            let byte_index =
-                dsd_chan_offset + i * self.dsd_stride as usize;
+            let byte_index = chan + i * self.channels_num as usize;
             if byte_index >= self.dsd_data.len() {
                 break;
             }
@@ -394,40 +385,26 @@ impl InputContext {
 
     fn set_block_size(&mut self, block_size: u32, silent: bool) {
         self.block_size = block_size;
-        self.frame_size = block_size * self.channels_num;
-        self.dsd_chan_offset =
-            if self.interleaved { 1 } else { block_size };
-        self.dsd_stride = if self.interleaved {
-            self.channels_num
-        } else {
-            1
-        };
+        self.frame_size = self.block_size * self.channels_num;
 
         self.channel_buffers = (0..self.channels_num as usize)
-            .map(|_| vec![0u8; block_size as usize].into_boxed_slice())
+            .map(|_| {
+                vec![0u8; self.block_size as usize].into_boxed_slice()
+            })
             .collect();
 
-        if self.interleaved {
-            self.interleaved_buffers = (0..self.block_size as usize)
-                .map(|_| {
-                    vec![0u8; self.channels_num as usize]
-                        .into_boxed_slice()
-                })
-                .collect();
-        }
-
         if !silent {
-            debug!(
-                "Set block_size={} dsd_chan_offset={} dsd_stride={} interleaved buffer len={}",
-                self.block_size, self.dsd_chan_offset, self.dsd_stride, self.interleaved_buffers.len()
-            );
+            debug!("Set block_size={}", self.block_size,);
         }
     }
 
     fn set_reader(&mut self) -> Result<(), Box<dyn Error>> {
         if self.std_in {
             // Use Stdin (not StdinLock) so the reader is 'static + Send for threaded use
-            self.reader = Box::new(BufReader::new(io::stdin()));
+            self.reader = Box::new(BufReader::with_capacity(
+                self.frame_size as usize * 8,
+                io::stdin(),
+            ));
             return Ok(());
         }
         // Obtain an owned File by cloning the handle from InputContext, then seek if needed.
@@ -449,7 +426,10 @@ impl InputContext {
                 file.stream_position()?
             );
         }
-        self.reader = Box::new(BufReader::new(file));
+        self.reader = Box::new(BufReader::with_capacity(
+            self.frame_size as usize * 8,
+            file,
+        ));
         Ok(())
     }
 }
