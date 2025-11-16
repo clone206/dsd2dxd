@@ -2,6 +2,8 @@
 /** @file AudioFile.h
  *  @author Adam Stark
  *  @copyright Copyright (C) 2017  Adam Stark
+ * 
+ *  Modified for Rust by clone206, 2025
  *
  * This file is part of the 'AudioFile' library
  *
@@ -45,7 +47,7 @@ pub enum AudioFileFormat {
 
 #[derive(Clone)]
 pub struct AudioFile<T> {
-    pub samples: Vec<Vec<T>>,
+    samples: Vec<Vec<T>>,
     sample_rate: u32,
     bit_depth: i32,
     num_channels: usize,
@@ -55,6 +57,10 @@ impl<T> AudioFile<T>
 where
     T: AudioSample,
 {
+    pub fn samples_mut(&mut self) -> &mut Vec<Vec<T>> {
+        &mut self.samples
+    }
+
     pub fn new() -> Self {
         Self {
             samples: vec![],
@@ -479,8 +485,6 @@ where
 }
 
 pub trait AudioSample: Copy + Send + Sync {
-    fn from_float(value: f32) -> Self;
-    fn to_float(self) -> f32;
     fn to_i16(self) -> i16;
     fn to_i24(self) -> i32;
     fn to_i32(self) -> i32;
@@ -489,12 +493,6 @@ pub trait AudioSample: Copy + Send + Sync {
 }
 
 impl AudioSample for f32 {
-    fn from_float(value: f32) -> Self {
-        value
-    }
-    fn to_float(self) -> f32 {
-        self
-    }
     fn to_i16(self) -> i16 {
         (self.clamp(-1.0, 1.0) * 32767.0) as i16
     }
@@ -513,12 +511,6 @@ impl AudioSample for f32 {
 }
 
 impl AudioSample for i32 {
-    fn from_float(value: f32) -> Self {
-        (value * 2147483647.0) as i32
-    }
-    fn to_float(self) -> f32 {
-        self as f32 / 2147483647.0
-    }
     // For 16-bit output, pipeline already scales to ±32767; clamp and pass through.
     fn to_i16(self) -> i16 {
         let v = self.max(-32768).min(32767);

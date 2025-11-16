@@ -28,6 +28,10 @@ pub struct Dither {
 }
 
 impl Dither {
+    pub fn dither_type(&self) -> char {
+        self.dither_type
+    }
+
     pub fn new(dither_type: char) -> Result<Self, &'static str> {
         let dither_type = dither_type.to_ascii_lowercase();
         if !['t', 'f', 'x', 'r'].contains(&dither_type) {
@@ -103,10 +107,5 @@ impl Dither {
         *sample +=
             (self.fpd as f64) * 3.4e-36 * (2.0f64).powi(exponent + 62);
         *sample = (*sample as f32) as f64;
-    }
-
-    // Add getter for dither type
-    pub fn dither_type(&self) -> char {
-        self.dither_type
     }
 }

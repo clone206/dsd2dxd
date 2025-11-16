@@ -28,18 +28,17 @@ use std::{io, vec};
 use log::{info, debug};
 
 pub struct OutputContext {
-    pub bits: i32,
-    pub channels_num: u32,
-    pub rate: i32,
-    pub bytes_per_sample: i32,
-    pub output: char,
-    pub path: Option<PathBuf>,
-    pub peak_level: i32,
-    pub scale_factor: f64,
-    pub clips: i32,
-    pub dither: Dither,
-    pub float_data: Vec<f64>,
-
+    float_data: Vec<f64>,
+    scale_factor: f64,
+    bits: i32,
+    channels_num: u32,
+    rate: i32,
+    bytes_per_sample: i32,
+    output: char,
+    path: Option<PathBuf>,
+    peak_level: i32,
+    clips: i32,
+    dither: Dither,
     last_samps_clipped_low: i32,
     last_samps_clipped_high: i32,
     float_file: Option<AudioFile<f32>>,
@@ -50,6 +49,34 @@ pub struct OutputContext {
 }
 
 impl OutputContext {
+    pub fn rate(&self) -> i32 {
+        self.rate
+    }
+    pub fn channels_num(&self) -> u32 {
+        self.channels_num
+    }
+    pub fn clips(&self) -> i32 {
+        self.clips
+    }
+    pub fn dither(&self) -> &Dither {
+        &self.dither
+    }
+    pub fn bytes_per_sample(&self) -> i32 {
+        self.bytes_per_sample
+    }
+    pub fn output(&self) -> char {
+        self.output
+    }
+    pub fn path(&self) -> &Option<PathBuf> {
+        &self.path
+    }
+    pub fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+    pub fn float_data_mut(&mut self) -> &mut Vec<f64> {
+        &mut self.float_data
+    }
+
     pub fn new(
         out_bits: i32,
         out_type: char,
@@ -116,6 +143,10 @@ impl OutputContext {
 
         ctx.set_scaling(out_vol);
         Ok(ctx)
+    }
+
+    pub fn update_scaling_lm(&mut self, upsample_ratio: u32) {
+        self.scale_factor *= upsample_ratio as f64;
     }
 
     pub fn init(
@@ -301,11 +332,11 @@ impl OutputContext {
     pub fn push_samp<T: AudioSample>(&mut self, samp: T, channel: usize) {
         if self.bits == 32 {
             if let Some(file) = &mut self.float_file {
-                file.samples[channel].push(samp.to_f32());
+                file.samples_mut()[channel].push(samp.to_f32());
             }
         } else {
             if let Some(file) = &mut self.int_file {
-                file.samples[channel].push(samp.to_i32());
+                file.samples_mut()[channel].push(samp.to_i32());
             }
         }
     }

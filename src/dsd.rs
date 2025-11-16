@@ -39,18 +39,46 @@ pub const DSF_BLOCK_SIZE: u32 = 4096;
 pub const DSD_EXTENSIONS: [&str; 3] = ["dsf", "dff", "dsd"];
 
 pub struct DsdFile {
-    pub audio_length: u64,
-    pub audio_pos: u64,
-    pub channel_count: Option<u32>,
-    pub is_lsb: Option<bool>,
-    pub block_size: Option<u32>,
-    pub sample_rate: Option<u32>,
-    pub container_format: DsdFileFormat,
-    pub file: File,
-    pub tag: Option<Tag>,
+    audio_length: u64,
+    audio_pos: u64,
+    channel_count: Option<u32>,
+    is_lsb: Option<bool>,
+    block_size: Option<u32>,
+    sample_rate: Option<u32>,
+    container_format: DsdFileFormat,
+    file: File,
+    tag: Option<Tag>,
 }
 
 impl DsdFile {
+    pub fn audio_length(&self) -> u64 {
+        self.audio_length
+    }
+    pub fn tag(&self) -> Option<&Tag> {
+        self.tag.as_ref()
+    }
+    pub fn file(&self) -> &File {
+        &self.file
+    }
+    pub fn audio_pos(&self) -> u64 {
+        self.audio_pos
+    }
+    pub fn channel_count(&self) -> Option<u32> {
+        self.channel_count
+    }
+    pub fn is_lsb(&self) -> Option<bool> {
+        self.is_lsb
+    }
+    pub fn block_size(&self) -> Option<u32> {
+        self.block_size
+    }
+    pub fn sample_rate(&self) -> Option<u32> {
+        self.sample_rate
+    }
+    pub fn container_format(&self) -> DsdFileFormat {
+        self.container_format
+    }
+
     pub fn new(
         path: &PathBuf,
         file_format: DsdFileFormat,
