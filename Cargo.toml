@@ -5,11 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.4", features = ["derive", "wrap_help"] }
-rand = "0.8"
-flac-codec = "1.2.0"
 rdsd2pcm = { path = "../rdsd2pcm/" }
-dff-meta = "0.1.1"
-id3 = "1.16.3"
 log = { version = "0.4.28", features = ["std"] }
 colored = "3.0.0"
 tokio = { version = "1.48.0", features = ["rt", "macros", "rt-multi-thread"] }

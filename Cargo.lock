@@ -180,11 +180,7 @@ version = "2.3.2"
 dependencies = [
  "clap",
  "colored",
- "dff-meta",
- "flac-codec",
- "id3",
  "log",
- "rand",
  "rdsd2pcm",
  "tokio",
 ]

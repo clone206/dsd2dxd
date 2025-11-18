@@ -16,23 +16,26 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
+mod color_logger;
+mod model;
+
 use clap::Parser;
-use core::fmt;
 use std::{
     error::Error,
     io::{self, Write},
     path::PathBuf,
-    process::{ExitCode, Termination},
     sync::mpsc,
     time::Instant,
 };
-
+use color_logger::ColorLogger;
 use colored::Colorize;
-use log::{Level, Metadata, Record, error, info, warn};
+use log::{info, warn};
 use rdsd2pcm::{
     DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
     OutputType,
 };
+
+use crate::model::TermResult;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -150,10 +153,9 @@ async fn run() -> Result<(), Box<dyn Error>> {
         'f' => DitherType::FPD,
         'x' => DitherType::None,
         _ => {
-            return Err(MyError::Message(
+            return Err(
                 "Invalid dither type; must be T, R, F, or X".into(),
-            )
-            .into());
+            );
         }
     };
 
@@ -161,11 +163,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
         match cli.format.to_ascii_lowercase() {
             'i' => FmtType::Interleaved,
             'p' => FmtType::Planar,
-            _ => return Err(MyError::Message(
+            _ => return Err(
                 "Invalid format; must be I (interleaved) or P (planar)"
                     .into(),
-            )
-            .into()),
+            ),
         };
 
     let endian = match cli.endianness.to_ascii_lowercase() {
@@ -198,7 +199,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     } else {
         cli.files.clone()
     };
-    
+
     inputs.sort();
     inputs.dedup();
 
@@ -269,6 +270,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Run conversion for single input and report progress to stderr
 async fn do_conversion(
     path: Option<PathBuf>,
     cli: &Cli,
@@ -278,7 +280,7 @@ async fn do_conversion(
     endian: rdsd2pcm::Endianness,
     filt_type: rdsd2pcm::FilterType,
     cwd: PathBuf,
-) -> Result<(), MyError> {
+) -> Result<(), Box<dyn Error>> {
     // Construct a fresh conversion context per input to avoid moving a shared `lib`.
     let mut lib = rdsd2pcm::Rdsd2Pcm::new(
         cli.bit_depth,
@@ -321,120 +323,12 @@ async fn do_conversion(
     drop(receiver); // Close the receiver
 
     // Propagate conversion errors
-    let conv_res: Result<(), String> = handle.await.map_err(|_| {
-        MyError::Message("Conversion thread panicked".into())
-    })?;
-    conv_res.map_err(MyError::from)?;
+    let conv_res: Result<(), String> = handle.await?;
+    if let Err(e) = conv_res {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Conversion error: {}", e),
+        )));
+    }
     Ok(())
-}
-
-struct ColorLogger {
-    quiet: bool,
-}
-
-impl ColorLogger {
-    fn init(verbose: bool, quiet: bool) {
-        let level = if verbose { Level::Trace } else { Level::Info };
-        log::set_boxed_logger(Box::new(ColorLogger { quiet }))
-            .map(|()| log::set_max_level(level.to_level_filter()))
-            .expect("Failed to initialize logger");
-    }
-}
-
-impl log::Log for ColorLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= log::max_level()
-    }
-
-    fn log(&self, record: &Record) {
-        if self.quiet {
-            return;
-        }
-        if self.enabled(record.metadata()) {
-            match record.level() {
-                Level::Error => eprintln!(
-                    "{} {}",
-                    "[ERROR]".red().bold(),
-                    format!("{}", record.args()).red().bold()
-                ),
-                Level::Warn => eprintln!(
-                    "{} {}",
-                    "[WARN]".yellow().bold(),
-                    format!("{}", record.args()).yellow().bold()
-                ),
-                _ => eprintln!(
-                    "[{}] {}",
-                    record.level().to_string().blue(),
-                    record.args()
-                ),
-            }
-        }
-        self.flush();
-    }
-
-    fn flush(&self) {
-        io::stderr().flush().unwrap();
-    }
-}
-
-#[derive(Debug)]
-pub enum MyError {
-    Message(String),
-}
-
-impl std::fmt::Display for MyError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MyError::Message(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl std::error::Error for MyError {}
-
-type MyResult<T> = Result<T, MyError>;
-
-pub struct TermResult(pub MyResult<()>);
-
-// Removed custom FromResidual impl: using a separate run() -> Result<(), MyError>
-// function keeps error handling ergonomic on stable Rust without nightly features.
-
-impl Termination for TermResult {
-    fn report(self) -> ExitCode {
-        match self.0 {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(err) => {
-                error!("{}", err);
-                ExitCode::FAILURE
-            }
-        }
-    }
-}
-
-// Convert &'static str errors (e.g., from Dither::new)
-impl From<&'static str> for MyError {
-    fn from(err: &'static str) -> Self {
-        MyError::Message(err.to_string())
-    }
-}
-
-// Convert String errors to MyError
-impl From<String> for MyError {
-    fn from(err: String) -> Self {
-        MyError::Message(err)
-    }
-}
-
-// Convert std::io::Error to MyError
-impl From<std::io::Error> for MyError {
-    fn from(err: std::io::Error) -> Self {
-        MyError::Message(err.to_string())
-    }
-}
-
-// Convert boxed dynamic errors into MyError
-impl From<Box<dyn std::error::Error>> for MyError {
-    fn from(err: Box<dyn std::error::Error>) -> Self {
-        MyError::Message(err.to_string())
-    }
 }
