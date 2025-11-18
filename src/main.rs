@@ -16,28 +16,26 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-use clap::Parser;
-use core::fmt;
-use std::{
-    error::Error, io::{self, Write}, path::PathBuf, process::{ExitCode, Termination}, sync::mpsc, time::Instant
-};
-mod audio_file;
-mod byte_precalc_decimator;
-mod conversion_context;
-mod dither;
-mod dsd;
-mod filters;
-mod filters_lm;
-mod input;
-mod lm_resampler;
-mod output;
+mod color_logger;
+mod model;
 
+use clap::Parser;
+use std::{
+    error::Error,
+    io::{self, Write},
+    path::PathBuf,
+    sync::mpsc,
+    time::Instant,
+};
+use color_logger::ColorLogger;
 use colored::Colorize;
-pub use conversion_context::ConversionContext;
-pub use dither::Dither;
-pub use input::InputContext;
-use log::{Level, Metadata, Record, error, info, warn};
-pub use output::OutputContext;
+use log::{info, warn};
+use rdsd2pcm::{
+    DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
+    OutputType,
+};
+
+use crate::model::TermResult;
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -143,20 +141,55 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     ColorLogger::init(cli.verbose, cli.quiet);
 
-    let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
+    let dither = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
     } else {
         'T'
     });
 
-    let out_ctx = OutputContext::new(
-        cli.bit_depth,
-        cli.output,
-        cli.level,
-        cli.output_rate,
-        cli.path,
-        Dither::new(dither_type)?,
-    )?;
+    let dither_type = match dither.to_ascii_lowercase() {
+        't' => DitherType::TPDF,
+        'r' => DitherType::Rectangular,
+        'f' => DitherType::FPD,
+        'x' => DitherType::None,
+        _ => {
+            return Err(
+                "Invalid dither type; must be T, R, F, or X".into(),
+            );
+        }
+    };
+
+    let format =
+        match cli.format.to_ascii_lowercase() {
+            'i' => FmtType::Interleaved,
+            'p' => FmtType::Planar,
+            _ => return Err(
+                "Invalid format; must be I (interleaved) or P (planar)"
+                    .into(),
+            ),
+        };
+
+    let endian = match cli.endianness.to_ascii_lowercase() {
+        'l' => Endianness::LsbFirst,
+        'm' => Endianness::MsbFirst,
+        _ => Endianness::MsbFirst,
+    };
+
+    let filt_type = match cli.filter_type.unwrap().to_ascii_uppercase() {
+        'E' => FilterType::Equiripple,
+        'X' => FilterType::XLD,
+        'D' => FilterType::Dsd2Pcm,
+        'C' => FilterType::Chebyshev,
+        _ => FilterType::Equiripple,
+    };
+
+    let output = match cli.output.to_ascii_lowercase() {
+        's' => OutputType::Stdout,
+        'a' => OutputType::Aiff,
+        'w' => OutputType::Wav,
+        'f' => OutputType::Flac,
+        _ => OutputType::Stdout,
+    };
 
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -166,65 +199,24 @@ async fn run() -> Result<(), Box<dyn Error>> {
     } else {
         cli.files.clone()
     };
+
     inputs.sort();
     inputs.dedup();
-
-    let do_conversion =
-        async |path: Option<PathBuf>| -> Result<(), MyError> {
-            let (sender, receiver) = mpsc::channel::<f32>();
-            let in_ctx = InputContext::new(
-                path.clone(),
-                cli.format,
-                cli.endianness,
-                cli.input_rate,
-                cli.block_size.unwrap_or(4096),
-                cli.channels.unwrap_or(2),
-                path.is_none(),
-            )?;
-
-            let mut conv_ctx = ConversionContext::new(
-                in_ctx,
-                out_ctx.clone(),
-                cli.filter_type.unwrap().to_ascii_uppercase(),
-                cli.append_rate,
-                cwd.clone(),
-            )?;
-
-            let file_name = conv_ctx.input_file_name();
-
-            // Spawn task for conversion; join after progress loop.
-            let handle = tokio::spawn(async move {
-                // Map Box<dyn Error> into String so JoinHandle carries a Send payload
-                conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
-            });
-            for progress in &receiver {
-                eprint!(
-                    "\r{}{}:{:>4}%",
-                    "[Converting] ".bold(),
-                    file_name.bold(),
-                    progress.floor() as usize,
-                );
-                if progress == conversion_context::ONE_HUNDRED_PERCENT {
-                    eprint!("\n");
-                    break;
-                }
-                io::stderr().flush()?;
-            }
-            drop(receiver); // Close the receiver
-
-            // Propagate conversion errors
-            let conv_res: Result<(), String> =
-                handle.await.map_err(|_| {
-                    MyError::Message("Conversion thread panicked".into())
-                })?;
-            conv_res.map_err(MyError::from)?;
-            Ok(())
-        };
 
     let mut total_inputs = 0;
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
-        do_conversion(None).await?;
+        do_conversion(
+            None,
+            &cli,
+            output,
+            dither_type,
+            format,
+            endian,
+            filt_type,
+            cwd.clone(),
+        )
+        .await?;
         total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
@@ -246,13 +238,23 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .cloned()
         .collect::<Vec<_>>();
 
-    let expanded_paths = dsd::find_dsd_files(&paths, cli.recurse)?;
+    let expanded_paths = rdsd2pcm::find_dsd_files(&paths, cli.recurse)?;
     total_inputs += expanded_paths.len();
 
     let wall_start = Instant::now();
 
     for path in expanded_paths {
-        do_conversion(Some(path)).await?;
+        do_conversion(
+            Some(path),
+            &cli,
+            output,
+            dither_type,
+            format,
+            endian,
+            filt_type,
+            cwd.clone(),
+        )
+        .await?;
     }
 
     let total_elapsed = wall_start.elapsed();
@@ -260,114 +262,73 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let h = total_secs / 3600;
     let m = (total_secs % 3600) / 60;
     let s = total_secs % 60;
-    info!("Processed {} inputs in {:02}:{:02}:{:02}", total_inputs, h, m, s);
+    info!(
+        "Processed {} inputs in {:02}:{:02}:{:02}",
+        total_inputs, h, m, s
+    );
 
     Ok(())
 }
 
-struct ColorLogger { quiet: bool }
+/// Run conversion for single input and report progress to stderr
+async fn do_conversion(
+    path: Option<PathBuf>,
+    cli: &Cli,
+    output: rdsd2pcm::OutputType,
+    dither_type: rdsd2pcm::DitherType,
+    format: rdsd2pcm::FmtType,
+    endian: rdsd2pcm::Endianness,
+    filt_type: rdsd2pcm::FilterType,
+    cwd: PathBuf,
+) -> Result<(), Box<dyn Error>> {
+    // Construct a fresh conversion context per input to avoid moving a shared `lib`.
+    let mut lib = rdsd2pcm::Rdsd2Pcm::new(
+        cli.bit_depth,
+        output,
+        cli.level,
+        cli.output_rate,
+        cli.path.clone(),
+        dither_type,
+        format,
+        endian,
+        cli.input_rate,
+        cli.block_size.unwrap_or(4096),
+        cli.channels.unwrap_or(2),
+        filt_type,
+        cli.append_rate,
+        cwd,
+    )?;
+    let (sender, receiver) = mpsc::channel::<f32>();
+    lib.load_input(path)?;
+    let file_name = lib.file_name();
 
-impl ColorLogger {
-    fn init(verbose: bool, quiet: bool) {
-        let level = if verbose { Level::Trace } else { Level::Info };
-        log::set_boxed_logger(Box::new(ColorLogger { quiet }))
-            .map(|()| log::set_max_level(level.to_level_filter()))
-            .expect("Failed to initialize logger");
-    }
-}
-
-impl log::Log for ColorLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        metadata.level() <= log::max_level()
-    }
-
-    fn log(&self, record: &Record) {
-        if self.quiet { return; }
-        if self.enabled(record.metadata()) {
-            match record.level() {
-                Level::Error => eprintln!(
-                    "{} {}",
-                    "[ERROR]".red().bold(),
-                    format!("{}", record.args()).red().bold()
-                ),
-                Level::Warn => eprintln!(
-                    "{} {}",
-                    "[WARN]".yellow().bold(),
-                    format!("{}", record.args()).yellow().bold()
-                ),
-                _ => eprintln!(
-                    "[{}] {}",
-                    record.level().to_string().blue(),
-                    record.args()
-                ),
-            }
+    // Spawn task for conversion; join after progress loop.
+    let handle = tokio::spawn(async move {
+        // Map Box<dyn Error> into String so JoinHandle carries a Send payload
+        lib.do_conversion(Some(sender)).map_err(|e| e.to_string())
+    });
+    for progress in &receiver {
+        eprint!(
+            "\r{}{}:{:>4}%",
+            "[Converting] ".bold(),
+            file_name.bold(),
+            progress.floor() as usize,
+        );
+        if progress == ONE_HUNDRED_PERCENT {
+            eprint!("\n");
+            break;
         }
-        self.flush();
+        io::stderr().flush()?;
     }
+    drop(receiver); // Close the receiver
 
-    fn flush(&self) {
-        io::stderr().flush().unwrap();
+    // Propagate conversion errors
+    let conv_res: Result<(), String> = handle.await?;
+    if let Err(e) = conv_res {
+        return Err(Box::new(io::Error::new(
+            io::ErrorKind::Other,
+            format!("Conversion error: {}", e),
+        )));
     }
-}
-
-#[derive(Debug)]
-pub enum MyError {
-    Message(String),
-}
-
-impl std::fmt::Display for MyError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            MyError::Message(msg) => write!(f, "{}", msg),
-        }
-    }
-}
-
-impl std::error::Error for MyError {}
-
-type MyResult<T> = Result<T, MyError>;
-
-pub struct TermResult(pub MyResult<()>);
-
-// Removed custom FromResidual impl: using a separate run() -> Result<(), MyError>
-// function keeps error handling ergonomic on stable Rust without nightly features.
-
-impl Termination for TermResult {
-    fn report(self) -> ExitCode {
-        match self.0 {
-            Ok(_) => ExitCode::SUCCESS,
-            Err(err) => {
-                error!("{}", err);
-                ExitCode::FAILURE
-            }
-        }
-    }
-}
-
-// Convert &'static str errors (e.g., from Dither::new)
-impl From<&'static str> for MyError {
-    fn from(err: &'static str) -> Self {
-        MyError::Message(err.to_string())
-    }
-}
-
-// Convert String errors to MyError
-impl From<String> for MyError {
-    fn from(err: String) -> Self {
-        MyError::Message(err)
-    }
-}
-
-// Convert std::io::Error to MyError
-impl From<std::io::Error> for MyError {
-    fn from(err: std::io::Error) -> Self {
-        MyError::Message(err.to_string())
-    }
-}
-
-// Convert boxed dynamic errors into MyError
-impl From<Box<dyn std::error::Error>> for MyError {
-    fn from(err: Box<dyn std::error::Error>) -> Self {
-        MyError::Message(err.to_string())
-    }
+    Ok(())
 }
