@@ -1,6 +1,3 @@
-[submodule "src/dsf"]
-	path = src/dsf
-	url = https://gitlab.com/clone206/dsf.git
 [submodule "src/rdsd2pcm"]
 	path = src/rdsd2pcm
 	url = https://github.com/clone206/rdsd2pcm.git
