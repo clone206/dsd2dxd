@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "dsd2dxd"
-version = "2.3.3"
+version = "2.3.4"
 dependencies = [
  "clap",
  "colored",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "rdsd2pcm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dff-meta",
  "dsf",
