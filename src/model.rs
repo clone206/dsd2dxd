@@ -22,9 +22,6 @@ pub type MyResult<T> = Result<T, MyError>;
 
 pub struct TermResult(pub MyResult<()>);
 
-// Removed custom FromResidual impl: using a separate run() -> Result<(), MyError>
-// function keeps error handling ergonomic on stable Rust without nightly features.
-
 impl Termination for TermResult {
     fn report(self) -> ExitCode {
         match self.0 {
