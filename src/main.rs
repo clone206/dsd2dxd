@@ -323,8 +323,7 @@ async fn do_conversion(
     drop(receiver); // Close the receiver
 
     // Propagate conversion errors
-    let conv_res: Result<(), String> = handle.await?;
-    if let Err(e) = conv_res {
+    if let Err(e) = handle.await? {
         return Err(Box::new(io::Error::new(
             io::ErrorKind::Other,
             format!("Conversion error: {}", e),
