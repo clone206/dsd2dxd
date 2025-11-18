@@ -297,9 +297,9 @@ async fn do_conversion(
         filt_type,
         cli.append_rate,
         cwd,
+        path
     )?;
     let (sender, receiver) = mpsc::channel::<f32>();
-    lib.load_input(path)?;
     let file_name = lib.file_name();
 
     // Spawn task for conversion; join after progress loop.
