@@ -28,11 +28,13 @@ Converts DSD to PCM on the command line with the following features:
 At the root of the cloned repository:
 
 ```
-git submodule update --init
+git submodule update --init --recursive
 cargo install --path .
 ```
 
 This should install dsd2dxd into a directory that was automatically added to your `$PATH` when you installed Rust/Cargo. **NOTE:** If you installed an older version of dsd2dxd previously, make sure to remove it so it doesn't take precedence over this new installation (e.g. `sudo rm -f /usr/local/bin/dsd2dxd`). When in doubt on a *nix system, type `which dsd2dxd` to see which binary is currently being used.
+
+The main conversion library, [rdsd2pcm](https://github.com/clone206/rdsd2pcm) should be checked out for you via the above submodule command.
 
 ### Examples
 

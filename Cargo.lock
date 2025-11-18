@@ -176,7 +176,7 @@ dependencies = [
 
 [[package]]
 name = "dsd2dxd"
-version = "2.3.2"
+version = "2.3.3"
 dependencies = [
  "clap",
  "colored",
