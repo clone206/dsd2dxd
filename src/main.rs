@@ -21,23 +21,10 @@ use core::fmt;
 use std::{
     error::Error, io::{self, Write}, path::PathBuf, process::{ExitCode, Termination}, sync::mpsc, time::Instant
 };
-mod audio_file;
-mod byte_precalc_decimator;
-mod conversion_context;
-mod dither;
-mod dsd;
-mod filters;
-mod filters_lm;
-mod input;
-mod lm_resampler;
-mod output;
 
 use colored::Colorize;
-pub use conversion_context::ConversionContext;
-pub use dither::Dither;
-pub use input::InputContext;
 use log::{Level, Metadata, Record, error, info, warn};
-pub use output::OutputContext;
+use rdsd2pcm::{DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT, OutputType};
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -143,20 +130,57 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
     ColorLogger::init(cli.verbose, cli.quiet);
 
-    let dither_type = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
+    let dither = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
     } else {
         'T'
     });
 
-    let out_ctx = OutputContext::new(
-        cli.bit_depth,
-        cli.output,
-        cli.level,
-        cli.output_rate,
-        cli.path,
-        Dither::new(dither_type)?,
-    )?;
+    let dither_type = match dither.to_ascii_lowercase() {
+        't' => DitherType::TPDF,
+        'r' => DitherType::Rectangular,
+        'f' => DitherType::FPD,
+        'x' => DitherType::None,
+        _ => {
+            return Err(MyError::Message(
+                "Invalid dither type; must be T, R, F, or X".into(),
+            )
+            .into())
+        }
+    };
+
+    let format = match cli.format.to_ascii_lowercase() {
+        'i' => FmtType::Interleaved,
+        'p' => FmtType::Planar,
+        _ => {
+            return Err(MyError::Message(
+                "Invalid format; must be I (interleaved) or P (planar)".into(),
+            )
+            .into())
+        }
+    };
+
+    let endian = match cli.endianness.to_ascii_lowercase() {
+        'l' => Endianness::LsbFirst,
+        'm' => Endianness::MsbFirst,
+        _ => Endianness::MsbFirst,
+    };
+
+    let filt_type = match cli.filter_type.unwrap().to_ascii_uppercase() {
+        'E' => FilterType::Equiripple,
+        'X' => FilterType::XLD,
+        'D' => FilterType::Dsd2Pcm,
+        'C' => FilterType::Chebyshev,
+        _ => FilterType::Equiripple,
+    };
+
+    let output = match cli.output.to_ascii_lowercase() {
+        's' => OutputType::Stdout,
+        'a' => OutputType::Aiff,
+        'w' => OutputType::Wav,
+        'f' => OutputType::Flac,
+        _ => OutputType::Stdout,
+    };
 
     let cwd = std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -171,31 +195,31 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
     let do_conversion =
         async |path: Option<PathBuf>| -> Result<(), MyError> {
-            let (sender, receiver) = mpsc::channel::<f32>();
-            let in_ctx = InputContext::new(
-                path.clone(),
-                cli.format,
-                cli.endianness,
+            // Construct a fresh conversion context per input to avoid moving a shared `lib`.
+            let mut lib = rdsd2pcm::Rdsd2Pcm::new(
+                cli.bit_depth,
+                output,
+                cli.level,
+                cli.output_rate,
+                cli.path.clone(),
+                dither_type,
+                format,
+                endian,
                 cli.input_rate,
                 cli.block_size.unwrap_or(4096),
                 cli.channels.unwrap_or(2),
-                path.is_none(),
-            )?;
-
-            let mut conv_ctx = ConversionContext::new(
-                in_ctx,
-                out_ctx.clone(),
-                cli.filter_type.unwrap().to_ascii_uppercase(),
+                filt_type,
                 cli.append_rate,
                 cwd.clone(),
             )?;
-
-            let file_name = conv_ctx.input_file_name();
+            let (sender, receiver) = mpsc::channel::<f32>();
+            lib.load_input(path)?;
+            let file_name = lib.file_name();
 
             // Spawn task for conversion; join after progress loop.
             let handle = tokio::spawn(async move {
                 // Map Box<dyn Error> into String so JoinHandle carries a Send payload
-                conv_ctx.do_conversion(sender).map_err(|e| e.to_string())
+                lib.do_conversion(Some(sender)).map_err(|e| e.to_string())
             });
             for progress in &receiver {
                 eprint!(
@@ -204,7 +228,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
                     file_name.bold(),
                     progress.floor() as usize,
                 );
-                if progress == conversion_context::ONE_HUNDRED_PERCENT {
+                if progress == ONE_HUNDRED_PERCENT {
                     eprint!("\n");
                     break;
                 }
@@ -246,7 +270,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .cloned()
         .collect::<Vec<_>>();
 
-    let expanded_paths = dsd::find_dsd_files(&paths, cli.recurse)?;
+    let expanded_paths = rdsd2pcm::dsd::find_dsd_files(&paths, cli.recurse)?;
     total_inputs += expanded_paths.len();
 
     let wall_start = Instant::now();
