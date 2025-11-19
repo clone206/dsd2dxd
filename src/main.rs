@@ -20,6 +20,7 @@ mod color_logger;
 mod model;
 
 use clap::Parser;
+use colored::Colorize;
 use color_logger::ColorLogger;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
@@ -28,9 +29,7 @@ use rdsd2pcm::{
     DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
     OutputType,
 };
-use std::{
-    error::Error, io, path::PathBuf, sync::mpsc, time::Instant
-};
+use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
 use crate::model::TermResult;
 
@@ -309,7 +308,8 @@ async fn do_conversion(
         .with_style(ProgressStyle::with_template(
             "{prefix} {bar} {percent}{msg}",
         )?)
-        .with_prefix(file_name).with_message("%");
+        .with_prefix(format!("{} {}", "[Converting]".bold(), file_name.bold()))
+        .with_message("%");
 
     // Spawn task for conversion; join after progress loop.
     let handle = tokio::spawn(async move {
