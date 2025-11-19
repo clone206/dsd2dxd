@@ -20,19 +20,16 @@ mod color_logger;
 mod model;
 
 use clap::Parser;
-use std::{
-    error::Error,
-    io::{self, Write},
-    path::PathBuf,
-    sync::mpsc,
-    time::Instant,
-};
 use color_logger::ColorLogger;
-use colored::Colorize;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif_log_bridge::LogWrapper;
 use log::{info, warn};
 use rdsd2pcm::{
     DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
     OutputType,
+};
+use std::{
+    error::Error, io, path::PathBuf, sync::mpsc, time::Instant
 };
 
 use crate::model::TermResult;
@@ -139,7 +136,9 @@ async fn main() -> TermResult {
 
 async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    ColorLogger::init(cli.verbose, cli.quiet);
+    let logger = ColorLogger::new(cli.quiet, cli.verbose);
+    let multi = MultiProgress::new();
+    LogWrapper::new(multi.clone(), logger).try_init()?;
 
     let dither = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
@@ -154,7 +153,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         'x' => DitherType::None,
         _ => {
             return Err(
-                "Invalid dither type; must be T, R, F, or X".into(),
+                "Invalid dither type; must be T, R, F, or X".into()
             );
         }
     };
@@ -215,6 +214,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             endian,
             filt_type,
             cwd.clone(),
+            &multi,
         )
         .await?;
         total_inputs += 1;
@@ -253,6 +253,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
             endian,
             filt_type,
             cwd.clone(),
+            &multi,
         )
         .await?;
     }
@@ -280,6 +281,7 @@ async fn do_conversion(
     endian: rdsd2pcm::Endianness,
     filt_type: rdsd2pcm::FilterType,
     cwd: PathBuf,
+    multi: &MultiProgress,
 ) -> Result<(), Box<dyn Error>> {
     // Construct a fresh conversion context per input to avoid moving a shared `lib`.
     let mut lib = rdsd2pcm::Rdsd2Pcm::new(
@@ -297,10 +299,17 @@ async fn do_conversion(
         filt_type,
         cli.append_rate,
         cwd,
-        path
+        path,
     )?;
     let (sender, receiver) = mpsc::channel::<f32>();
     let file_name = lib.file_name();
+
+    let pg = multi
+        .add(ProgressBar::new(100))
+        .with_style(ProgressStyle::with_template(
+            "{prefix} {bar} {percent}{msg}",
+        )?)
+        .with_prefix(file_name).with_message("%");
 
     // Spawn task for conversion; join after progress loop.
     let handle = tokio::spawn(async move {
@@ -308,17 +317,10 @@ async fn do_conversion(
         lib.do_conversion(Some(sender)).map_err(|e| e.to_string())
     });
     for progress in &receiver {
-        eprint!(
-            "\r{}{}:{:>4}%",
-            "[Converting] ".bold(),
-            file_name.bold(),
-            progress.floor() as usize,
-        );
+        pg.set_position(progress.floor() as u64);
         if progress == ONE_HUNDRED_PERCENT {
-            eprint!("\n");
             break;
         }
-        io::stderr().flush()?;
     }
     drop(receiver); // Close the receiver
 
