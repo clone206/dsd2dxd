@@ -306,7 +306,7 @@ async fn do_conversion(
     let pg = multi
         .add(ProgressBar::new(100))
         .with_style(ProgressStyle::with_template(
-            "{prefix} {bar} {percent}{msg}",
+            "{prefix} {bar:20.cyan/blue} {percent}{msg}",
         )?)
         .with_prefix(format!("{} {}", "[Converting]".bold(), file_name.bold()))
         .with_message("%");
