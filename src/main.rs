@@ -20,15 +20,17 @@ mod color_logger;
 mod model;
 
 use clap::Parser;
-use colored::Colorize;
 use color_logger::ColorLogger;
+use colored::Colorize;
+// Note: we avoid bringing an external futures crate; we'll await manually.
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
-use log::{info, warn};
+use log::{info, trace, warn};
 use rdsd2pcm::{
     DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
     OutputType,
 };
+use std::thread::available_parallelism;
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
 use crate::model::TermResult;
@@ -139,6 +141,11 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let multi = MultiProgress::new();
     LogWrapper::new(multi.clone(), logger).try_init()?;
 
+    let avail_par = available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let thread_count = (avail_par / 2).max(1);
+
+    trace!("Threads available: {}", thread_count);
+
     let dither = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
     } else {
@@ -238,23 +245,66 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>();
 
     let expanded_paths = rdsd2pcm::find_dsd_files(&paths, cli.recurse)?;
-    total_inputs += expanded_paths.len();
+    let num_paths = expanded_paths.len();
+    total_inputs += num_paths;
+
+    let chunk_size = (num_paths / thread_count + 1).max(1).min(num_paths);
+
+    trace!("Chunk size: {} into {} total paths.", chunk_size, num_paths);
+
+    let chunks = expanded_paths
+        .chunks(chunk_size)
+        .map(|c| c.to_vec())
+        .collect::<Vec<_>>();
+
+    trace!("Total chunks: {}", chunks.len());
 
     let wall_start = Instant::now();
 
-    for path in expanded_paths {
-        do_conversion(
-            Some(path),
-            &cli,
-            output,
-            dither_type,
-            format,
-            endian,
-            filt_type,
-            cwd.clone(),
-            &multi,
-        )
-        .await?;
+    // Capture the Tokio runtime handle to use from Rayon threads.
+    let rt_handle = tokio::runtime::Handle::current();
+
+    // Spawn a Rayon-backed task per chunk, each returning an async future.
+    // We'll first await the rayon handles to collect those futures, then
+    // await the inner futures to drive the async conversions.
+    let mut rayon_handles = Vec::with_capacity(chunks.len());
+    for i in 0..chunks.len() {
+        let this_chunk = chunks[i].clone();
+        // Parse fresh CLI here to avoid borrowing issues; this is cheap.
+        let cli = Cli::parse();
+        let this_cwd = cwd.clone();
+        let this_multi = multi.clone();
+        let handle_clone = rt_handle.clone();
+
+        // Execute the async body via the current Tokio runtime from within the Rayon thread.
+        let handle = tokio_rayon::spawn(move || {
+            handle_clone.block_on(async move {
+                for path in this_chunk {
+                    do_conversion(
+                        Some(path),
+                        &cli,
+                        output,
+                        dither_type,
+                        format,
+                        endian,
+                        filt_type,
+                        this_cwd.clone(),
+                        &this_multi,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                }
+                Ok::<(), String>(())
+            })
+        });
+        rayon_handles.push(handle);
+    }
+
+    // Await all rayon handles; closures already running in parallel.
+    for h in rayon_handles {
+        h.await.map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("Rayon join error: {}", e))
+        })?;
     }
 
     let total_elapsed = wall_start.elapsed();
@@ -308,7 +358,11 @@ async fn do_conversion(
         .with_style(ProgressStyle::with_template(
             "{prefix} {bar:20.cyan/blue} {percent}{msg}",
         )?)
-        .with_prefix(format!("{} {}", "[Converting]".bold(), file_name.bold()))
+        .with_prefix(format!(
+            "{} {}",
+            "[Converting]".bold(),
+            file_name.bold()
+        ))
         .with_message("%");
 
     // Spawn task for conversion; join after progress loop.
