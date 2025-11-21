@@ -1,24 +1,44 @@
 use std::io::{self, Write};
 
-use log::{Level, Metadata, Record};
 use colored::Colorize;
+use log::{Level, LevelFilter, Metadata, Record};
 
 pub struct ColorLogger {
-    quiet: bool,
+    max_level: LevelFilter,
 }
 
 impl ColorLogger {
-    pub fn init(verbose: bool, quiet: bool) {
-        let level = if verbose { Level::Trace } else { Level::Info };
-        log::set_boxed_logger(Box::new(ColorLogger { quiet }))
-            .map(|()| log::set_max_level(level.to_level_filter()))
-            .expect("Failed to initialize logger");
+    pub fn new(quiet: bool, verbose: bool) -> Self {
+        let max_level = if quiet {
+            LevelFilter::Off
+        } else if verbose {
+            LevelFilter::Trace
+        } else {
+            LevelFilter::Info
+        };
+        Self {
+            max_level,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn init(&self) {
+        log::set_boxed_logger(Box::new(self.clone()))
+        .expect("Failed to initialize logger");
+    }
+}
+
+impl Clone for ColorLogger {
+    fn clone(&self) -> Self {
+        Self {
+            max_level: self.max_level,
+        }
     }
 }
 
 impl log::Log for ColorLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        !self.quiet && metadata.level() <= log::max_level()
+         metadata.level() <= self.max_level
     }
 
     fn log(&self, record: &Record) {

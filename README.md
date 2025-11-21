@@ -11,6 +11,9 @@ Converts DSD to PCM on the command line with the following features:
 - Output bit depth can be either 16, 20, or 24 fixed integer PCM, or 32 bit float PCM.
   - The dither will be optimized accordingly, including for 20 bit output.
 - Allows you to choose between different decimation filters.
+- Uses available CPU threads in parallel, with progress bars for each conversion
+
+![Progress bars](/asset/progress.jpg)
 
 ## Build Dependencies
 

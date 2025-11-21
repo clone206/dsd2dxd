@@ -20,20 +20,18 @@ mod color_logger;
 mod model;
 
 use clap::Parser;
-use std::{
-    error::Error,
-    io::{self, Write},
-    path::PathBuf,
-    sync::mpsc,
-    time::Instant,
-};
 use color_logger::ColorLogger;
 use colored::Colorize;
-use log::{info, warn};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif_log_bridge::LogWrapper;
+use log::{info, trace, warn};
 use rdsd2pcm::{
     DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
     OutputType,
 };
+use rayon::prelude::*;
+use std::thread::available_parallelism;
+use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
 use crate::model::TermResult;
 
@@ -129,17 +127,34 @@ struct Cli {
     files: Vec<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> TermResult {
-    match run().await {
+fn main() -> TermResult {
+    match run() {
         Ok(()) => TermResult(Ok(())),
         Err(e) => TermResult(Err(e.into())),
     }
 }
 
-async fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
-    ColorLogger::init(cli.verbose, cli.quiet);
+    let logger = ColorLogger::new(cli.quiet, cli.verbose);
+    let multi = MultiProgress::new();
+    LogWrapper::new(multi.clone(), logger).try_init()?;
+
+    let avail_par = available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let thread_count = (avail_par / 2).max(1);
+
+    trace!("Threads available: {}", thread_count);
+
+    // Configure Rayon pool size to our computed thread_count.
+    // build_global can only be called once; ignore error if already set.
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .build_global()
+    {
+        warn!("Rayon pool already initialized ({} threads). Details: {:?}", thread_count, e);
+    } else {
+        trace!("Configured Rayon pool with {} threads", thread_count);
+    }
 
     let dither = cli.dither_type.unwrap_or(if cli.bit_depth == 32 {
         'F'
@@ -154,7 +169,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         'x' => DitherType::None,
         _ => {
             return Err(
-                "Invalid dither type; must be T, R, F, or X".into(),
+                "Invalid dither type; must be T, R, F, or X".into()
             );
         }
     };
@@ -204,6 +219,8 @@ async fn run() -> Result<(), Box<dyn Error>> {
     inputs.dedup();
 
     let mut total_inputs = 0;
+    let wall_start = Instant::now();
+
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
         do_conversion(
@@ -215,8 +232,10 @@ async fn run() -> Result<(), Box<dyn Error>> {
             endian,
             filt_type,
             cwd.clone(),
-        )
-        .await?;
+            &multi,
+        ).map_err(|e| -> Box<dyn Error> {
+            Box::new(io::Error::new(io::ErrorKind::Other, e))
+        })?;
         total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
@@ -239,23 +258,30 @@ async fn run() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>();
 
     let expanded_paths = rdsd2pcm::find_dsd_files(&paths, cli.recurse)?;
-    total_inputs += expanded_paths.len();
+    let num_paths = expanded_paths.len();
+    total_inputs += num_paths;
 
-    let wall_start = Instant::now();
-
-    for path in expanded_paths {
-        do_conversion(
-            Some(path),
-            &cli,
-            output,
-            dither_type,
-            format,
-            endian,
-            filt_type,
-            cwd.clone(),
-        )
-        .await?;
-    }
+    // Parallelize per input using Rayon; short-circuit on first error.
+    expanded_paths
+        .into_par_iter()
+        .try_for_each(|path| {
+            // Parse CLI in-thread to avoid sharing non-Send/Sync fields.
+            let cli_local = Cli::parse();
+            do_conversion(
+                Some(path),
+                &cli_local,
+                output,
+                dither_type,
+                format,
+                endian,
+                filt_type,
+                cwd.clone(),
+                &multi,
+            )
+        })
+        .map_err(|e| -> Box<dyn Error> {
+            Box::new(io::Error::new(io::ErrorKind::Other, e))
+        })?;
 
     let total_elapsed = wall_start.elapsed();
     let total_secs = total_elapsed.as_secs();
@@ -271,7 +297,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 }
 
 /// Run conversion for single input and report progress to stderr
-async fn do_conversion(
+fn do_conversion(
     path: Option<PathBuf>,
     cli: &Cli,
     output: rdsd2pcm::OutputType,
@@ -280,7 +306,8 @@ async fn do_conversion(
     endian: rdsd2pcm::Endianness,
     filt_type: rdsd2pcm::FilterType,
     cwd: PathBuf,
-) -> Result<(), Box<dyn Error>> {
+    multi: &MultiProgress,
+) -> Result<(), String> {
     // Construct a fresh conversion context per input to avoid moving a shared `lib`.
     let mut lib = rdsd2pcm::Rdsd2Pcm::new(
         cli.bit_depth,
@@ -297,37 +324,46 @@ async fn do_conversion(
         filt_type,
         cli.append_rate,
         cwd,
-        path
-    )?;
+        path,
+    ).map_err(|e| e.to_string())?;
     let (sender, receiver) = mpsc::channel::<f32>();
     let file_name = lib.file_name();
 
-    // Spawn task for conversion; join after progress loop.
-    let handle = tokio::spawn(async move {
-        // Map Box<dyn Error> into String so JoinHandle carries a Send payload
-        lib.do_conversion(Some(sender)).map_err(|e| e.to_string())
-    });
-    for progress in &receiver {
-        eprint!(
-            "\r{}{}:{:>4}%",
-            "[Converting] ".bold(),
-            file_name.bold(),
-            progress.floor() as usize,
-        );
-        if progress == ONE_HUNDRED_PERCENT {
-            eprint!("\n");
-            break;
-        }
-        io::stderr().flush()?;
-    }
-    drop(receiver); // Close the receiver
+    let style = ProgressStyle::with_template(
+        "{prefix} {bar:20.cyan/blue} {percent}{msg}",
+    )
+    .map_err(|e| e.to_string())?;
 
-    // Propagate conversion errors
-    if let Err(e) = handle.await? {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Conversion error: {}", e),
-        )));
+    let pg = multi
+        .add(ProgressBar::new(100))
+        .with_style(style)
+        .with_prefix(format!(
+            "{} {}",
+            "[Converting]".bold(),
+            file_name.bold()
+        ))
+        .with_message("%");
+
+    // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
+    let progress_handle = std::thread::spawn(move || {
+        while let Ok(progress) = receiver.recv() {
+            pg.set_position(progress.floor() as u64);
+            if progress == ONE_HUNDRED_PERCENT {
+                break;
+            }
+        }
+    });
+
+    // Perform the blocking conversion here (inside Rayon worker).
+    let conv_res = lib
+        .do_conversion(Some(sender))
+        .map_err(|e| e.to_string());
+
+    // Ensure progress thread exits and propagate errors.
+    match progress_handle.join() {
+        Ok(()) => {}
+        Err(_) => return Err("Progress thread panicked".to_string()),
     }
-    Ok(())
+
+    conv_res.map_err(|e| format!("Conversion error: {}", e))
 }
