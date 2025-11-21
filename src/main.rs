@@ -219,6 +219,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     inputs.dedup();
 
     let mut total_inputs = 0;
+    let wall_start = Instant::now();
+
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
         do_conversion(
@@ -258,8 +260,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     let expanded_paths = rdsd2pcm::find_dsd_files(&paths, cli.recurse)?;
     let num_paths = expanded_paths.len();
     total_inputs += num_paths;
-
-    let wall_start = Instant::now();
 
     // Parallelize per input using Rayon; short-circuit on first error.
     expanded_paths
