@@ -88,7 +88,7 @@ struct Cli {
 
     /// Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256)
     #[arg(short = 'i', long = "inrate", default_value = "1")]
-    input_rate: i32,
+    input_rate: u32,
 
     /// Output type: S (stdout), A (aif), W (wave), F (flac)
     /// Note that W, A, or F outputs to either
@@ -318,7 +318,7 @@ fn do_conversion(
         dither_type,
         format,
         endian,
-        cli.input_rate,
+        cli.input_rate.try_into()?,
         cli.block_size.unwrap_or(4096),
         cli.channels.unwrap_or(2),
         filt_type,
