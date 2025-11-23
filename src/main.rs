@@ -25,12 +25,12 @@ use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use log::{info, trace, warn};
+use rayon::prelude::*;
 use rdsd2pcm::{
     DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
     OutputType,
 };
-use rayon::prelude::*;
-use std::thread::available_parallelism;
+use std::thread::{JoinHandle, available_parallelism};
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
 use crate::model::TermResult;
@@ -151,7 +151,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         .num_threads(thread_count)
         .build_global()
     {
-        warn!("Rayon pool already initialized ({} threads). Details: {:?}", thread_count, e);
+        warn!(
+            "Rayon pool initialization error ({} threads). Details: {:?}",
+            thread_count, e
+        );
     } else {
         trace!("Configured Rayon pool with {} threads", thread_count);
     }
@@ -233,7 +236,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             filt_type,
             cwd.clone(),
             &multi,
-        ).map_err(|e| -> Box<dyn Error> {
+            false
+        )
+        .map_err(|e| -> Box<dyn Error> {
             Box::new(io::Error::new(io::ErrorKind::Other, e))
         })?;
         total_inputs += 1;
@@ -277,6 +282,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 filt_type,
                 cwd.clone(),
                 &multi,
+                output != OutputType::Stdout,
             )
         })
         .map_err(|e| -> Box<dyn Error> {
@@ -307,6 +313,7 @@ fn do_conversion(
     filt_type: rdsd2pcm::FilterType,
     cwd: PathBuf,
     multi: &MultiProgress,
+    show_progress: bool,
 ) -> Result<(), String> {
     // Construct a fresh conversion context per input to avoid moving a shared `lib`.
     let mut lib = rdsd2pcm::Rdsd2Pcm::new(
@@ -325,7 +332,8 @@ fn do_conversion(
         cli.append_rate,
         cwd,
         path,
-    ).map_err(|e| e.to_string())?;
+    )
+    .map_err(|e| e.to_string())?;
     let (sender, receiver) = mpsc::channel::<f32>();
     let file_name = lib.file_name();
 
@@ -334,35 +342,42 @@ fn do_conversion(
     )
     .map_err(|e| e.to_string())?;
 
-    let pg = multi
-        .add(ProgressBar::new(100))
-        .with_style(style)
-        .with_prefix(format!(
-            "{} {}",
-            "[Converting]".bold(),
-            file_name.bold()
-        ))
-        .with_message("%");
+    let progress_handle: Option<JoinHandle<()>> = if show_progress {
+        let pg = multi
+            .add(ProgressBar::new(100))
+            .with_style(style)
+            .with_prefix(format!(
+                "{} {}",
+                "[Converting]".bold(),
+                file_name.bold()
+            ))
+            .with_message("%");
 
-    // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
-    let progress_handle = std::thread::spawn(move || {
-        while let Ok(progress) = receiver.recv() {
-            pg.set_position(progress.floor() as u64);
-            if progress == ONE_HUNDRED_PERCENT {
-                break;
+        // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
+        let progress_handle = std::thread::spawn(move || {
+            while let Ok(progress) = receiver.recv() {
+                pg.set_position(progress.floor() as u64);
+                if progress == ONE_HUNDRED_PERCENT {
+                    break;
+                }
             }
-        }
-    });
+        });
+        Some(progress_handle)
+    } else {
+        None
+    };
+
+    let maybe_sender = if show_progress { Some(sender) } else { None };
 
     // Perform the blocking conversion here (inside Rayon worker).
-    let conv_res = lib
-        .do_conversion(Some(sender))
-        .map_err(|e| e.to_string());
+    let conv_res = lib.do_conversion(maybe_sender);
 
-    // Ensure progress thread exits and propagate errors.
-    match progress_handle.join() {
-        Ok(()) => {}
-        Err(_) => return Err("Progress thread panicked".to_string()),
+    if let Some(progress_handle) = progress_handle {
+        // Ensure progress thread exits and propagate errors.
+        match progress_handle.join() {
+            Ok(()) => {}
+            Err(_) => return Err("Progress thread panicked".to_string()),
+        }
     }
 
     conv_res.map_err(|e| format!("Conversion error: {}", e))

@@ -12,6 +12,7 @@ Converts DSD to PCM on the command line with the following features:
   - The dither will be optimized accordingly, including for 20 bit output.
 - Allows you to choose between different decimation filters.
 - Uses available CPU threads in parallel, with progress bars for each conversion
+  - (Progress bars only visible when not reading from stdin or writing to stdout)
 
 ![Progress bars](/asset/progress.jpg)
 
