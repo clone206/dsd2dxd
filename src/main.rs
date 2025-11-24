@@ -84,7 +84,7 @@ struct Cli {
     /// 176400, 192000, 352800, 384000. Note that conversion
     /// to multiples of 44100 are faster than 48000 multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
-    output_rate: i32,
+    output_rate: u32,
 
     /// Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256)
     #[arg(short = 'i', long = "inrate", default_value = "1")]
