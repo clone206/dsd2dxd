@@ -219,6 +219,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsd-reader"
+version = "0.1.0"
+dependencies = [
+ "dff-meta",
+ "dsf-meta",
+ "id3",
+ "log",
+]
+
+[[package]]
 name = "dsd2dxd"
 version = "2.4.1"
 dependencies = [
@@ -484,6 +494,7 @@ name = "rdsd2pcm"
 version = "0.1.1"
 dependencies = [
  "dff-meta",
+ "dsd-reader",
  "dsf-meta",
  "flac-codec",
  "id3",
