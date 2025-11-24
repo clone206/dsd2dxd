@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "dsd2dxd"
-version = "2.4.0"
+version = "2.4.1"
 dependencies = [
  "clap",
  "colored",
@@ -232,8 +232,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "dsf"
-version = "0.2.2"
+name = "dsf-meta"
+version = "0.2.3"
 dependencies = [
  "id3",
  "sampled_data_duration",
@@ -482,7 +482,7 @@ name = "rdsd2pcm"
 version = "0.1.1"
 dependencies = [
  "dff-meta",
- "dsf",
+ "dsf-meta",
  "flac-codec",
  "id3",
  "log",

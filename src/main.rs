@@ -25,11 +25,12 @@ use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use log::{info, trace, warn};
-use rdsd2pcm::{
-    DitherType, Endianness, FilterType, FmtType, ONE_HUNDRED_PERCENT,
-    OutputType,
-};
 use rayon::prelude::*;
+use rdsd2pcm::{
+    DitherType, DsdFileFormat, Endianness, FilterType, FmtType,
+    FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, Rdsd2Pcm,
+    find_dsd_files,
+};
 use std::thread::available_parallelism;
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
@@ -84,11 +85,11 @@ struct Cli {
     /// 176400, 192000, 352800, 384000. Note that conversion
     /// to multiples of 44100 are faster than 48000 multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
-    output_rate: i32,
+    output_rate: u32,
 
     /// Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256)
     #[arg(short = 'i', long = "inrate", default_value = "1")]
-    input_rate: i32,
+    input_rate: u32,
 
     /// Output type: S (stdout), A (aif), W (wave), F (flac)
     /// Note that W, A, or F outputs to either
@@ -143,15 +144,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     let avail_par = available_parallelism().map(|n| n.get()).unwrap_or(1);
     let thread_count = (avail_par / 2).max(1);
 
-    trace!("Threads available: {}", thread_count);
-
     // Configure Rayon pool size to our computed thread_count.
     // build_global can only be called once; ignore error if already set.
     if let Err(e) = rayon::ThreadPoolBuilder::new()
         .num_threads(thread_count)
         .build_global()
     {
-        warn!("Rayon pool already initialized ({} threads). Details: {:?}", thread_count, e);
+        warn!(
+            "Rayon pool initialization error ({} threads). Details: {:?}",
+            thread_count, e
+        );
     } else {
         trace!("Configured Rayon pool with {} threads", thread_count);
     }
@@ -223,8 +225,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
-        do_conversion(
-            None,
+        convert_stdin(
             &cli,
             output,
             dither_type,
@@ -232,10 +233,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             endian,
             filt_type,
             cwd.clone(),
-            &multi,
-        ).map_err(|e| -> Box<dyn Error> {
-            Box::new(io::Error::new(io::ErrorKind::Other, e))
-        })?;
+        )?;
         total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
@@ -257,7 +255,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .cloned()
         .collect::<Vec<_>>();
 
-    let expanded_paths = rdsd2pcm::find_dsd_files(&paths, cli.recurse)?;
+    let expanded_paths = find_dsd_files(&paths, cli.recurse)?;
     let num_paths = expanded_paths.len();
     total_inputs += num_paths;
 
@@ -267,8 +265,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         .try_for_each(|path| {
             // Parse CLI in-thread to avoid sharing non-Send/Sync fields.
             let cli_local = Cli::parse();
-            do_conversion(
-                Some(path),
+            convert_file(
+                path,
                 &cli_local,
                 output,
                 dither_type,
@@ -277,6 +275,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 filt_type,
                 cwd.clone(),
                 &multi,
+                output != OutputType::Stdout,
             )
         })
         .map_err(|e| -> Box<dyn Error> {
@@ -296,20 +295,18 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Run conversion for single input and report progress to stderr
-fn do_conversion(
-    path: Option<PathBuf>,
+/// Run conversion for stdin. Single threaded.
+fn convert_stdin(
     cli: &Cli,
-    output: rdsd2pcm::OutputType,
-    dither_type: rdsd2pcm::DitherType,
-    format: rdsd2pcm::FmtType,
-    endian: rdsd2pcm::Endianness,
-    filt_type: rdsd2pcm::FilterType,
+    output: OutputType,
+    dither_type: DitherType,
+    format: FmtType,
+    endian: Endianness,
+    filt_type: FilterType,
     cwd: PathBuf,
-    multi: &MultiProgress,
-) -> Result<(), String> {
+) -> Result<(), Box<dyn Error>> {
     // Construct a fresh conversion context per input to avoid moving a shared `lib`.
-    let mut lib = rdsd2pcm::Rdsd2Pcm::new(
+    let mut lib = Rdsd2Pcm::new(
         cli.bit_depth,
         output,
         cli.level,
@@ -318,51 +315,107 @@ fn do_conversion(
         dither_type,
         format,
         endian,
-        cli.input_rate,
+        cli.input_rate.try_into()?,
         cli.block_size.unwrap_or(4096),
         cli.channels.unwrap_or(2),
         filt_type,
         cli.append_rate,
         cwd,
-        path,
-    ).map_err(|e| e.to_string())?;
-    let (sender, receiver) = mpsc::channel::<f32>();
-    let file_name = lib.file_name();
-
-    let style = ProgressStyle::with_template(
-        "{prefix} {bar:20.cyan/blue} {percent}{msg}",
+        None,
     )
     .map_err(|e| e.to_string())?;
 
-    let pg = multi
-        .add(ProgressBar::new(100))
-        .with_style(style)
-        .with_prefix(format!(
-            "{} {}",
-            "[Converting]".bold(),
-            file_name.bold()
-        ))
-        .with_message("%");
+    lib.do_conversion(None)
+}
 
-    // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
-    let progress_handle = std::thread::spawn(move || {
-        while let Ok(progress) = receiver.recv() {
-            pg.set_position(progress.floor() as u64);
-            if progress == ONE_HUNDRED_PERCENT {
-                break;
+/// Run conversion for single input and report progress to stderr if requested.
+fn convert_file(
+    path: PathBuf,
+    cli: &Cli,
+    output: OutputType,
+    dither_type: DitherType,
+    format: FmtType,
+    endian: Endianness,
+    filt_type: FilterType,
+    cwd: PathBuf,
+    multi: &MultiProgress,
+    show_progress: bool,
+) -> Result<(), String> {
+    let mut lib = if DsdFileFormat::from(&path).is_container() {
+        Rdsd2Pcm::from_container(
+            cli.bit_depth,
+            output,
+            cli.level,
+            cli.output_rate,
+            cli.path.clone(),
+            dither_type,
+            filt_type,
+            cli.append_rate,
+            cwd,
+            path,
+        )
+        .map_err(|e| e.to_string())?
+    } else {
+        Rdsd2Pcm::new(
+            cli.bit_depth,
+            output,
+            cli.level,
+            cli.output_rate,
+            cli.path.clone(),
+            dither_type,
+            format,
+            endian,
+            cli.input_rate.try_into()?,
+            cli.block_size.unwrap_or(4096),
+            cli.channels.unwrap_or(2),
+            filt_type,
+            cli.append_rate,
+            cwd,
+            Some(path),
+        )
+        .map_err(|e| e.to_string())?
+    };
+
+    let (progress_handle, sender) = if show_progress {
+        let (sender, receiver) = mpsc::channel::<f32>();
+        let file_name = lib.file_name();
+        let style = ProgressStyle::with_template(
+            "{prefix} {bar:20.cyan/blue} {percent}{msg}",
+        )
+        .map_err(|e| e.to_string())?;
+
+        let pg = multi
+            .add(ProgressBar::new(100))
+            .with_style(style)
+            .with_prefix(format!(
+                "{} {}",
+                "[Converting]".bold(),
+                file_name.bold()
+            ))
+            .with_message("%");
+
+        // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
+        let progress_handle = std::thread::spawn(move || {
+            while let Ok(progress) = receiver.recv() {
+                pg.set_position(progress.floor() as u64);
+                if progress == ONE_HUNDRED_PERCENT {
+                    break;
+                }
             }
-        }
-    });
+        });
+        (Some(progress_handle), Some(sender))
+    } else {
+        (None, None)
+    };
 
     // Perform the blocking conversion here (inside Rayon worker).
-    let conv_res = lib
-        .do_conversion(Some(sender))
-        .map_err(|e| e.to_string());
+    let conv_res = lib.do_conversion(sender);
 
-    // Ensure progress thread exits and propagate errors.
-    match progress_handle.join() {
-        Ok(()) => {}
-        Err(_) => return Err("Progress thread panicked".to_string()),
+    if let Some(progress_handle) = progress_handle
+        && let Err(e) = progress_handle.join()
+    {
+        // Ensure progress thread exits and propagate errors.
+        return Err(format!("Progress thread panicked: {:?}", e));
     }
 
     conv_res.map_err(|e| format!("Conversion error: {}", e))
