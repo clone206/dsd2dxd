@@ -27,7 +27,9 @@ use indicatif_log_bridge::LogWrapper;
 use log::{info, trace, warn};
 use rayon::prelude::*;
 use rdsd2pcm::{
-    DitherType, DsdFileFormat, Endianness, FilterType, FmtType, FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, Rdsd2Pcm, find_dsd_files
+    DitherType, DsdFileFormat, Endianness, FilterType, FmtType,
+    FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, Rdsd2Pcm,
+    find_dsd_files,
 };
 use std::thread::available_parallelism;
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
