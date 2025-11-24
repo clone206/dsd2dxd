@@ -233,7 +233,7 @@ dependencies = [
 
 [[package]]
 name = "dsf-meta"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "id3",
  "sampled_data_duration",
