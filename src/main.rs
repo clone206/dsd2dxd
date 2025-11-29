@@ -48,7 +48,7 @@ struct Cli {
 
     /// Number of channels
     #[arg(short = 'c', long = "channels", default_value = "2")]
-    channels: Option<u32>,
+    channels: Option<usize>,
 
     /// DSD data format: Interleaved (I) or Planar (P)
     #[arg(short = 'f', long = "fmt", default_value = "I")]
@@ -56,7 +56,7 @@ struct Cli {
 
     /// Output bit depth: 16, 20, 24 (fixed integer), or 32 (float)
     #[arg(short = 'b', long = "bitdepth", default_value = "24")]
-    bit_depth: i32,
+    bit_depth: usize,
 
     /// Filter type: E (Equiripple), X (XLD. Only available with
     /// DSD64 input and 88200, 176400, and 352800 outputs),
