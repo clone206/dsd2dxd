@@ -27,14 +27,14 @@ use indicatif_log_bridge::LogWrapper;
 use log::{info, trace, warn};
 use rayon::prelude::*;
 use rdsd2pcm::{
-    DitherType, DsdFileFormat, Endianness, FilterType, FmtType,
-    FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, Rdsd2Pcm,
-    find_dsd_files,
+    DitherType, DsdFileFormat, Endianness, FilterType, FmtType, FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, ProgressUpdate, Rdsd2Pcm, find_dsd_files
 };
+use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
 use crate::model::TermResult;
+static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser)]
 #[command(name = "dsd2dxd", version)]
@@ -325,7 +325,7 @@ fn convert_stdin(
     )
     .map_err(|e| e.to_string())?;
 
-    lib.do_conversion(None)
+    lib.do_conversion(&CANCEL_FLAG, None)
 }
 
 /// Run conversion for single input and report progress to stderr if requested.
@@ -377,7 +377,7 @@ fn convert_file(
     };
 
     let (progress_handle, sender) = if show_progress {
-        let (sender, receiver) = mpsc::channel::<f32>();
+        let (sender, receiver) = mpsc::channel::<ProgressUpdate>();
         let file_name = lib.file_name();
         let style = ProgressStyle::with_template(
             "{prefix} {bar:20.cyan/blue} {percent}{msg}",
@@ -397,8 +397,8 @@ fn convert_file(
         // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
         let progress_handle = std::thread::spawn(move || {
             while let Ok(progress) = receiver.recv() {
-                pg.set_position(progress.floor() as u64);
-                if progress == ONE_HUNDRED_PERCENT {
+                pg.set_position(progress.percent.floor() as u64);
+                if progress.percent == ONE_HUNDRED_PERCENT {
                     break;
                 }
             }
@@ -409,7 +409,7 @@ fn convert_file(
     };
 
     // Perform the blocking conversion here (inside Rayon worker).
-    let conv_res = lib.do_conversion(sender);
+    let conv_res = lib.do_conversion(&CANCEL_FLAG, sender);
 
     if let Some(progress_handle) = progress_handle
         && let Err(e) = progress_handle.join()
