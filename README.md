@@ -183,7 +183,7 @@ dsd2dxd includes shell scripts to compile and test with 1kHz test tone files.
 .dsd files found here with `_p` in the names are the equivalent of the corresponding .dsf files with the header metadata stripped off. This means they have a block size of `4096` and are planar format.
 
 ### Windows
-There are also powershell scripts for testing in windows, but they expect powershell version 7.5 or higher, which by default should allow raw bit streams to be passed through pipes. As with the above shell scripts, ffmpeg is a dependency. You would have to find a windows build, and make sure the ffmpeg.exe file is added to the local machine's `PATH` environment variable.
+There are also powershell scripts for testing in windows, but they expect powershell version 7.5 or higher, which by default should allow raw bit streams to be passed through pipes. As with the above shell scripts, ffmpeg is a dependency. You would have to find a windows build, and make sure the folder containing the ffmpeg.exe and ffplay.exe files is added to the local machine's `PATH` environment variable.
 
 ```powershell
 .\build_test_mono.ps1 P 24 L 4 test\1kHz_mono_p.dsd
