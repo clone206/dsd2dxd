@@ -4,9 +4,10 @@ use std::time::Instant;
 use clap::Parser;
 use rdsd2pcm::DsdReader;
 
-const DEFAULT_FILTER_ORDER: usize = 12;
+const FILTER_ORDER: usize = 6;
 const FILTER_CUTOFF_HZ: f64 = 21_000.0;
 const DSD64_FS_HZ: f64 = 2_822_400.0;
+const PEAK_SCAN_DECIM_DSD64: u64 = 16;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -18,14 +19,6 @@ struct Args {
 	/// One or more input DSD container files (.dsf or .dff)
 	#[arg(required = true)]
 	paths: Vec<PathBuf>,
-
-	/// Print per-channel peaks in addition to overall peak
-	#[arg(long, default_value_t = false)]
-	per_channel: bool,
-
-	/// Butterworth lowpass order (even only). Lower is faster but less selective.
-	#[arg(long, default_value_t = DEFAULT_FILTER_ORDER)]
-	order: usize,
 }
 
 fn is_dsd_container_path(path: &Path) -> bool {
@@ -214,8 +207,6 @@ impl ChannelFilter {
 
 fn process_file(
 	path: &Path,
-	per_channel: bool,
-	filter_order: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	if !is_dsd_container_path(path) {
 		return Err(format!(
@@ -233,11 +224,11 @@ fn process_file(
 	if FILTER_CUTOFF_HZ <= 0.0 {
 		return Err("FILTER_CUTOFF_HZ must be > 0".into());
 	}
-	if filter_order == 0 {
-		return Err("filter order must be > 0".into());
+	if FILTER_ORDER == 0 {
+		return Err("FILTER_ORDER must be > 0".into());
 	}
-	if filter_order % 2 != 0 {
-		return Err("filter order must be even".into());
+	if FILTER_ORDER % 2 != 0 {
+		return Err("FILTER_ORDER must be even".into());
 	}
 	if FILTER_CUTOFF_HZ >= fs_hz / 2.0 {
 		return Err(format!(
@@ -255,13 +246,18 @@ fn process_file(
 		.into());
 	}
 
-	let sos = design_butterworth_lowpass_sos(filter_order, fs_hz, FILTER_CUTOFF_HZ)?;
+	let sos = design_butterworth_lowpass_sos(FILTER_ORDER, fs_hz, FILTER_CUTOFF_HZ)?;
 	let channels = dsd_reader.channels_num();
 	let mut chan_filters: Vec<ChannelFilter> = (0..channels).map(|_| ChannelFilter::new(&sos)).collect();
-	let mut chan_peaks: Vec<f64> = vec![0.0; channels];
+	let mut chan_peaks: Vec<f32> = vec![0.0; channels];
 	let mut dsd_iter = dsd_reader.dsd_iter()?;
 	let wall_start = Instant::now();
 	let mut bits_processed_per_chan: u64 = 0;
+	let peak_scan_decim = PEAK_SCAN_DECIM_DSD64
+		.saturating_mul(dsd_reader.dsd_rate() as u64)
+		.max(1);
+	let mut chan_sample_idx: Vec<u64> = vec![0; channels];
+	let mut chan_next_check: Vec<u64> = vec![0; channels];
 
 	for (read_size, chan_bufs) in &mut dsd_iter {
 		if channels == 0 {
@@ -287,10 +283,15 @@ fn process_file(
 					if !y.is_finite() {
 						return Err("Non-finite filtered samples (overflow/instability)".into());
 					}
-					let ay = (y.abs()) as f64;
-					if ay > chan_peaks[chan] {
-						chan_peaks[chan] = ay;
+					let idx = chan_sample_idx[chan];
+					if idx == chan_next_check[chan] {
+						let ay = y.abs();
+						if ay > chan_peaks[chan] {
+							chan_peaks[chan] = ay;
+						}
+						chan_next_check[chan] = chan_next_check[chan].saturating_add(peak_scan_decim);
 					}
+					chan_sample_idx[chan] = idx.saturating_add(1);
 					mask <<= 1;
 				}
 			}
@@ -312,7 +313,8 @@ fn process_file(
 	let mut per_chan_peaks_dbfs = Vec::with_capacity(channels);
 	let mut overall_peak_dbfs = f64::NEG_INFINITY;
 	for &p in &chan_peaks {
-		let db = if p == 0.0 { f64::NEG_INFINITY } else { 20.0 * p.log10() };
+		let pf = p as f64;
+		let db = if pf == 0.0 { f64::NEG_INFINITY } else { 20.0 * pf.log10() };
 		per_chan_peaks_dbfs.push(db);
 		if db > overall_peak_dbfs {
 			overall_peak_dbfs = db;
@@ -323,17 +325,12 @@ fn process_file(
 		"{}: peak={:.2} dBFS (order={}, fc={} Hz, fs={} Hz, elapsed={:.3}s, xRT={:.2})",
 		path.display(),
 		overall_peak_dbfs,
-		filter_order,
+		FILTER_ORDER,
 		FILTER_CUTOFF_HZ,
 		fs_hz,
 		elapsed_s,
 		x_realtime
 	);
-	if per_channel {
-		for (i, db) in per_chan_peaks_dbfs.iter().enumerate() {
-			println!("  ch{}: {:.2} dBFS", i + 1, db);
-		}
-	}
 
 	Ok(())
 }
@@ -341,7 +338,7 @@ fn process_file(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
 	for path in &args.paths {
-		if let Err(e) = process_file(path, args.per_channel, args.order) {
+		if let Err(e) = process_file(path) {
 			eprintln!("{}: error: {}", path.display(), e);
 		}
 	}
