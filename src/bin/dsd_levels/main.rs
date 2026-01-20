@@ -1,346 +1,311 @@
-use std::path::{Path, PathBuf};
+use std::error::Error;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
+use std::thread::available_parallelism;
 use std::time::Instant;
+use std::io;
 
 use clap::Parser;
-use rdsd2pcm::DsdReader;
+use colored::Colorize;
+use dsd2dxd::ColorLogger;
+use dsd2dxd::TermResult;
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use indicatif_log_bridge::LogWrapper;
+use log::{info, warn};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use rdsd2pcm::{
+    DitherType, DsdFileFormat, Endianness, FilterType, FmtType,
+    FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, ProgressUpdate,
+    Rdsd2Pcm, find_dsd_files,
+};
 
-const FILTER_ORDER: usize = 6;
-const FILTER_CUTOFF_HZ: f64 = 21_000.0;
-const DSD64_FS_HZ: f64 = 2_822_400.0;
-const PEAK_SCAN_DECIM_DSD64: u64 = 16;
+static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser, Debug)]
 #[command(
-	name = "dsd_levels",
-	about = "Compute peak level (dBFS) of DSF/DFF after Butterworth lowpass",
-	version
+    name = "dsd_levels",
+    about = "Compute peak level (dBFS) of DSF/DFF after Butterworth lowpass",
+    version
 )]
-struct Args {
-	/// One or more input DSD container files (.dsf or .dff)
-	#[arg(required = true)]
-	paths: Vec<PathBuf>,
+struct Cli {
+    /// One or more input DSD container files (.dsf or .dff)
+    #[arg(required = true)]
+    files: Vec<PathBuf>,
+
+    /// Recurse into directories when the supplied input paths include folders
+    #[arg(short = 'R', long = "recurse")]
+    recurse: bool,
+
+    /// Number of channels
+    #[arg(short = 'c', long = "channels", default_value = "2")]
+    channels: Option<usize>,
+
+    /// DSD data format: Interleaved (I) or Planar (P)
+    #[arg(short = 'f', long = "fmt", default_value = "I")]
+    format: char,
+
+    /// DSD data endianness: M (most significant bit first),
+    /// or L (least significant bit first)
+    #[arg(short = 'e', long = "endianness", default_value = "M")]
+    endianness: char,
+
+    /// DSD block size in bytes. Only set this if you know
+    /// what you're doing.
+    #[arg(short = 's', long = "bs", default_value = "4096")]
+    block_size: Option<u32>,
+
+    /// Output sample rate in Hz. Can be 88200, 96000,
+    /// 176400, 192000, 352800, 384000. Note that conversion
+    /// to multiples of 44100 are faster than 48000 multiples
+    #[arg(short = 'r', long = "rate", default_value = "352800")]
+    output_rate: u32,
+
+    /// Input DSD rate: 1 (DSD64), 2 (DSD128), or 4 (DSD256)
+    #[arg(short = 'i', long = "inrate", default_value = "1")]
+    input_rate: u32,
 }
 
-fn is_dsd_container_path(path: &Path) -> bool {
-	let Some(ext) = path.extension().and_then(|s| s.to_str()) else {
-		return false;
-	};
-	matches!(ext.to_ascii_lowercase().as_str(), "dsf" | "dff")
+fn main() -> TermResult {
+    match run() {
+        Ok(()) => TermResult(Ok(())),
+        Err(e) => TermResult(Err(e.into())),
+    }
 }
 
-fn dsd_sampling_frequency_hz(dsd_reader: &DsdReader) -> f64 {
-	let multiplier = dsd_reader.dsd_rate() as f64;
-	DSD64_FS_HZ * multiplier
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+    let logger = ColorLogger::new(false, false);
+    let multi = MultiProgress::new();
+    LogWrapper::new(multi.clone(), logger).try_init()?;
+
+    let avail_par = available_parallelism().map(|n| n.get()).unwrap_or(1);
+    let thread_count = (avail_par / 2).max(1);
+
+    // Configure Rayon pool size to our computed thread_count.
+    // build_global can only be called once; ignore error if already set.
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .num_threads(thread_count)
+        .build_global()
+    {
+        warn!(
+            "Rayon pool initialization error ({} threads). Details: {:?}",
+            thread_count, e
+        );
+    }
+
+    let format =
+        match cli.format.to_ascii_lowercase() {
+            'i' => FmtType::Interleaved,
+            'p' => FmtType::Planar,
+            _ => return Err(
+                "Invalid format; must be I (interleaved) or P (planar)"
+                    .into(),
+            ),
+        };
+
+    let endian = match cli.endianness.to_ascii_lowercase() {
+        'l' => Endianness::LsbFirst,
+        'm' => Endianness::MsbFirst,
+        _ => Endianness::MsbFirst,
+    };
+
+    let cwd = std::env::current_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+    let mut inputs = if cli.files.is_empty() {
+        vec![PathBuf::from("-")]
+    } else {
+        cli.files.clone()
+    };
+
+    inputs.sort();
+    inputs.dedup();
+
+    let mut total_inputs = 0;
+    let wall_start = Instant::now();
+
+    // Handle stdin conversion once, then remove it so we don't treat it as a file path.
+    if inputs.contains(&PathBuf::from("-")) {
+        check_stdin(&cli, format, endian, cwd.clone())?;
+        total_inputs += 1;
+        inputs.retain(|p| p != &PathBuf::from("-"));
+    }
+
+    // Filter to remove any glob patterns, yielding all inputted paths
+    let paths = inputs
+        .iter()
+        .filter_map(|input| {
+            if input.to_string_lossy().contains('*') {
+                warn!(
+                    "Unexpanded glob pattern detected in input: \"{}\". Skipping.",
+                    input.display()
+                );
+                None
+            } else {
+                Some(input)
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let expanded_paths = find_dsd_files(&paths, cli.recurse)?;
+    let num_paths = expanded_paths.len();
+    total_inputs += num_paths;
+
+    // Parallelize per input using Rayon; short-circuit on first error.
+    expanded_paths
+        .into_par_iter()
+        .try_for_each(|path| {
+            // Parse CLI in-thread to avoid sharing non-Send/Sync fields.
+            let cli_local = Cli::parse();
+            check_file(
+                path,
+                &cli_local,
+                format,
+                endian,
+                cwd.clone(),
+                &multi,
+            )
+        })
+        .map_err(|e| -> Box<dyn Error> {
+            Box::new(io::Error::new(io::ErrorKind::Other, e))
+        })?;
+
+    let total_elapsed = wall_start.elapsed();
+    let total_secs = total_elapsed.as_secs();
+    let h = total_secs / 3600;
+    let m = (total_secs % 3600) / 60;
+    let s = total_secs % 60;
+    info!(
+        "Analyzed {} inputs in {:02}:{:02}:{:02}",
+        total_inputs, h, m, s
+    );
+
+    Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Complex {
-	re: f64,
-	im: f64,
+fn check_file(
+    path: PathBuf,
+    cli: &Cli,
+    format: FmtType,
+    endian: Endianness,
+    cwd: PathBuf,
+    multi: &MultiProgress,
+) -> Result<(), String> {
+    let file_name = if let Some(name) = path.file_name() {
+        name.to_string_lossy().into_owned()
+    } else {
+        return Err(format!("Invalid file path: {}", path.display()));
+    };
+    let mut lib = if DsdFileFormat::from(&path).is_container() {
+        Rdsd2Pcm::from_container(
+            32,
+            OutputType::Stdout,
+            0.0,
+            cli.output_rate,
+            None,
+            DitherType::None,
+            FilterType::Equiripple,
+            false,
+            cwd,
+            path,
+        )
+        .map_err(|e| e.to_string())?
+    } else {
+        Rdsd2Pcm::new(
+            32,
+            OutputType::Stdout,
+            0.0,
+            cli.output_rate,
+            None,
+            DitherType::None,
+            format,
+            endian,
+            cli.input_rate.try_into()?,
+            cli.block_size.unwrap_or(4096),
+            cli.channels.unwrap_or(2),
+            FilterType::Equiripple,
+            false,
+            cwd,
+            Some(path),
+        )
+        .map_err(|e| e.to_string())?
+    };
+
+    let (sender, receiver) = mpsc::channel::<ProgressUpdate>();
+
+    let style = ProgressStyle::with_template(
+        "{prefix} {bar:20.cyan/blue} {percent}{msg}",
+    )
+    .map_err(|e| e.to_string())?;
+
+    let pg = multi
+        .add(ProgressBar::new(100))
+        .with_style(style)
+        .with_prefix(format!(
+            "{} {}",
+            "[Analyzing]".bold(),
+            file_name.bold()
+        ))
+        .with_message("%");
+
+    // Run conversion on this Rayon worker; drive progress on a lightweight OS thread.
+    let progress_handle = std::thread::spawn(move || {
+        while let Ok(progress) = receiver.recv() {
+            pg.set_position(progress.percent.floor() as u64);
+            if progress.percent == ONE_HUNDRED_PERCENT {
+                break;
+            }
+        }
+    });
+
+    let peak_res = lib.check_level(&CANCEL_FLAG, Some(sender));
+
+    if let Err(e) = progress_handle.join() {
+        // Ensure progress thread exits and propagate errors.
+        return Err(format!("Progress thread panicked: {:?}", e));
+    }
+
+    match peak_res {
+        Ok(peak) => {
+            info!("{}: peak level = {:.2} dBFS", file_name, peak);
+            Ok(())
+        }
+        Err(e) => {
+            return Err(format!("Error processing {}: {}", file_name, e));
+        }
+    }
 }
 
-impl Complex {
-	fn conj(self) -> Self {
-		Self {
-			re: self.re,
-			im: -self.im,
-		}
-	}
-}
-
-use std::ops::{Add, Div, Mul, Sub};
-
-impl Add for Complex {
-	type Output = Complex;
-	fn add(self, rhs: Complex) -> Complex {
-		Complex {
-			re: self.re + rhs.re,
-			im: self.im + rhs.im,
-		}
-	}
-}
-
-impl Sub for Complex {
-	type Output = Complex;
-	fn sub(self, rhs: Complex) -> Complex {
-		Complex {
-			re: self.re - rhs.re,
-			im: self.im - rhs.im,
-		}
-	}
-}
-
-impl Mul for Complex {
-	type Output = Complex;
-	fn mul(self, rhs: Complex) -> Complex {
-		Complex {
-			re: self.re * rhs.re - self.im * rhs.im,
-			im: self.re * rhs.im + self.im * rhs.re,
-		}
-	}
-}
-
-impl Div for Complex {
-	type Output = Complex;
-	fn div(self, rhs: Complex) -> Complex {
-		let denom = rhs.re * rhs.re + rhs.im * rhs.im;
-		Complex {
-			re: (self.re * rhs.re + self.im * rhs.im) / denom,
-			im: (self.im * rhs.re - self.re * rhs.im) / denom,
-		}
-	}
-}
-
-#[derive(Clone, Copy, Debug)]
-struct BiquadCoeffs {
-	b0: f32,
-	b1: f32,
-	b2: f32,
-	a1: f32,
-	a2: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct BiquadState {
-	coeffs: BiquadCoeffs,
-	z1: f32,
-	z2: f32,
-}
-
-impl BiquadState {
-	fn new(coeffs: BiquadCoeffs) -> Self {
-		Self { coeffs, z1: 0.0, z2: 0.0 }
-	}
-
-	#[inline(always)]
-	fn process(&mut self, x: f32) -> f32 {
-		// Transposed direct-form II
-		let y = self.coeffs.b0 * x + self.z1;
-		let z1 = self.coeffs.b1 * x - self.coeffs.a1 * y + self.z2;
-		let z2 = self.coeffs.b2 * x - self.coeffs.a2 * y;
-		self.z1 = z1;
-		self.z2 = z2;
-		y
-	}
-}
-
-fn design_butterworth_lowpass_sos(
-	order: usize,
-	fs_hz: f64,
-	cutoff_hz: f64,
-) -> Result<Vec<BiquadCoeffs>, Box<dyn std::error::Error>> {
-	if order == 0 || order % 2 != 0 {
-		return Err("Only even Butterworth orders are supported".into());
-	}
-	if !(fs_hz.is_finite() && fs_hz > 0.0) {
-		return Err("fs_hz must be finite and > 0".into());
-	}
-	if !(cutoff_hz.is_finite() && cutoff_hz > 0.0) {
-		return Err("cutoff_hz must be finite and > 0".into());
-	}
-	if cutoff_hz >= fs_hz / 2.0 {
-		return Err("cutoff_hz must be < Nyquist".into());
-	}
-
-	// Prewarp analog cutoff (rad/s) for bilinear transform.
-	let omega_c = 2.0 * fs_hz * (std::f64::consts::PI * cutoff_hz / fs_hz).tan();
-	let k = 2.0 * fs_hz;
-
-	let mut sections = Vec::with_capacity(order / 2);
-	for i in 0..(order / 2) {
-		let theta = std::f64::consts::PI * ((2.0 * (i as f64) + 1.0) / (2.0 * (order as f64)) + 0.5);
-		let pole_s = Complex {
-			re: omega_c * theta.cos(),
-			im: omega_c * theta.sin(),
-		};
-		// Bilinear transform: z = (k + s) / (k - s)
-		let pole_z = (Complex { re: k, im: 0.0 } + pole_s) / (Complex { re: k, im: 0.0 } - pole_s);
-		let pole_z_conj = pole_z.conj();
-
-		let sum = pole_z + pole_z_conj; // 2*re
-		let prod = pole_z * pole_z_conj; // |z|^2
-
-		// Denominator: (1 - p1 z^-1)(1 - p2 z^-1) = 1 - (p1+p2) z^-1 + (p1 p2) z^-2
-		let a1 = -sum.re;
-		let a2 = prod.re;
-
-		// Numerator zeros at z=-1 (double): (1 + z^-1)^2 = 1 + 2 z^-1 + z^-2
-		// Choose gain so that DC gain is 1: H(1) = (b0+b1+b2) / (1+a1+a2) = 1
-		let denom_dc = 1.0 + a1 + a2;
-		let b0 = denom_dc / 4.0;
-		let b1 = 2.0 * b0;
-		let b2 = b0;
-
-		sections.push(BiquadCoeffs {
-			b0: b0 as f32,
-			b1: b1 as f32,
-			b2: b2 as f32,
-			a1: a1 as f32,
-			a2: a2 as f32,
-		});
-	}
-
-	Ok(sections)
-}
-
-#[derive(Debug)]
-struct ChannelFilter {
-	sections: Vec<BiquadState>,
-}
-
-impl ChannelFilter {
-	fn new(section_coeffs: &[BiquadCoeffs]) -> Self {
-		Self {
-			sections: section_coeffs.iter().copied().map(BiquadState::new).collect(),
-		}
-	}
-
-	#[inline(always)]
-	fn process(&mut self, x: f32) -> f32 {
-		let mut y = x;
-		for s in &mut self.sections {
-			y = s.process(y);
-		}
-		y
-	}
-}
-
-fn process_file(
-	path: &Path,
+fn check_stdin(
+    cli: &Cli,
+    format: FmtType,
+    endian: Endianness,
+    cwd: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	if !is_dsd_container_path(path) {
-		return Err(format!(
-			"Unsupported input (expected .dsf/.dff): {}",
-			path.display()
-		)
-		.into());
-	}
+    let mut lib = Rdsd2Pcm::new(
+        32,
+        OutputType::Stdout,
+        0.0,
+        cli.output_rate,
+        None,
+        DitherType::None,
+        format,
+        endian,
+        cli.input_rate.try_into()?,
+        cli.block_size.unwrap_or(4096),
+        cli.channels.unwrap_or(2),
+        FilterType::Equiripple,
+        false,
+        cwd,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
 
-	let dsd_reader = DsdReader::from_container(path.to_path_buf())?;
-	let fs_hz_dsd = dsd_sampling_frequency_hz(&dsd_reader);
-	// We expand packed bytes into a per-bit bipolar stream, so the effective sample rate equals
-	// the DSD bit-rate.
-	let fs_hz = fs_hz_dsd;
-	if FILTER_CUTOFF_HZ <= 0.0 {
-		return Err("FILTER_CUTOFF_HZ must be > 0".into());
-	}
-	if FILTER_ORDER == 0 {
-		return Err("FILTER_ORDER must be > 0".into());
-	}
-	if FILTER_ORDER % 2 != 0 {
-		return Err("FILTER_ORDER must be even".into());
-	}
-	if FILTER_CUTOFF_HZ >= fs_hz / 2.0 {
-		return Err(format!(
-			"FILTER_CUTOFF_HZ must be < Nyquist ({})",
-			fs_hz / 2.0
-		)
-		.into());
-	}
+    let peak = lib.check_level(&CANCEL_FLAG, None)?;
 
-	if FILTER_CUTOFF_HZ >= fs_hz / 2.0 {
-		return Err(format!(
-			"FILTER_CUTOFF_HZ must be < Nyquist ({})",
-			fs_hz / 2.0
-		)
-		.into());
-	}
+    info!("Stdin peak level = {:.2} dBFS", peak);
 
-	let sos = design_butterworth_lowpass_sos(FILTER_ORDER, fs_hz, FILTER_CUTOFF_HZ)?;
-	let channels = dsd_reader.channels_num();
-	let mut chan_filters: Vec<ChannelFilter> = (0..channels).map(|_| ChannelFilter::new(&sos)).collect();
-	let mut chan_peaks: Vec<f32> = vec![0.0; channels];
-	let mut dsd_iter = dsd_reader.dsd_iter()?;
-	let wall_start = Instant::now();
-	let mut bits_processed_per_chan: u64 = 0;
-	let peak_scan_decim = PEAK_SCAN_DECIM_DSD64
-		.saturating_mul(dsd_reader.dsd_rate() as u64)
-		.max(1);
-	let mut chan_sample_idx: Vec<u64> = vec![0; channels];
-	let mut chan_next_check: Vec<u64> = vec![0; channels];
-
-	for (read_size, chan_bufs) in &mut dsd_iter {
-		if channels == 0 {
-			break;
-		}
-		let bytes_per_chan = read_size / channels;
-		let min_chan_buf_len = chan_bufs
-			.iter()
-			.take(channels)
-			.map(|b| b.len())
-			.min()
-			.unwrap_or(0);
-		let valid_bytes = bytes_per_chan.min(min_chan_buf_len);
-		bits_processed_per_chan = bits_processed_per_chan.saturating_add((valid_bytes as u64) * 8);
-		for chan in 0..channels {
-			let chan_buf = &chan_bufs[chan];
-			for &b in &chan_buf[..valid_bytes] {
-				// dsd-reader yields bytes in LSB-first time order.
-				let mut mask = 1u8;
-				for _ in 0..8 {
-					let x: f32 = if (b & mask) != 0 { 1.0 } else { -1.0 };
-					let y = chan_filters[chan].process(x);
-					if !y.is_finite() {
-						return Err("Non-finite filtered samples (overflow/instability)".into());
-					}
-					let idx = chan_sample_idx[chan];
-					if idx == chan_next_check[chan] {
-						let ay = y.abs();
-						if ay > chan_peaks[chan] {
-							chan_peaks[chan] = ay;
-						}
-						chan_next_check[chan] = chan_next_check[chan].saturating_add(peak_scan_decim);
-					}
-					chan_sample_idx[chan] = idx.saturating_add(1);
-					mask <<= 1;
-				}
-			}
-		}
-	}
-
-	let elapsed_s = wall_start.elapsed().as_secs_f64();
-	let audio_s = if fs_hz > 0.0 {
-		(bits_processed_per_chan as f64) / fs_hz
-	} else {
-		0.0
-	};
-	let x_realtime = if elapsed_s > 0.0 {
-		audio_s / elapsed_s
-	} else {
-		f64::INFINITY
-	};
-
-	let mut per_chan_peaks_dbfs = Vec::with_capacity(channels);
-	let mut overall_peak_dbfs = f64::NEG_INFINITY;
-	for &p in &chan_peaks {
-		let pf = p as f64;
-		let db = if pf == 0.0 { f64::NEG_INFINITY } else { 20.0 * pf.log10() };
-		per_chan_peaks_dbfs.push(db);
-		if db > overall_peak_dbfs {
-			overall_peak_dbfs = db;
-		}
-	}
-
-	println!(
-		"{}: peak={:.2} dBFS (order={}, fc={} Hz, fs={} Hz, elapsed={:.3}s, xRT={:.2})",
-		path.display(),
-		overall_peak_dbfs,
-		FILTER_ORDER,
-		FILTER_CUTOFF_HZ,
-		fs_hz,
-		elapsed_s,
-		x_realtime
-	);
-
-	Ok(())
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let args = Args::parse();
-	for path in &args.paths {
-		if let Err(e) = process_file(path) {
-			eprintln!("{}: error: {}", path.display(), e);
-		}
-	}
-	Ok(())
+    Ok(())
 }

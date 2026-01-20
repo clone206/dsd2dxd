@@ -16,11 +16,8 @@
  along with dsd2dxd. If not, see <https://www.gnu.org/licenses/>.
 */
 
-mod color_logger;
-mod model;
-
 use clap::Parser;
-use color_logger::ColorLogger;
+use dsd2dxd::ColorLogger;
 use colored::Colorize;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
@@ -33,7 +30,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
 
-use crate::model::TermResult;
+use dsd2dxd::TermResult;
 static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser)]

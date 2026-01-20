@@ -230,7 +230,7 @@ dependencies = [
 
 [[package]]
 name = "dsd2dxd"
-version = "2.4.2"
+version = "2.5.2"
 dependencies = [
  "clap",
  "colored",
