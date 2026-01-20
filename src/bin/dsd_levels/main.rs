@@ -1,10 +1,10 @@
 use std::error::Error;
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::thread::available_parallelism;
 use std::time::Instant;
-use std::io;
 
 use clap::Parser;
 use colored::Colorize;
@@ -15,9 +15,8 @@ use indicatif_log_bridge::LogWrapper;
 use log::{info, warn};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use rdsd2pcm::{
-    DitherType, DsdFileFormat, Endianness, FilterType, FmtType,
-    FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, ProgressUpdate,
-    Rdsd2Pcm, find_dsd_files,
+    Endianness, FmtType, ONE_HUNDRED_PERCENT, ProgressUpdate, Rdsd2Pcm,
+    find_dsd_files,
 };
 
 static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
@@ -25,7 +24,7 @@ static CANCEL_FLAG: AtomicBool = AtomicBool::new(false);
 #[derive(Parser, Debug)]
 #[command(
     name = "dsd_levels",
-    about = "Compute peak level (dBFS) of DSF/DFF after Butterworth lowpass",
+    about = "Compute peak level (dBFS) of DSD files if they were to be converted to PCM at a given sample rate.",
     version
 )]
 struct Cli {
@@ -110,9 +109,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         _ => Endianness::MsbFirst,
     };
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-
     let mut inputs = if cli.files.is_empty() {
         vec![PathBuf::from("-")]
     } else {
@@ -127,7 +123,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
-        check_stdin(&cli, format, endian, cwd.clone())?;
+        check_stdin(&cli, format, endian)?;
         total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
@@ -159,14 +155,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .try_for_each(|path| {
             // Parse CLI in-thread to avoid sharing non-Send/Sync fields.
             let cli_local = Cli::parse();
-            check_file(
-                path,
-                &cli_local,
-                format,
-                endian,
-                cwd.clone(),
-                &multi,
-            )
+            check_file(path, &cli_local, format, endian, &multi)
         })
         .map_err(|e| -> Box<dyn Error> {
             Box::new(io::Error::new(io::ErrorKind::Other, e))
@@ -190,46 +179,21 @@ fn check_file(
     cli: &Cli,
     format: FmtType,
     endian: Endianness,
-    cwd: PathBuf,
     multi: &MultiProgress,
 ) -> Result<(), String> {
-    let mut lib = if DsdFileFormat::from(&path).is_container() {
-        Rdsd2Pcm::from_container(
-            32,
-            OutputType::Stdout,
-            0.0,
-            cli.output_rate,
-            None,
-            DitherType::None,
-            FilterType::Equiripple,
-            false,
-            cwd,
-            path,
-        )
-        .map_err(|e| e.to_string())?
-    } else {
-        Rdsd2Pcm::new(
-            32,
-            OutputType::Stdout,
-            0.0,
-            cli.output_rate,
-            None,
-            DitherType::None,
-            format,
-            endian,
-            cli.input_rate.try_into()?,
-            cli.block_size.unwrap_or(4096),
-            cli.channels.unwrap_or(2),
-            FilterType::Equiripple,
-            false,
-            cwd,
-            Some(path),
-        )
-        .map_err(|e| e.to_string())?
-    };
+    let mut lib = Rdsd2Pcm::new_level_check(
+        cli.output_rate,
+        Some(path),
+        format,
+        endian,
+        cli.channels.unwrap_or(2),
+        cli.block_size.unwrap_or(4096),
+        cli.input_rate.try_into()?,
+    )
+    .map_err(|e| e.to_string())?;
+    let file_name = lib.file_name();
 
     let (sender, receiver) = mpsc::channel::<ProgressUpdate>();
-    let file_name = lib.file_name();
     let style = ProgressStyle::with_template(
         "{prefix} {bar:20.cyan/blue} {percent}{msg}",
     )
@@ -267,9 +231,7 @@ fn check_file(
             info!("{}: peak level = {:.1} dBFS", file_name.bold(), peak);
             Ok(())
         }
-        Err(e) => {
-            Err(format!("Error processing {}: {}", file_name, e))
-        }
+        Err(e) => Err(format!("Error processing {}: {}", file_name, e)),
     }
 }
 
@@ -277,24 +239,15 @@ fn check_stdin(
     cli: &Cli,
     format: FmtType,
     endian: Endianness,
-    cwd: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut lib = Rdsd2Pcm::new(
-        32,
-        OutputType::Stdout,
-        0.0,
+    let mut lib = Rdsd2Pcm::new_level_check(
         cli.output_rate,
         None,
-        DitherType::None,
         format,
         endian,
-        cli.input_rate.try_into()?,
-        cli.block_size.unwrap_or(4096),
         cli.channels.unwrap_or(2),
-        FilterType::Equiripple,
-        false,
-        cwd,
-        None,
+        cli.block_size.unwrap_or(4096),
+        cli.input_rate.try_into()?,
     )
     .map_err(|e| e.to_string())?;
 
