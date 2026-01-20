@@ -193,11 +193,6 @@ fn check_file(
     cwd: PathBuf,
     multi: &MultiProgress,
 ) -> Result<(), String> {
-    let file_name = if let Some(name) = path.file_name() {
-        name.to_string_lossy().into_owned()
-    } else {
-        return Err(format!("Invalid file path: {}", path.display()));
-    };
     let mut lib = if DsdFileFormat::from(&path).is_container() {
         Rdsd2Pcm::from_container(
             32,
@@ -234,7 +229,7 @@ fn check_file(
     };
 
     let (sender, receiver) = mpsc::channel::<ProgressUpdate>();
-
+    let file_name = lib.file_name();
     let style = ProgressStyle::with_template(
         "{prefix} {bar:20.cyan/blue} {percent}{msg}",
     )
@@ -269,11 +264,11 @@ fn check_file(
 
     match peak_res {
         Ok(peak) => {
-            info!("{}: peak level = {:.2} dBFS", file_name, peak);
+            info!("{}: peak level = {:.1} dBFS", file_name.bold(), peak);
             Ok(())
         }
         Err(e) => {
-            return Err(format!("Error processing {}: {}", file_name, e));
+            Err(format!("Error processing {}: {}", file_name, e))
         }
     }
 }
