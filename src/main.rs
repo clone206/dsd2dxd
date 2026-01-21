@@ -17,15 +17,19 @@
 */
 
 use clap::Parser;
-use dsd2dxd::ColorLogger;
 use colored::Colorize;
+use common_path::common_path_all;
+use dsd2dxd::ColorLogger;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use indicatif_log_bridge::LogWrapper;
 use log::{info, trace, warn};
 use rayon::prelude::*;
 use rdsd2pcm::{
-    DitherType, DsdFileFormat, Endianness, FilterType, FmtType, FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, ProgressUpdate, Rdsd2Pcm, find_dsd_files
+    DitherType, DsdFileFormat, Endianness, FilterType, FmtType,
+    FormatExtensions, ONE_HUNDRED_PERCENT, OutputType, ProgressUpdate,
+    Rdsd2Pcm, find_dsd_files,
 };
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::thread::available_parallelism;
 use std::{error::Error, io, path::PathBuf, sync::mpsc, time::Instant};
@@ -205,9 +209,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         _ => OutputType::Stdout,
     };
 
-    let cwd = std::env::current_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."));
-
     let mut inputs = if cli.files.is_empty() {
         vec![PathBuf::from("-")]
     } else {
@@ -229,11 +230,22 @@ fn run() -> Result<(), Box<dyn Error>> {
             format,
             endian,
             filt_type,
-            cwd.clone(),
         )?;
         total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
+
+    // Determine base directory against which output paths should be constructed.
+    // Should only come into play when an output folder path is specified.
+    let base_dir = if inputs.len() == 1 {
+        // Just one file; use its parent directory.
+        inputs[0].parent().unwrap_or(Path::new("/")).to_path_buf()
+    } else {
+        // For multiple files, find common parent directory.
+        let common = common_path_all(inputs.iter().map(|p| p.as_path()))
+            .unwrap_or(PathBuf::from("/"));
+        common.parent().unwrap_or(Path::new("/")).to_path_buf()
+    };
 
     // Filter to remove any glob patterns, yielding all inputted paths
     let paths = inputs
@@ -270,7 +282,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 format,
                 endian,
                 filt_type,
-                cwd.clone(),
+                base_dir.clone(),
                 &multi,
                 output != OutputType::Stdout,
             )
@@ -300,7 +312,6 @@ fn convert_stdin(
     format: FmtType,
     endian: Endianness,
     filt_type: FilterType,
-    cwd: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     // Construct a fresh conversion context per input to avoid moving a shared `lib`.
     let mut lib = Rdsd2Pcm::new(
@@ -317,7 +328,8 @@ fn convert_stdin(
         cli.channels.unwrap_or(2),
         filt_type,
         cli.append_rate,
-        cwd,
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".")),
         None,
     )
     .map_err(|e| e.to_string())?;
