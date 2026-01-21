@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::thread::available_parallelism;
@@ -8,6 +9,7 @@ use std::time::Instant;
 
 use clap::Parser;
 use colored::Colorize;
+use dashmap::DashMap;
 use dsd2dxd::ColorLogger;
 use dsd2dxd::TermResult;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -121,9 +123,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut total_inputs = 0;
     let wall_start = Instant::now();
 
+    let levels_by_path: Arc<DashMap<PathBuf, f32>> = Arc::new(DashMap::new());
+
     // Handle stdin conversion once, then remove it so we don't treat it as a file path.
     if inputs.contains(&PathBuf::from("-")) {
-        check_stdin(&cli, format, endian)?;
+        let peak = check_stdin(&cli, format, endian)?;
+        levels_by_path.insert(PathBuf::from("stdin"), peak);
         total_inputs += 1;
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
@@ -152,10 +157,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Parallelize per input using Rayon; short-circuit on first error.
     expanded_paths
         .into_par_iter()
-        .try_for_each(|path| {
+        .try_for_each(|path| -> Result<(), String> {
             // Parse CLI in-thread to avoid sharing non-Send/Sync fields.
             let cli_local = Cli::parse();
-            check_file(path, &cli_local, format, endian, &multi)
+            let levels_by_path = Arc::clone(&levels_by_path);
+
+            let path_key = path.clone();
+            let peak = check_file(path, &cli_local, format, endian, &multi)?;
+            levels_by_path.insert(path_key, peak);
+            Ok(())
         })
         .map_err(|e| -> Box<dyn Error> {
             Box::new(io::Error::new(io::ErrorKind::Other, e))
@@ -171,6 +181,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         total_inputs, h, m, s
     );
 
+    let mut highest_peak: Option<f32> = None;
+    
+    for entry in levels_by_path.iter() {
+        let peak = *entry.value();
+        if peak.is_nan() {
+            continue;
+        }
+
+        highest_peak = Some(match highest_peak {
+            Some(current_highest) => current_highest.max(peak),
+            None => peak,
+        });
+    }
+
+    if let Some(peak) = highest_peak {
+        info!("{}: {:.1} dBFS", "Highest peak level".bold(), peak);
+    } else {
+        warn!("No peak levels collected");
+    }
+
     Ok(())
 }
 
@@ -180,7 +210,7 @@ fn check_file(
     format: FmtType,
     endian: Endianness,
     multi: &MultiProgress,
-) -> Result<(), String> {
+) -> Result<f32, String> {
     let mut lib = Rdsd2Pcm::new_level_check(
         cli.output_rate,
         Some(path),
@@ -229,7 +259,7 @@ fn check_file(
     match peak_res {
         Ok(peak) => {
             info!("{}: peak level = {:.1} dBFS", file_name.bold(), peak);
-            Ok(())
+            Ok(peak)
         }
         Err(e) => Err(format!("Error processing {}: {}", file_name, e)),
     }
@@ -239,7 +269,7 @@ fn check_stdin(
     cli: &Cli,
     format: FmtType,
     endian: Endianness,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<f32, Box<dyn std::error::Error>> {
     let mut lib = Rdsd2Pcm::new_level_check(
         cli.output_rate,
         None,
@@ -255,5 +285,5 @@ fn check_stdin(
 
     info!("Stdin peak level = {:.2} dBFS", peak);
 
-    Ok(())
+    Ok(peak)
 }
