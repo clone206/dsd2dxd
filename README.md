@@ -197,7 +197,7 @@ When you compile/install using the above instructions, a separate cli tool, `dsd
 
 This tool allows you to check the highest peak levels of any paths passed as inputs. That way, you can get a good idea of how much gain you may want to add when you do the conversion with `dsd2dxd`. It also reports the highest peak out of all the inputs passed in.
 
-The peak levels reported can be influenced by the output sample rate you specify, so make sure to use the same rate in Hz with `dsd_levels` that you intend to use when converting with `dsd2dxd`. However, to speed things up, you may want to choose the closest multiple of 88200 when you intend to convert to a multiple of 96000, as it will probably be "close enough", and you can add a dB or so of padding for safety.
+The peak levels reported can be influenced by the output sample rate you specify, so if you want absolute accuracy, make sure to use the same rate in Hz with `dsd_levels` that you intend to use when converting with `dsd2dxd`. However, to speed things up, you may want to choose the closest multiple of 88200 when you intend to convert to a multiple of 96000, as it will probably be "close enough", and you can add a dB or so of padding for safety. Multiples of 88200 process much more quickly than 96000 multiples in both `dsd_levels` and `dsd2dxd`.
 
 ## Tips & More Info
 

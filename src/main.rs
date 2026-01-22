@@ -235,19 +235,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         inputs.retain(|p| p != &PathBuf::from("-"));
     }
 
-    // Determine base directory against which output paths should be constructed.
-    // Should only come into play when an output folder path is specified.
-    let base_dir = if inputs.len() == 1 {
-        // Just one file; use its parent directory.
-        inputs[0].parent().unwrap_or(Path::new("/")).to_path_buf()
-    } else {
-        // For multiple files, find common parent directory.
-        let common = common_path_all(inputs.iter().map(|p| p.as_path()))
-            .unwrap_or(PathBuf::from("/"));
-        common.parent().unwrap_or(Path::new("/")).to_path_buf()
-    };
-
-    // Filter to remove any glob patterns, yielding all inputted paths
+    // Filter to remove any glob patterns, yielding all inputted paths, canonicalized
     let paths = inputs
         .iter()
         .filter_map(|input| {
@@ -261,8 +249,24 @@ fn run() -> Result<(), Box<dyn Error>> {
                 Some(input)
             }
         })
-        .cloned()
-        .collect::<Vec<_>>();
+        .map(|p| {
+            let full_path = p.canonicalize()?;
+            Ok(full_path)
+        })
+        .collect::<Result<Vec<_>, std::io::Error>>()?;
+
+    // Determine base directory against which output paths should be constructed.
+    // Should only come into play when an output folder path is specified.
+    let base_dir = if paths.len() == 1 {
+        // Just one file/folder; use its parent directory.
+        paths[0].parent().unwrap_or(Path::new("/")).to_path_buf()
+    } else {
+        // For multiple files, find lowest common ancestor directory.
+        let common = common_path_all(paths.iter()
+            .map(|p| p.as_path()))
+            .unwrap_or(PathBuf::from("/"));
+        common.parent().unwrap_or(Path::new("/")).to_path_buf()
+    };
 
     let expanded_paths = find_dsd_files(&paths, cli.recurse)?;
     let num_paths = expanded_paths.len();
