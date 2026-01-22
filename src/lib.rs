@@ -1,7 +1,46 @@
+use core::fmt;
+use std::process::{ExitCode, Termination};
 use std::io::{self, Write};
-
 use colored::Colorize;
-use log::{Level, LevelFilter, Metadata, Record};
+use log::{Level, LevelFilter, Metadata, Record, error};
+
+#[derive(Debug)]
+pub enum MyError {
+    Message(String),
+}
+
+impl std::fmt::Display for MyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MyError::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl std::error::Error for MyError {}
+
+pub type MyResult<T> = Result<T, MyError>;
+
+pub struct TermResult(pub MyResult<()>);
+
+impl Termination for TermResult {
+    fn report(self) -> ExitCode {
+        match self.0 {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(err) => {
+                error!("{}", err);
+                ExitCode::FAILURE
+            }
+        }
+    }
+}
+
+// Convert boxed dynamic errors into MyError
+impl From<Box<dyn std::error::Error>> for MyError {
+    fn from(err: Box<dyn std::error::Error>) -> Self {
+        MyError::Message(err.to_string())
+    }
+}
 
 pub struct ColorLogger {
     max_level: LevelFilter,

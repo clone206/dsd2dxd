@@ -192,6 +192,12 @@ There are also powershell scripts for testing in windows, but they expect powers
 
 .\build_test_stereo_flt.ps1 P L 0 test\1kHz_stereo_p.dsd
 ```
+## dsd_levels Companion Tool
+When you compile/install using the above instructions, a separate cli tool, `dsd_levels` will also be installed into your path. Its syntax is very similar to `dsd2dxd` but with slightly fewer options. See `dsd_levels -h` for full usage.
+
+This tool allows you to check the highest peak levels of any paths passed as inputs. That way, you can get a good idea of how much gain you may want to add when you do the conversion with `dsd2dxd`. It also reports the highest peak out of all the inputs passed in.
+
+The peak levels reported can be influenced by the output sample rate you specify, so if you want absolute accuracy, make sure to use the same rate in Hz with `dsd_levels` that you intend to use when converting with `dsd2dxd`. However, to speed things up, you may want to choose the closest multiple of 88200 when you intend to convert to a multiple of 96000, as it will probably be "close enough", and you can add a dB or so of padding for safety. Multiples of 88200 process much more quickly than 96000 multiples in both `dsd_levels` and `dsd2dxd`.
 
 ## Tips & More Info
 
@@ -223,12 +229,12 @@ Also influenced by/borrowed from [dsf2flac](https://github.com/hank/dsf2flac), [
 
 ## Contributing
 
-Contributions from experienced  developers welcome! Just keep the code clean and try to follow the formatting patterns already in place (e.g. space indentation, avoiding overly long lines of code.) I personally use vscode, which includes a formatter. Using the same formatter may save some headaches.
+Contributions from experienced developers welcome! Please reach out first in case I'm already working on something that would overlap with your changes. Keep the code clean and try to follow the formatting patterns already in place (e.g. space indentation, avoiding overly long lines of code.) I personally use vscode, which includes a formatter. Using the same formatter may save some headaches. See the `rustfmt.toml` file.
 
 Make sure to do some testing, including with the included test scripts and test tone DSD files.
 
-If you'd like to create new filters for dsd2dxd, you'll need to make sure they have an even number of taps (odd filter order). The filter coefficients stored in the code only include the 2nd half of the taps of each symmetric decimation filter. Thus far the approach taken in the filter design has been to prefer gradual rolloffs and to allow small amounts of aliasing. This author doesn't put much stock in the importance of ultrasonic frequencies for enjoyable sound reproduction.
+If you'd like to create new filters for dsd2dxd, you'll need to make sure they have an even number of taps (odd filter order). The filter coefficients stored in the code only include the 2nd half of the taps of each symmetric decimation filter.
 
-In summary, I've tried to keep things as flat as possible out to 20kHz-22kHz, gradually rolling off after that, with the transition band edging slightly past the Nyquist frequency, and keeping the number of taps to a minimum.
+Thus far the approach taken in the filter design has been to prefer gradual rolloffs and to allow small amounts of aliasing. I've tried to keep things as flat as possible out to 20kHz-22kHz, gradually rolling off after that, with the transition band edging slightly past the Nyquist frequency, and keeping the number of taps to a minimum.
 
 For general info on contributing see [https://docs.github.com/en/get-started/exploring-projects-on-github/contributing-to-a-project](https://docs.github.com/en/get-started/exploring-projects-on-github/contributing-to-a-project). Basically, fork this repository, create a feature branch from main, and submit a pull request.
