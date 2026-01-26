@@ -164,6 +164,13 @@ Options:
           Print version
 ```
 
+## dsd_levels Companion Tool
+When you compile/install using the above instructions, a separate cli tool, `dsd_levels` will also be installed into your path. Its syntax is very similar to `dsd2dxd` but with slightly fewer options. See `dsd_levels -h` for full usage.
+
+This tool allows you to check the highest peak levels of any paths passed as inputs. That way, you can get a good idea of how much gain you may want to add when you do the conversion with `dsd2dxd`. It also reports the highest peak out of all the inputs passed in.
+
+The peak levels reported can be influenced by the output sample rate you specify, so if you want absolute accuracy, make sure to use the same rate in Hz with `dsd_levels` that you intend to use when converting with `dsd2dxd`. However, to speed things up, you may want to choose the closest multiple of 88200 when you intend to convert to a multiple of 96000, as it will probably be "close enough", and you can add a dB or so of padding for safety. Multiples of 88200 process much more quickly than 96000 multiples in both `dsd_levels` and `dsd2dxd`.
+
 ## Testing Examples
 ### *nix
 
@@ -192,13 +199,6 @@ There are also powershell scripts for testing in windows, but they expect powers
 
 .\build_test_stereo_flt.ps1 P L 0 test\1kHz_stereo_p.dsd
 ```
-## dsd_levels Companion Tool
-When you compile/install using the above instructions, a separate cli tool, `dsd_levels` will also be installed into your path. Its syntax is very similar to `dsd2dxd` but with slightly fewer options. See `dsd_levels -h` for full usage.
-
-This tool allows you to check the highest peak levels of any paths passed as inputs. That way, you can get a good idea of how much gain you may want to add when you do the conversion with `dsd2dxd`. It also reports the highest peak out of all the inputs passed in.
-
-The peak levels reported can be influenced by the output sample rate you specify, so if you want absolute accuracy, make sure to use the same rate in Hz with `dsd_levels` that you intend to use when converting with `dsd2dxd`. However, to speed things up, you may want to choose the closest multiple of 88200 when you intend to convert to a multiple of 96000, as it will probably be "close enough", and you can add a dB or so of padding for safety. Multiples of 88200 process much more quickly than 96000 multiples in both `dsd_levels` and `dsd2dxd`.
-
 ## Tips & More Info
 
 Many of dsd2dxd's decimation filters were created from scratch using extensive listening tests. This tool aims to have audiophile-worthy conversion quality while also being useful in a recording engineering context, where converting between dsd and dxd may be necessary. Some of the filters for dsd64 were copied over from XLD, and the original dsd2pcm filter is an option as well.
