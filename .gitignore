@@ -26,3 +26,4 @@ lib/*
 release/*
 make_release.sh
 log.txt
+__pycache__/*

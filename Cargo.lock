@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "dsd2dxd"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "clap",
  "colored",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "rdsd2pcm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dff-meta",
  "dsd-reader",
