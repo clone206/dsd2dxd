@@ -132,9 +132,11 @@ Options:
           X (none) [default: F for 32 bit, T otherwise]
   -r, --rate <OUTPUT_RATE>
           Output sample rate in Hz. Can be 88200, 96000,
-          176400, 192000, 352800, 384000. Note that
-          conversion to multiples of 44100 are faster than
-          48000 multiples [default: 352800]
+          176400, 192000, 352800, 384000 for all input DSD
+          rates. For DSD128 inputs, 705600 is also available.
+          For DSD256 inputs, both 705600 and 1411200 are
+          available. Note that conversion to multiples of 44100
+          are faster than 48000 multiples [default: 352800]
   -i, --inrate <INPUT_RATE>
           Input DSD rate: 1 (DSD64), 2 (DSD128), or 4
           (DSD256) [default: 1]

@@ -83,7 +83,9 @@ struct Cli {
     dither_type: Option<char>,
 
     /// Output sample rate in Hz. Can be 88200, 96000,
-    /// 176400, 192000, 352800, 384000. Note that conversion
+    /// 176400, 192000, 352800, 384000 for all input DSD rates.
+    /// For DSD128 inputs, 705600 is also available. For DSD256 inputs,
+    /// both 705600 and 1411200 are available. Note that conversion
     /// to multiples of 44100 are faster than 48000 multiples
     #[arg(short = 'r', long = "rate", default_value = "352800")]
     output_rate: u32,
