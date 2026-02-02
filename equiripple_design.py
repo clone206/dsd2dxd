@@ -7,10 +7,11 @@ from filter_lib import *
 parser = argparse.ArgumentParser(description="Design an equiripple FIR filter and emit Rust taps")
 parser.add_argument("--fs", type=float, required=True, help="Sampling rate in Hz")
 parser.add_argument("--fsb", type=float, required=True, help="Stopband edge in Hz")
+parser.add_argument("--fpb", type=float, required=True, help="Passband edge in Hz")
 args = parser.parse_args()
 
 Fs      = args.fs
-Fpb     = 22000
+Fpb     = args.fpb
 Fsb     = args.fsb
 Apb     = 0.01
 Asb     = 144

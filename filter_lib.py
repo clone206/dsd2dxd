@@ -42,7 +42,7 @@ def fir_calc_filter(Fs, Fpb, Fsb, Apb, Asb, N):
 
     return (h, w, H, Rpb, Rsb, Hpb_min, Hpb_max, Hsb_max)
 
-def fir_find_optimal_N(Fs, Fpb, Fsb, Apb, Asb, Nmin = 1, Nmax = 1000):
+def fir_find_optimal_N(Fs, Fpb, Fsb, Apb, Asb, Nmin = 19, Nmax = 2000):
     # We want an even number of taps. Since taps = N + 1, that means N must be odd.
     start_N = Nmin if (Nmin % 2) == 1 else (Nmin + 1)
 
