@@ -1,7 +1,7 @@
 # dsd2dxd
 
 Converts DSD to PCM on the command line with the following features:
-- Accepts single rate (dsd64), double rate (dsd128), or quad rate (dsd256) DSD as input.
+- Accepts single rate (dsd64), double rate (dsd128), quad rate (dsd256), and oct rate (DSD512) DSD as input.
   - .dsf and .dff files can be read from, including metadata.
 - Can output to an aiff, wav, or flac file.
   - Where possible, ID3v2 tags are copied to the destination files (when read from .dsf or .dff file that has them).
@@ -136,7 +136,8 @@ Options:
           rates. For DSD128 inputs, 705600 is also available.
           For DSD256 inputs, both 705600 and 1411200 are
           available. Note that conversion to multiples of 44100
-          are faster than 48000 multiples [default: 352800]
+          are faster than 48000 multiples. For DSD512 inputs,
+          only 352800 is available. [default: 352800]
   -i, --inrate <INPUT_RATE>
           Input DSD rate: 1 (DSD64), 2 (DSD128), or 4
           (DSD256) [default: 1]

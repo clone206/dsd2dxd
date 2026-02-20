@@ -28,7 +28,7 @@ def fir_calc_filter(Fs, Fpb, Fsb, Apb, Asb, N):
             [w_pb, w_sb]
             )               
     
-    (w,H) = signal.freqz(h)
+    (w,H) = signal.freqz(h, 1, 8192)
     
     Hpb_min = min(np.abs(H[0:int(Fpb/Fs*2 * len(H))]))
     Hpb_max = max(np.abs(H[0:int(Fpb/Fs*2 * len(H))]))

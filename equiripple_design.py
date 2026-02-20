@@ -13,7 +13,7 @@ args = parser.parse_args()
 Fs      = args.fs
 Fpb     = args.fpb
 Fsb     = args.fsb
-Apb     = 0.01
+Apb     = 0.05
 Asb     = 144
 
 N = fir_find_optimal_N(Fs, Fpb, Fsb, Apb, Asb)
