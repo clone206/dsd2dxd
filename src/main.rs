@@ -95,11 +95,11 @@ struct Cli {
     #[arg(short = 'i', long = "inrate", default_value = "1")]
     input_rate: u32,
 
-    /// Output type: S (stdout), A (aif), W (wave), F (flac)
-    /// Note that W, A, or F outputs to either
-    /// <basename>.[wav|aif|flac] in current directory,
+    /// Output type: S (stdout), A (aif), C (aifc), W (wave), F (flac)
+    /// Note that W, A, C, or F outputs to either
+    /// <basename>.[wav|aif|aifc|flac] in current directory,
     /// where <basename> is the input filename
-    /// without the extension, or output.[wav|aif|flac]
+    /// without the extension, or output.[wav|aif|aifc|flac]
     /// (if reading from stdin.)
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
@@ -207,6 +207,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let output = match cli.output.to_ascii_lowercase() {
         's' => OutputType::Stdout,
         'a' => OutputType::Aiff,
+        'c' => OutputType::Aifc,
         'w' => OutputType::Wav,
         'f' => OutputType::Flac,
         _ => OutputType::Stdout,
