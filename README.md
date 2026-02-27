@@ -212,6 +212,7 @@ For a best all-round sound that works in the most contexts (e.g. a smartphone, w
 DSD64  -> 96kHz    (-r 96000)
 DSD128 -> 176.4kHz (-r 176400)
 DSD256 -> 192kHz   (-r 192000)
+DSD512 -> 352.8kHz (-r 352800)
 ```
 
 Converting to uneven factors (96kHz multiples) is nothing to be afraid of with dsd2dxd. The conversions may run a little more slowly, but that's in part due to the fact that no shortcuts were taken. All of the filtering operations happen at 64 bit float, just like when converting to 88.2kHz multiples. And in some ways the 96kHz multiples are better because they use cascaded FIR filters, each with a gentle EQ curve, rather than one filter with a more severe curve (smaller fraction of the pre-decimated sample rates).
