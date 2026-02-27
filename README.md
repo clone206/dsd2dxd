@@ -3,7 +3,7 @@
 Converts DSD to PCM on the command line with the following features:
 - Accepts single rate (dsd64), double rate (dsd128), quad rate (dsd256), and oct rate (DSD512) DSD as input.
   - .dsf and .dff files can be read from, including metadata.
-- Can output to an aiff, wav, or flac file.
+- Can output to an aiff, wav, flac, or aifc file.
   - Where possible, ID3v2 tags are copied to the destination files (when read from .dsf or .dff file that has them).
 - Can also read raw DSD bitstreams from standard in (stdin) and output raw PCM to standard out (stdout), so you can use piping/shell redirection to combine with other audio utilities on the command line.
   - Handles either planar format DSD (as found in .dsf files), or interleaved format DSD (as found in .dff files). Assumes block size (per channel) of 4096 bytes for planar, 1 byte for interleaved, unless otherwise specified with the below command line options.
@@ -143,10 +143,10 @@ Options:
           (DSD256) [default: 1]
   -o, --output <OUTPUT>
           Output type: S (stdout), A (aif), W (wave), F
-          (flac) Note that W, A, or F outputs to either
-          <basename>.[wav|aif|flac] in current directory,
+          (flac), C (aifc). Note that W, A, F, or C outputs to either
+          <basename>.[wav|aif|flac|aifc] in current directory,
           where <basename> is the input filename without the
-          extension, or output.[wav|aif|flac] (if reading
+          extension, or output.[wav|aif|flac|aifc] (if reading
           from stdin.) [default: S]
   -l, --level <LEVEL>
           Volume level adjustment in dB. Can be negative with
