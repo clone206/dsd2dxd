@@ -95,11 +95,11 @@ struct Cli {
     #[arg(short = 'i', long = "inrate", default_value = "1")]
     input_rate: u32,
 
-    /// Output type: S (stdout), A (aif), C (aifc), W (wave), F (flac)
-    /// Note that W, A, C, or F outputs to either
-    /// <basename>.[wav|aif|aifc|flac] in current directory,
+    /// Output type: S (stdout), A (aif), C (aifc), W (wave), F (flac), L (alac)
+    /// Note that W, A, C, F, or L outputs to either
+    /// <basename>.[wav|aif|aifc|flac|m4a] in current directory,
     /// where <basename> is the input filename
-    /// without the extension, or output.[wav|aif|aifc|flac]
+    /// without the extension, or output.[wav|aif|aifc|flac|m4a]
     /// (if reading from stdin.)
     #[arg(short = 'o', long = "output", default_value = "S")]
     output: char,
@@ -210,6 +210,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         'c' => OutputType::Aifc,
         'w' => OutputType::Wav,
         'f' => OutputType::Flac,
+        'l' => OutputType::Alac,
         _ => OutputType::Stdout,
     };
 
@@ -339,6 +340,7 @@ fn convert_stdin(
         std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from(".")),
         None,
+        true,
     )
     .map_err(|e| e.to_string())?;
 
@@ -370,6 +372,7 @@ fn convert_file(
             cli.append_rate,
             cwd,
             path,
+            true,
         )
         .map_err(|e| e.to_string())?
     } else {
@@ -389,6 +392,7 @@ fn convert_file(
             cli.append_rate,
             cwd,
             Some(path),
+            true,
         )
         .map_err(|e| e.to_string())?
     };
