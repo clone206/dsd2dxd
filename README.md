@@ -16,6 +16,11 @@ Converts DSD to PCM on the command line with the following features:
 
 ![Progress bars](/asset/progress.jpg)
 
+## Pre-compiled Binaris
+If you just want to download something that you can install, head to the [Releases](https://github.com/clone206/dsd2dxd/releases).
+
+If you want to compile and install yourself. See below.
+
 ## Build Dependencies
 
 - [Rust/Cargo](https://rust-lang.org/tools/install/)
