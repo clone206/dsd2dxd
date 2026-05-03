@@ -16,7 +16,7 @@ Converts DSD to PCM on the command line with the following features:
 
 ![Progress bars](/asset/progress.jpg)
 
-## Pre-compiled Binaris
+## Pre-compiled Binaries
 If you just want to download pre-built binaries that are ready to install on your system, head to [Releases](https://github.com/clone206/dsd2dxd/releases) and see the instructions.
 
 If you want to compile and install yourself, see below.
