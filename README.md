@@ -16,8 +16,15 @@ Converts DSD to PCM on the command line with the following features:
 
 ![Progress bars](/asset/progress.jpg)
 
+## GUI Version
+For a version with a graphical user interface, see the below links.
+
+### MacOS
+- [Dsd2Dxd Lite](https://apps.apple.com/us/app/dsd2dxd-lite/id6774437695?mt=12)
+- [Dsd2Dxd Pro](https://apps.apple.com/us/app/dsd2dxd-pro/id6769553945?mt=12)
+
 ## Pre-compiled Binaries
-If you just want to download pre-built binaries that are ready to install on your system, head to [Releases](https://github.com/clone206/dsd2dxd/releases) and see the instructions.
+If you just want to download pre-built binaries for this CLI version that are ready to install on your system, head to [Releases](https://github.com/clone206/dsd2dxd/releases) and see the instructions.
 
 If you want to compile and install yourself, see below.
 
