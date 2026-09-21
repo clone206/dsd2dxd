@@ -24,7 +24,7 @@ For a version with a graphical user interface, see the below links.
 - [Dsd2Dxd Pro](https://apps.apple.com/us/app/dsd2dxd-pro/id6769553945?mt=12)
 
 ### Windows
-- Dsd2Dxd Lite: Coming soon
+- [Dsd2Dxd Lite](https://apps.microsoft.com/store/detail/9NXV95P8X63M)
 - [Dsd2Dxd Pro](https://apps.microsoft.com/store/detail/9PPGRXH4KLT4)
 
 ## Pre-compiled Binaries
