@@ -23,6 +23,10 @@ For a version with a graphical user interface, see the below links.
 - [Dsd2Dxd Lite](https://apps.apple.com/us/app/dsd2dxd-lite/id6774437695?mt=12)
 - [Dsd2Dxd Pro](https://apps.apple.com/us/app/dsd2dxd-pro/id6769553945?mt=12)
 
+### Windows
+- [Dsd2Dxd Lite](https://apps.microsoft.com/store/detail/9NXV95P8X63M)
+- [Dsd2Dxd Pro](https://apps.microsoft.com/store/detail/9PPGRXH4KLT4)
+
 ## Pre-compiled Binaries
 If you just want to download pre-built binaries for this CLI version that are ready to install on your system, head to [Releases](https://github.com/clone206/dsd2dxd/releases) and see the instructions.
 
